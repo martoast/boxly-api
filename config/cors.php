@@ -22,7 +22,9 @@ return [
         'orders',
         'orders/*',
         'admin/*',
-        'profile/*'
+        'profile/*',
+        'products',
+        'checkout'
     ],
 
     'allowed_methods' => ['*'],

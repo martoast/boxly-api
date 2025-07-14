@@ -3,10 +3,12 @@
 namespace App\Http\Controllers;
 
 use App\Models\Order;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Stripe\Event;
 use Stripe\Exception\SignatureVerificationException;
 use Stripe\Webhook;
+use Illuminate\Support\Facades\Log;
 
 class StripeWebhookController extends Controller
 {
@@ -28,20 +30,13 @@ class StripeWebhookController extends Controller
         }
 
         switch ($event->type) {
-            case 'invoice.payment_succeeded':
-                $this->handleInvoicePaymentSucceeded($event);
-                break;
-                
-            case 'invoice.payment_failed':
-                $this->handleInvoicePaymentFailed($event);
-                break;
-                
-            case 'invoice.sent':
-                $this->handleInvoiceSent($event);
+            case 'checkout.session.completed':
+                $this->handleCheckoutSessionCompleted($event);
                 break;
                 
             default:
                 // Unhandled event type
+                Log::info('Unhandled Stripe webhook event', ['type' => $event->type]);
                 break;
         }
 
@@ -49,59 +44,91 @@ class StripeWebhookController extends Controller
     }
 
     /**
-     * Handle successful invoice payment
+     * Handle successful checkout session
      */
-    protected function handleInvoicePaymentSucceeded(Event $event)
+    protected function handleCheckoutSessionCompleted(Event $event)
     {
-        $invoice = $event->data->object;
+        $session = $event->data->object;
         
-        // Find order by invoice ID
-        $order = Order::where('stripe_invoice_id', $invoice->id)->first();
+        // Get user from metadata
+        $userId = $session->metadata->user_id ?? null;
+        $user = User::find($userId);
         
-        if ($order && $order->status === Order::STATUS_QUOTE_SENT) {
-            $order->update([
-                'status' => Order::STATUS_PAID,
-                'amount_paid' => $invoice->amount_paid / 100, // Convert from cents
-                'stripe_payment_intent_id' => $invoice->payment_intent,
-                'paid_at' => now()
+        if (!$user) {
+            Log::error('User not found for checkout session: ' . $session->id);
+            return;
+        }
+
+        // Check if order already exists (prevent duplicates)
+        $existingOrder = Order::where('stripe_checkout_session_id', $session->id)->first();
+        if ($existingOrder) {
+            Log::info('Order already exists for session: ' . $session->id);
+            return;
+        }
+
+        // Parse delivery address from metadata
+        $deliveryAddress = [];
+        if (isset($session->metadata->delivery_address)) {
+            $deliveryAddress = json_decode($session->metadata->delivery_address, true);
+            
+            // Validate the decoded address
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                Log::error('Failed to parse delivery address for session: ' . $session->id);
+                $deliveryAddress = [];
+            }
+        }
+
+        // Get order name from metadata or generate default
+        $orderName = $session->metadata->order_name ?? 'Order from ' . now()->format('M d, Y');
+
+        // Calculate rural surcharge if applicable
+        $isRural = $session->metadata->is_rural === 'true';
+        $ruralSurcharge = $isRural ? 20 : null;
+
+        // Create the order
+        try {
+            $order = Order::create([
+                'user_id' => $user->id,
+                'order_name' => $orderName,
+                'order_number' => Order::generateOrderNumber(),
+                'status' => Order::STATUS_COLLECTING,
+                'box_size' => $session->metadata->box_type,
+                'box_price' => $session->amount_subtotal / 100, // This will be just the box price
+                'is_rural' => $isRural,
+                'rural_surcharge' => $ruralSurcharge,
+                'declared_value' => floatval($session->metadata->declared_value ?? 0),
+                'iva_amount' => floatval($session->metadata->iva_amount ?? 0),
+                'stripe_product_id' => $session->metadata->product_id,
+                'stripe_price_id' => $session->metadata->price_id,
+                'stripe_checkout_session_id' => $session->id,
+                'stripe_payment_intent_id' => $session->payment_intent,
+                'amount_paid' => $session->amount_total / 100, // This includes box + IVA + rural
+                'currency' => $session->currency,
+                'delivery_address' => $deliveryAddress,
+                'paid_at' => now(),
             ]);
-            
-            // TODO: Send notification to admin about new paid order
-            // Notification::send($admins, new OrderPaidNotification($order));
-            
-            // TODO: Send confirmation to customer
-            // Mail::to($order->user)->send(new OrderPaidConfirmation($order));
-        }
-    }
 
-    /**
-     * Handle failed invoice payment
-     */
-    protected function handleInvoicePaymentFailed(Event $event)
-    {
-        $invoice = $event->data->object;
-        
-        // Find order by invoice ID
-        $order = Order::where('stripe_invoice_id', $invoice->id)->first();
-        
-        if ($order) {
-            // TODO: Send notification to customer about failed payment
-            // Mail::to($order->user)->send(new PaymentFailedNotification($order));
-        }
-    }
+            Log::info('Order created from checkout session', [
+                'order_id' => $order->id,
+                'order_number' => $order->order_number,
+                'session_id' => $session->id,
+                'user_id' => $user->id,
+                'box_type' => $order->box_size,
+                'amount_paid' => $order->amount_paid,
+            ]);
 
-    /**
-     * Handle invoice sent event
-     */
-    protected function handleInvoiceSent(Event $event)
-    {
-        $invoice = $event->data->object;
-        
-        // Log that invoice was sent
-        \Log::info('Invoice sent', [
-            'invoice_id' => $invoice->id,
-            'customer' => $invoice->customer,
-            'amount' => $invoice->amount_due / 100
-        ]);
+            // TODO: Send confirmation email to customer
+            // Mail::to($user)->send(new OrderConfirmation($order));
+
+            // TODO: Notify admin of new order
+            // Notification::send($admins, new NewOrderNotification($order));
+
+        } catch (\Exception $e) {
+            Log::error('Failed to create order from checkout session', [
+                'session_id' => $session->id,
+                'user_id' => $user->id,
+                'error' => $e->getMessage()
+            ]);
+        }
     }
 }

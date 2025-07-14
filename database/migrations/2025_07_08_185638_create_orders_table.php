@@ -1,4 +1,5 @@
 <?php
+// database/migrations/2025_07_08_185638_create_orders_table.php
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
@@ -21,36 +22,38 @@ return new class extends Migration
                 'collecting',           // Customer adding items
                 'awaiting_packages',    // Order finalized, packages in transit
                 'packages_complete',    // All packages received and measured
-                'quote_sent',          // Admin sent consolidation quote
-                'paid',                // Customer approved and paid
-                'shipped',             // Consolidated package sent to Mexico
-                'delivered'            // Package delivered to customer
+                'shipped',              // Consolidated package sent to Mexico
+                'delivered'             // Package delivered to customer
             ])->default('collecting');
+            
+            // Box information (selected at checkout)
+            $table->enum('box_size', ['small', 'medium', 'large', 'xl']);
+            $table->decimal('box_price', 10, 2)->comment('Price paid for the box in USD');
+            $table->decimal('declared_value', 10, 2)->comment('Total declared value for IVA calculation');
+            $table->decimal('iva_amount', 10, 2)->comment('16% IVA on declared value');
+            $table->boolean('is_rural')->default(false);
+            $table->decimal('rural_surcharge', 10, 2)->nullable();
             
             // Weight and measurements (filled after all packages arrive)
             $table->decimal('total_weight', 8, 2)->nullable()->comment('Total weight in kg');
-            $table->enum('recommended_box_size', ['small', 'medium', 'large', 'xl'])->nullable();
             
-            // Stripe Invoice (created when quote is sent)
-            $table->string('stripe_invoice_id')->nullable()->unique();
-            $table->string('stripe_invoice_url')->nullable(); // Hosted invoice URL
-            
-            // Payment information (filled after payment)
-            $table->decimal('amount_paid', 10, 2)->nullable();
-            $table->string('currency', 3)->default('mxn');
-            $table->string('stripe_payment_intent_id')->nullable()->unique();
+            // Stripe Payment Information (from initial checkout)
+            $table->string('stripe_product_id')->comment('Stripe product ID for the box');
+            $table->string('stripe_price_id')->comment('Stripe price ID used');
+            $table->string('stripe_checkout_session_id')->nullable();
+            $table->string('stripe_payment_intent_id')->nullable();
+            $table->decimal('amount_paid', 10, 2)->comment('Total amount paid including rural surcharge');
+            $table->string('currency', 3)->default('usd');
+            $table->timestamp('paid_at')->nullable();
             
             // Shipping information
             $table->string('tracking_number')->nullable()->comment('Mexican carrier tracking');
             $table->json('delivery_address')->nullable();
-            $table->boolean('is_rural')->default(false);
             $table->date('estimated_delivery_date')->nullable();
             $table->date('actual_delivery_date')->nullable();
             
             // Important dates
             $table->timestamp('completed_at')->nullable()->comment('When marked ready for consolidation');
-            $table->timestamp('quote_sent_at')->nullable();
-            $table->timestamp('paid_at')->nullable();
             $table->timestamp('shipped_at')->nullable();
             $table->timestamp('delivered_at')->nullable();
             
@@ -60,7 +63,7 @@ return new class extends Migration
             $table->index('status');
             $table->index('order_number');
             $table->index(['user_id', 'status']);
-            $table->index('completed_at');
+            $table->index('stripe_checkout_session_id');
         });
     }
 

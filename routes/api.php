@@ -9,6 +9,8 @@ use App\Http\Controllers\AdminOrderController;
 use App\Http\Controllers\AdminOrderItemController;
 use App\Http\Controllers\AdminCustomerController;
 use App\Http\Controllers\StripeWebhookController;
+use App\Http\Controllers\ProductController;
+use App\Http\Controllers\CheckoutController;
 
 /*
 |--------------------------------------------------------------------------
@@ -24,12 +26,18 @@ Route::get('/health', function () {
     return response()->json(['status' => 'ok']);
 });
 
+// Products endpoint (public for pricing page)
+Route::get('/products', [ProductController::class, 'index']);
+
 // Protected routes
 Route::middleware('auth:sanctum')->group(function () {
     // User info
     Route::get('/user', function (Request $request) {
         return $request->user();
     });
+    
+    // Checkout
+    Route::post('/checkout', [CheckoutController::class, 'createCheckout']);
     
     // Profile
     Route::prefix('profile')->group(function () {
@@ -41,7 +49,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Orders
     Route::prefix('orders')->group(function () {
         Route::get('/', [OrderController::class, 'index']);
-        Route::post('/', [OrderController::class, 'store']);
+        Route::get('/by-session/{sessionId}', [OrderController::class, 'findBySession']);
         Route::get('/collecting', [OrderController::class, 'collecting']);
         Route::get('/{order}', [OrderController::class, 'show']);
         Route::put('/{order}', [OrderController::class, 'update']);
@@ -49,7 +57,6 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/{order}/complete', [OrderController::class, 'complete']);
         Route::put('/{order}/reopen', [OrderController::class, 'reopen']);
         Route::get('/{order}/tracking', [OrderController::class, 'tracking']);
-        Route::get('/{order}/pay', [OrderController::class, 'pay']);
         
         // Order Items
         Route::post('/{order}/items', [OrderItemController::class, 'store']);
@@ -66,9 +73,8 @@ Route::middleware('auth:sanctum')->group(function () {
         // Orders
         Route::prefix('orders')->group(function () {
             Route::get('/', [AdminOrderController::class, 'index']);
-            Route::get('/ready-to-quote', [AdminOrderController::class, 'readyToQuote']);
+            Route::get('/ready-to-ship', [AdminOrderController::class, 'readyToShip']);
             Route::get('/{order}', [AdminOrderController::class, 'show']);
-            Route::post('/{order}/send-quote', [AdminOrderController::class, 'sendQuote']);
             Route::put('/{order}/status', [AdminOrderController::class, 'updateStatus']);
             
             // Order Items

@@ -2,7 +2,6 @@
 
 namespace App\Http\Controllers;
 
-use App\Http\Requests\AdminSendQuoteRequest;
 use App\Http\Requests\AdminUpdateOrderStatusRequest;
 use App\Models\Order;
 use Illuminate\Http\Request;
@@ -56,12 +55,12 @@ class AdminOrderController extends Controller
     }
 
     /**
-     * Get orders ready to quote
+     * Get orders ready to ship (all packages arrived and weighed)
      */
-    public function readyToQuote()
+    public function readyToShip()
     {
         $orders = Order::with(['user', 'items'])
-            ->readyToQuote()
+            ->status(Order::STATUS_PACKAGES_COMPLETE)
             ->oldest('completed_at')
             ->paginate(20);
 
@@ -69,93 +68,6 @@ class AdminOrderController extends Controller
             'success' => true,
             'data' => $orders
         ]);
-    }
-
-    /**
-     * Send quote to customer
-     */
-    public function sendQuote(AdminSendQuoteRequest $request, Order $order)
-    {
-        try {
-            DB::beginTransaction();
-
-            // Calculate pricing
-            $weight = $order->calculateTotalWeight();
-            $boxSize = $order->determineBoxSize();
-            
-            if (!$boxSize) {
-                throw new \Exception('Package too heavy for available box sizes');
-            }
-
-            $shippingCost = $order->calculateShippingCost();
-            $ivaAmount = $order->calculateIvaAmount();
-            $totalAmount = $shippingCost + $ivaAmount;
-
-            // Create Stripe Invoice
-            $invoice = $order->user->invoiceFor(
-                "Consolidation Order: {$order->order_name}",
-                $shippingCost * 100, // Convert to cents
-                [
-                    'description' => "Box size: {$boxSize}, Weight: {$weight}kg",
-                    'metadata' => [
-                        'order_id' => $order->id,
-                        'order_number' => $order->order_number,
-                        'box_size' => $boxSize,
-                        'weight' => $weight
-                    ]
-                ]
-            );
-
-            // Add IVA as line item
-            if ($ivaAmount > 0) {
-                $declaredTotal = $order->items->sum(function ($item) {
-                    return $item->declared_value * $item->quantity;
-                });
-                
-                $invoice->tab(
-                    "IVA (16% of \${$declaredTotal} USD declared value)",
-                    $ivaAmount * 100 // Convert to cents
-                );
-            }
-
-            // Finalize and send invoice
-            $invoice->sendInvoice();
-
-            // Update order
-            $order->update([
-                'status' => Order::STATUS_QUOTE_SENT,
-                'recommended_box_size' => $boxSize,
-                'total_weight' => $weight,
-                'stripe_invoice_id' => $invoice->id,
-                'stripe_invoice_url' => $invoice->hosted_invoice_url,
-                'quote_sent_at' => now()
-            ]);
-
-            DB::commit();
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Quote sent successfully',
-                'data' => [
-                    'order' => $order->fresh(),
-                    'invoice_url' => $invoice->hosted_invoice_url,
-                    'breakdown' => [
-                        'shipping' => $shippingCost,
-                        'iva' => $ivaAmount,
-                        'total' => $totalAmount,
-                        'currency' => 'MXN'
-                    ]
-                ]
-            ]);
-
-        } catch (\Exception $e) {
-            DB::rollBack();
-            
-            return response()->json([
-                'success' => false,
-                'message' => 'Error sending quote: ' . $e->getMessage()
-            ], 500);
-        }
     }
 
     /**
@@ -193,10 +105,9 @@ class AdminOrderController extends Controller
         $stats = [
             'orders' => [
                 'total' => Order::count(),
+                'collecting' => Order::status(Order::STATUS_COLLECTING)->count(),
                 'awaiting_packages' => Order::status(Order::STATUS_AWAITING_PACKAGES)->count(),
-                'ready_to_quote' => Order::status(Order::STATUS_PACKAGES_COMPLETE)->count(),
-                'quote_sent' => Order::status(Order::STATUS_QUOTE_SENT)->count(),
-                'paid' => Order::status(Order::STATUS_PAID)->count(),
+                'packages_complete' => Order::status(Order::STATUS_PACKAGES_COMPLETE)->count(),
                 'in_transit' => Order::status(Order::STATUS_SHIPPED)->count(),
                 'delivered' => Order::status(Order::STATUS_DELIVERED)->count(),
             ],
@@ -210,6 +121,12 @@ class AdminOrderController extends Controller
                 'awaiting_arrival' => \App\Models\OrderItem::where('arrived', false)->count(),
                 'arrived_today' => \App\Models\OrderItem::whereDate('arrived_at', today())->count(),
                 'missing_weight' => \App\Models\OrderItem::where('arrived', true)->whereNull('weight')->count(),
+            ],
+            'box_distribution' => [
+                'small' => Order::where('box_size', 'small')->count(),
+                'medium' => Order::where('box_size', 'medium')->count(),
+                'large' => Order::where('box_size', 'large')->count(),
+                'xl' => Order::where('box_size', 'xl')->count(),
             ]
         ];
 

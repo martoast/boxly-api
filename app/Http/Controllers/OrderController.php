@@ -276,4 +276,113 @@ class OrderController extends Controller
             ], 500);
         }
     }
+
+    /**
+     * Get order by session after stripe checkout
+     */
+    public function findBySession(Request $request, $sessionId)
+    {
+        // First check if order already exists
+        $order = Order::where('stripe_checkout_session_id', $sessionId)
+            ->where('user_id', $request->user()->id)
+            ->first();
+        
+        if ($order) {
+            return response()->json([
+                'success' => true,
+                'data' => $order->load('items')
+            ]);
+        }
+
+        // If no order exists, create it from the Stripe session
+        try {
+            // Retrieve the session from Stripe
+            $session = \Laravel\Cashier\Cashier::stripe()->checkout->sessions->retrieve($sessionId, [
+                'expand' => ['payment_intent', 'line_items']
+            ]);
+
+            // Verify session belongs to this user
+            if ($session->metadata->user_id != $request->user()->id) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Unauthorized'
+                ], 403);
+            }
+
+            // Check if payment was successful
+            if ($session->payment_status !== 'paid') {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Payment not completed',
+                    'payment_status' => $session->payment_status
+                ], 400);
+            }
+
+            // Parse metadata
+            $metadata = $session->metadata;
+            $deliveryAddress = json_decode($metadata->delivery_address, true);
+            $declaredValue = floatval($metadata->declared_value);
+            $ivaAmount = floatval($metadata->iva_amount);
+            $isRural = $metadata->is_rural === 'true';
+            
+            // Calculate box price from line items (first item should be the box)
+            $boxPrice = 0;
+            $ruralSurcharge = 0;
+            
+            foreach ($session->line_items->data as $lineItem) {
+                if (isset($lineItem->price->id) && $lineItem->price->id === $metadata->price_id) {
+                    $boxPrice = $lineItem->amount_total / 100; // Convert from cents
+                } elseif (strpos(strtolower($lineItem->description ?? ''), 'rural') !== false) {
+                    $ruralSurcharge = $lineItem->amount_total / 100;
+                }
+            }
+            
+            // Create the order
+            $order = Order::create([
+                'user_id' => $request->user()->id,
+                'order_number' => Order::generateOrderNumber(),
+                'order_name' => $metadata->order_name,
+                'status' => Order::STATUS_COLLECTING,
+                'box_size' => $metadata->box_type,
+                'box_price' => $boxPrice,
+                'declared_value' => $declaredValue,
+                'iva_amount' => $ivaAmount,
+                'is_rural' => $isRural,
+                'rural_surcharge' => $isRural ? $ruralSurcharge : null,
+                'delivery_address' => $deliveryAddress,
+                'amount_paid' => $session->amount_total / 100, // Convert from cents
+                'currency' => $session->currency,
+                'stripe_product_id' => $metadata->product_id,
+                'stripe_price_id' => $metadata->price_id,
+                'stripe_checkout_session_id' => $sessionId,
+                'stripe_payment_intent_id' => $session->payment_intent->id ?? $session->payment_intent,
+                'paid_at' => now(),
+            ]);
+
+            \Illuminate\Support\Facades\Log::info('Order created from Stripe session', [
+                'order_id' => $order->id,
+                'order_number' => $order->order_number,
+                'session_id' => $sessionId,
+                'amount_paid' => $order->amount_paid
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'data' => $order->load('items')
+            ]);
+
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error('Error creating order from session', [
+                'error' => $e->getMessage(),
+                'session_id' => $sessionId,
+                'user_id' => $request->user()->id
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Error processing order',
+                'error' => config('app.debug') ? $e->getMessage() : null
+            ], 500);
+        }
+    }
 }

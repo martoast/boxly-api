@@ -27,8 +27,15 @@ class ProfileController extends Controller
                 'created_at' => $user->created_at,
                 // Stats
                 'total_orders' => $user->orders()->count(),
-                'active_orders' => $user->activeOrders()->count(),
-                'unpaid_quotes' => $user->hasUnpaidQuotes(),
+                'active_orders' => $user->orders()->whereIn('status', [
+                    Order::STATUS_COLLECTING,
+                    Order::STATUS_AWAITING_PACKAGES,
+                    Order::STATUS_PACKAGES_COMPLETE
+                ])->count(),
+                'completed_orders' => $user->orders()->whereIn('status', [
+                    Order::STATUS_SHIPPED,
+                    Order::STATUS_DELIVERED
+                ])->count(),
             ]
         ]);
     }
@@ -57,18 +64,41 @@ class ProfileController extends Controller
         
         $stats = [
             'orders' => [
-                'collecting' => $user->orders()->status(Order::STATUS_COLLECTING)->count(),
-                'awaiting_packages' => $user->orders()->status(Order::STATUS_AWAITING_PACKAGES)->count(),
-                'ready_to_ship' => $user->orders()->status(Order::STATUS_QUOTE_SENT)->count(),
-                'in_transit' => $user->orders()->whereIn('status', [
-                    Order::STATUS_SHIPPED
-                ])->count(),
-                'delivered' => $user->orders()->status(Order::STATUS_DELIVERED)->count(),
+                'collecting' => $user->orders()->where('status', Order::STATUS_COLLECTING)->count(),
+                'awaiting_packages' => $user->orders()->where('status', Order::STATUS_AWAITING_PACKAGES)->count(),
+                'packages_complete' => $user->orders()->where('status', Order::STATUS_PACKAGES_COMPLETE)->count(),
+                'in_transit' => $user->orders()->where('status', Order::STATUS_SHIPPED)->count(),
+                'delivered' => $user->orders()->where('status', Order::STATUS_DELIVERED)->count(),
             ],
             'totals' => [
                 'total_orders' => $user->orders()->count(),
                 'total_spent' => $user->orders()->sum('amount_paid'),
                 'total_items' => $user->orders()->withCount('items')->get()->sum('items_count'),
+                'active_orders' => $user->orders()->whereIn('status', [
+                    Order::STATUS_COLLECTING,
+                    Order::STATUS_AWAITING_PACKAGES,
+                    Order::STATUS_PACKAGES_COMPLETE
+                ])->count(),
+            ],
+            'recent_activity' => [
+                'recent_orders' => $user->orders()
+                    ->with(['items' => function($query) {
+                        $query->latest()->limit(3);
+                    }])
+                    ->latest()
+                    ->limit(5)
+                    ->get()
+                    ->map(function($order) {
+                        return [
+                            'id' => $order->id,
+                            'order_number' => $order->order_number,
+                            'order_name' => $order->order_name,
+                            'status' => $order->status,
+                            'created_at' => $order->created_at,
+                            'item_count' => $order->items->count(),
+                            'amount_paid' => $order->amount_paid,
+                        ];
+                    }),
             ]
         ];
 
