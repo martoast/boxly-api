@@ -78,9 +78,6 @@ class StripeWebhookController extends Controller
             }
         }
 
-        // Get order name from metadata or generate default
-        $orderName = $session->metadata->order_name ?? 'Order from ' . now()->format('M d, Y');
-
         // Calculate rural surcharge if applicable
         $isRural = $session->metadata->is_rural === 'true';
         $ruralSurcharge = $isRural ? 20 : null;
@@ -89,7 +86,6 @@ class StripeWebhookController extends Controller
         try {
             $order = Order::create([
                 'user_id' => $user->id,
-                'order_name' => $orderName,
                 'order_number' => Order::generateOrderNumber(),
                 'status' => Order::STATUS_COLLECTING,
                 'box_size' => $session->metadata->box_type,

@@ -21,10 +21,7 @@ class OrderController extends Controller
         // Add search functionality
         if ($request->has('search') && $request->search) {
             $searchTerm = $request->search;
-            $query->where(function ($q) use ($searchTerm) {
-                $q->where('order_name', 'like', '%' . $searchTerm . '%')
-                ->orWhere('order_number', 'like', '%' . $searchTerm . '%');
-            });
+            $query->where('order_number', 'like', '%' . $searchTerm . '%');
         }
         
         // Add status filter
@@ -47,7 +44,6 @@ class OrderController extends Controller
     {
         $order = Order::create([
             'user_id' => $request->user()->id,
-            'order_name' => $request->order_name,
             'order_number' => Order::generateOrderNumber(),
             'delivery_address' => $request->delivery_address,
             'is_rural' => $request->is_rural ?? false,
@@ -140,15 +136,15 @@ class OrderController extends Controller
         }
 
         try {
-            // Store order name for the response message
-            $orderName = $order->order_name;
+            // Store order number for the response message
+            $orderNumber = $order->order_number;
             
             // Delete the order (cascade will delete related items)
             $order->delete();
 
             return response()->json([
                 'success' => true,
-                'message' => "Order '{$orderName}' has been deleted successfully"
+                'message' => "Order '{$orderNumber}' has been deleted successfully"
             ]);
         } catch (\Exception $e) {
             return response()->json([
@@ -190,7 +186,6 @@ class OrderController extends Controller
 
         $trackingInfo = [
             'order_number' => $order->order_number,
-            'order_name' => $order->order_name,
             'status' => $order->status,
             'status_label' => Order::getStatuses()[$order->status] ?? 'Unknown',
             'tracking_number' => $order->tracking_number,
@@ -341,7 +336,6 @@ class OrderController extends Controller
             $order = Order::create([
                 'user_id' => $request->user()->id,
                 'order_number' => Order::generateOrderNumber(),
-                'order_name' => $metadata->order_name,
                 'status' => Order::STATUS_COLLECTING,
                 'box_size' => $metadata->box_type,
                 'box_price' => $boxPrice,

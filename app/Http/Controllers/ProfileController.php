@@ -92,7 +92,6 @@ class ProfileController extends Controller
                         return [
                             'id' => $order->id,
                             'order_number' => $order->order_number,
-                            'order_name' => $order->order_name,
                             'status' => $order->status,
                             'created_at' => $order->created_at,
                             'item_count' => $order->items->count(),

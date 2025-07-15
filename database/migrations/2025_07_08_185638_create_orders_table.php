@@ -14,7 +14,6 @@ return new class extends Migration
             $table->foreignId('user_id')->constrained()->onDelete('cascade');
             
             // Order details
-            $table->string('order_name'); // User-given name like "Christmas Shopping"
             $table->string('order_number')->unique(); // System-generated like PC-2025-000001
             
             // Status tracking

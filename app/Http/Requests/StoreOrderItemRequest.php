@@ -29,7 +29,6 @@ class StoreOrderItemRequest extends FormRequest
             'product_url' => 'required|url|max:1000',
             'product_name' => 'required|string|max:255', 
             'quantity' => 'required|integer|min:1|max:99',
-            'declared_value' => 'required|numeric|min:0.01|max:9999.99',
             'tracking_number' => 'nullable|string|max:255',
             'tracking_url' => 'nullable|url|max:1000',
             'carrier' => [
@@ -47,8 +46,6 @@ class StoreOrderItemRequest extends FormRequest
         return [
             'product_url.required' => 'Please provide the product URL.',
             'product_url.url' => 'Please provide a valid URL.',
-            'declared_value.required' => 'Please enter the price you paid.',
-            'declared_value.min' => 'Price must be at least $0.01.',
             'tracking_url.url' => 'Please provide a valid tracking URL.',
         ];
     }

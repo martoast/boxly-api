@@ -29,7 +29,6 @@ class UpdateOrderItemRequest extends FormRequest
         return [
             'product_url' => 'sometimes|required|url|max:1000',
             'quantity' => 'sometimes|required|integer|min:1|max:99',
-            'declared_value' => 'sometimes|required|numeric|min:0.01|max:9999.99',
             'tracking_number' => 'nullable|string|max:255',
             'tracking_url' => 'nullable|url|max:1000',
             'carrier' => [

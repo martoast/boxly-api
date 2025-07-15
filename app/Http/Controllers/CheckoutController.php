@@ -17,7 +17,6 @@ class CheckoutController extends Controller
         $request->validate([
             'price_id' => 'required|string',
             'is_rural' => 'boolean',
-            'order_name' => 'required|string|max:255',
             'declared_value' => 'required|numeric|min:1|max:99999',
             'delivery_address' => 'required|array',
             'delivery_address.street' => 'required|string|max:255',
@@ -56,7 +55,7 @@ class CheckoutController extends Controller
             ]);
 
             // Validate this is one of our box products
-            $validBoxTypes = ['small', 'medium', 'large'];
+            $validBoxTypes = ['extra-small', 'small', 'medium', 'large', 'extra-large'];
             $boxType = $price->product->metadata->type ?? null;
             
             if (!in_array($boxType, $validBoxTypes)) {
@@ -69,9 +68,14 @@ class CheckoutController extends Controller
             // Get box metadata
             $boxMetadata = $price->product->metadata;
 
-            // Calculate IVA (16% of declared value)
+            // Calculate IVA (16% of declared value) - ONLY if declared value >= $50 USD
             $declaredValue = floatval($request->declared_value);
-            $ivaAmount = round($declaredValue * 0.16, 2);
+            $ivaAmount = 0;
+            
+            // IVA only applies when declared value is $50 USD or more
+            if ($declaredValue >= 50) {
+                $ivaAmount = round($declaredValue * 0.16, 2);
+            }
             
             // Build line items array
             $lineItems = [];
@@ -79,18 +83,20 @@ class CheckoutController extends Controller
             // 1. Main box product
             $lineItems[$request->price_id] = 1; // price_id => quantity
             
-            // 2. IVA as a dynamic price line item
-            $lineItems[] = [
-                'price_data' => [
-                    'currency' => 'usd',
-                    'unit_amount' => intval($ivaAmount * 100), // Convert to cents
-                    'product_data' => [
-                        'name' => 'IVA (16% Import Tax)',
-                        'description' => sprintf('16%% IVA on declared value of $%.2f USD', $declaredValue),
+            // 2. IVA as a dynamic price line item - ONLY if applicable
+            if ($ivaAmount > 0) {
+                $lineItems[] = [
+                    'price_data' => [
+                        'currency' => 'usd',
+                        'unit_amount' => intval($ivaAmount * 100), // Convert to cents
+                        'product_data' => [
+                            'name' => 'IVA (16% Import Tax)',
+                            'description' => sprintf('16%% IVA on declared value of $%.2f USD', $declaredValue),
+                        ],
                     ],
-                ],
-                'quantity' => 1,
-            ];
+                    'quantity' => 1,
+                ];
+            }
             
             // 3. Rural surcharge if applicable
             if ($request->is_rural) {
@@ -111,14 +117,13 @@ class CheckoutController extends Controller
             $checkout = $user->checkout($lineItems, [
                 'success_url' => config('app.frontend_url') . '/app/orders/success?session_id={CHECKOUT_SESSION_ID}',
                 'cancel_url' => config('app.frontend_url') . '/app/orders/create',
-                'payment_method_types' => ['card', 'link'], // Removed to allow all methods
+                'payment_method_types' => ['card', 'link'],
                 'metadata' => [
                     'user_id' => $user->id,
                     'box_type' => $boxType,
                     'is_rural' => $request->is_rural ? 'true' : 'false',
                     'product_id' => $price->product->id,
                     'price_id' => $price->id,
-                    'order_name' => $request->order_name,
                     'declared_value' => strval($declaredValue),
                     'iva_amount' => strval($ivaAmount),
                     'delivery_address' => json_encode($request->delivery_address),
@@ -127,18 +132,18 @@ class CheckoutController extends Controller
                     'box_max_length' => $boxMetadata->max_length ?? null,
                     'box_max_width' => $boxMetadata->max_width ?? null,
                     'box_max_height' => $boxMetadata->max_height ?? null,
-                    'box_volumetric_weight' => $boxMetadata->volumetric_weight ?? null,
+                    'box_max_weight' => $boxMetadata->max_weight ?? null,
                 ],
                 'payment_intent_data' => [
                     'description' => sprintf(
-                        'Package consolidation box (%s) - %s',
+                        'Package consolidation box (%s) for %s',
                         $boxType,
-                        $request->order_name
+                        $user->name
                     ),
                     'metadata' => [
                         'user_id' => $user->id,
                         'box_type' => $boxType,
-                        'order_name' => $request->order_name,
+                        'customer_name' => $user->name,
                     ],
                 ],
                 'phone_number_collection' => [
@@ -147,7 +152,7 @@ class CheckoutController extends Controller
                 'allow_promotion_codes' => true,
                 'locale' => 'es-419', // Spanish for Latin America
                 'automatic_tax' => [
-                    'enabled' => false, // Set to true if you want Stripe to calculate taxes
+                    'enabled' => false,
                 ],
             ]);
 
@@ -162,6 +167,9 @@ class CheckoutController extends Controller
                 'user_id' => $user->id,
                 'total_amount' => $totalAmount,
                 'box_type' => $boxType,
+                'declared_value' => $declaredValue,
+                'iva_applied' => $ivaAmount > 0,
+                'iva_amount' => $ivaAmount,
             ]);
 
             return response()->json([
@@ -179,13 +187,11 @@ class CheckoutController extends Controller
             ]);
 
         } catch (\Laravel\Cashier\Exceptions\IncompletePayment $e) {
-            // Handle incomplete payment (3D Secure, additional verification, etc.)
             Log::warning('Incomplete payment detected', [
                 'payment_id' => $e->payment->id,
                 'user_id' => $user->id,
             ]);
 
-            // Return the payment confirmation URL
             return response()->json([
                 'success' => false,
                 'requires_action' => true,

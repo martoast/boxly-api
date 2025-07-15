@@ -16,12 +16,11 @@ return new class extends Migration
             // Product information
             $table->string('product_url', 1000); // URL of the product they purchased
             $table->string('product_name');
-            $table->text('product_image_url')->nullable(); // Scraped product image
             $table->string('retailer')->nullable(); // Amazon, eBay, etc (extracted from URL)
             
             // Purchase details
             $table->integer('quantity')->default(1);
-            $table->decimal('declared_value', 10, 2)->comment('Price paid per unit in USD');
+            $table->decimal('declared_value', 10, 2)->nullable()->comment('Price paid per unit in USD - optional');
             
             // Tracking information - multiple options for flexibility
             $table->string('tracking_number')->nullable()->comment('Retailer tracking number');

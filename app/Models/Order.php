@@ -13,13 +13,12 @@ class Order extends Model
 
     protected $fillable = [
         'user_id',
-        'order_name',
         'order_number',
         'status',
         'box_size',
         'box_price',
-        'declared_value',  // Add this
-        'iva_amount',       // Add this
+        'declared_value',
+        'iva_amount',
         'is_rural',
         'rural_surcharge',
         'total_weight',

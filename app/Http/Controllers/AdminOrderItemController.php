@@ -39,8 +39,7 @@ class AdminOrderItemController extends Controller
                 ->orWhere('product_name', 'like', "%{$search}%")
                 ->orWhere('carrier', 'like', "%{$search}%")
                 ->orWhereHas('order', function ($q) use ($search) {
-                    $q->where('order_number', 'like', "%{$search}%")
-                        ->orWhere('order_name', 'like', "%{$search}%");
+                    $q->where('order_number', 'like', "%{$search}%");
                 })
                 ->orWhereHas('order.user', function ($q) use ($search) {
                     $q->where('name', 'like', "%{$search}%")

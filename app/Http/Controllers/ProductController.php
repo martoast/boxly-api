@@ -24,40 +24,57 @@ class ProductController extends Controller
                     // Only show active products with box types
                     return $price->product->active && 
                            isset($price->product->metadata->type) &&
-                           in_array($price->product->metadata->type, ['small', 'medium', 'large']);
+                           in_array($price->product->metadata->type, ['extra-small', 'small', 'medium', 'large', 'extra-large']);
                 })
-                ->map(function ($price) {
-                    $boxType = $price->product->metadata->type;
+                ->groupBy('product.id') // Group by product ID to handle duplicates
+                ->map(function ($pricesForProduct) {
+                    // Take the most recent price (highest price_id typically)
+                    $latestPrice = $pricesForProduct->sortByDesc('created')->first();
+                    
+                    $boxType = $latestPrice->product->metadata->type;
                     
                     // Get metadata from the product
-                    $metadata = $price->product->metadata;
+                    $metadata = $latestPrice->product->metadata;
+                    
+                    // Build dimensions string if not already present
+                    $dimensions = $metadata->dimensions ?? null;
+                    if (!$dimensions && isset($metadata->max_length, $metadata->max_width, $metadata->max_height)) {
+                        // Follow your format: length x width x height
+                        $dimensions = $metadata->max_length . 'x' . $metadata->max_width . 'x' . $metadata->max_height . 'cm';
+                    }
                     
                     return [
-                        'id' => $price->product->id,
-                        'price_id' => $price->id,
-                        'stripe_price_id' => $price->id, // Add this for consistency with frontend
-                        'name' => $price->product->name,
-                        'description' => $price->product->description,
-                        'price' => $price->unit_amount / 100, // Convert from cents
-                        'currency' => strtoupper($price->currency),
+                        'id' => $latestPrice->product->id,
+                        'price_id' => $latestPrice->id,
+                        'stripe_price_id' => $latestPrice->id,
+                        'name' => $latestPrice->product->name,
+                        'description' => $latestPrice->product->description,
+                        'price' => $latestPrice->unit_amount / 100, // Convert from cents
+                        'currency' => strtoupper($latestPrice->currency),
                         'type' => $boxType,
                         'metadata' => [
                             'type' => $boxType,
-                            'dimensions' => $metadata->dimensions ?? null,
+                            'dimensions' => $dimensions,
                             'max_length' => $metadata->max_length ?? null,
                             'max_width' => $metadata->max_width ?? null,
                             'max_height' => $metadata->max_height ?? null,
-                            'volumetric_weight' => $metadata->volumetric_weight ?? null,
+                            'max_weight' => $metadata->max_weight ?? null,
                         ],
                         // Keep these for backward compatibility
-                        'dimensions' => $metadata->dimensions ?? null,
-                        'volumetric_weight' => $metadata->volumetric_weight ?? null,
+                        'dimensions' => $dimensions,
+                        'max_weight' => $metadata->max_weight ?? null,
                     ];
                 })
                 ->sortBy(function ($product) {
                     // Sort by size order
-                    $order = ['small' => 1, 'medium' => 2, 'large' => 3];
-                    return $order[$product['type']] ?? 5;
+                    $order = [
+                        'extra-small' => 1, 
+                        'small' => 2, 
+                        'medium' => 3, 
+                        'large' => 4, 
+                        'extra-large' => 5
+                    ];
+                    return $order[$product['type']] ?? 6;
                 })
                 ->values()
                 ->toArray();
@@ -85,7 +102,7 @@ class ProductController extends Controller
 
             return response()->json([
                 'success' => true,
-                'data' => $products, // Changed to return just the array for frontend compatibility
+                'data' => $products,
                 'rural_surcharge' => $ruralSurcharge
             ]);
         } catch (\Exception $e) {

@@ -20,7 +20,6 @@ class StoreOrderRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'order_name' => 'required|string|max:255',
             'delivery_address.street' => 'required|string|max:255',
             'delivery_address.exterior_number' => 'required|string|max:20',
             'delivery_address.interior_number' => 'nullable|string|max:20',
@@ -39,7 +38,6 @@ class StoreOrderRequest extends FormRequest
     public function messages(): array
     {
         return [
-            'order_name.required' => 'Please give your order a name (e.g., "Christmas Shopping")',
             'delivery_address.postal_code.regex' => 'The postal code must be 5 digits.',
             'delivery_address.street.required' => 'Street address is required.',
             'delivery_address.colonia.required' => 'Colonia is required.',

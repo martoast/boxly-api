@@ -26,7 +26,6 @@ class UpdateOrderRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'order_name' => 'sometimes|required|string|max:255',
             'delivery_address.street' => 'sometimes|required|string|max:255',
             'delivery_address.exterior_number' => 'sometimes|required|string|max:20',
             'delivery_address.interior_number' => 'nullable|string|max:20',
@@ -45,8 +44,6 @@ class UpdateOrderRequest extends FormRequest
     public function messages(): array
     {
         return [
-            'order_name.required' => 'Please provide an order name',
-            'order_name.max' => 'Order name cannot exceed 255 characters',
             'delivery_address.postal_code.regex' => 'The postal code must be 5 digits',
             'delivery_address.street.required' => 'Street address is required',
             'delivery_address.colonia.required' => 'Colonia is required',
