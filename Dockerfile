@@ -60,7 +60,6 @@ RUN groupadd --force -g $WWWGROUP sail
 RUN useradd -ms /bin/bash --no-user-group -g $WWWGROUP -u 1337 sail
 
 COPY . /var/www/html
-COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY php.ini /etc/php/8.3/cli/conf.d/99-sail.ini
 
 RUN chown -R sail:sail /var/www/html
@@ -73,4 +72,4 @@ RUN composer install --no-dev --optimize-autoloader --no-scripts
 
 USER root
 
-CMD ["/usr/bin/supervisord"]
+CMD ["php", "artisan", "serve", "--host=0.0.0.0", "--port=80"]
