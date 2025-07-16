@@ -87,6 +87,7 @@ class StripeWebhookController extends Controller
             $order = Order::create([
                 'user_id' => $user->id,
                 'order_number' => Order::generateOrderNumber(),
+                'tracking_number' => Order::generateTrackingNumber(),
                 'status' => Order::STATUS_COLLECTING,
                 'box_size' => $session->metadata->box_type,
                 'box_price' => $session->amount_subtotal / 100, // This will be just the box price

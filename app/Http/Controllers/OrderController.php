@@ -45,6 +45,7 @@ class OrderController extends Controller
         $order = Order::create([
             'user_id' => $request->user()->id,
             'order_number' => Order::generateOrderNumber(),
+            'tracking_number' => Order::generateTrackingNumber(),
             'delivery_address' => $request->delivery_address,
             'is_rural' => $request->is_rural ?? false,
             'status' => Order::STATUS_COLLECTING,
@@ -272,7 +273,7 @@ class OrderController extends Controller
         }
     }
 
-    /**
+     /**
      * Get order by session after stripe checkout
      */
     public function findBySession(Request $request, $sessionId)
@@ -336,6 +337,7 @@ class OrderController extends Controller
             $order = Order::create([
                 'user_id' => $request->user()->id,
                 'order_number' => Order::generateOrderNumber(),
+                'tracking_number' => Order::generateTrackingNumber(),
                 'status' => Order::STATUS_COLLECTING,
                 'box_size' => $metadata->box_type,
                 'box_price' => $boxPrice,

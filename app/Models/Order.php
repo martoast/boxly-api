@@ -175,6 +175,26 @@ class Order extends Model
     }
 
     /**
+     * Generate a unique tracking number
+     */
+    public static function generateTrackingNumber(): string
+    {
+        do {
+            // Generate a random tracking number with prefix
+            // Format: TRK-XXXXXXXX-XXXX (where X is alphanumeric)
+            $tracking = 'TRK-' . 
+                    strtoupper(substr(md5(uniqid(mt_rand(), true)), 0, 8)) . 
+                    '-' . 
+                    strtoupper(substr(md5(time() . mt_rand()), 0, 4));
+            
+            // Check if it already exists
+            $exists = self::where('tracking_number', $tracking)->exists();
+        } while ($exists);
+        
+        return $tracking;
+    }
+
+    /**
      * Scope for filtering by status
      */
     public function scopeStatus($query, $status)

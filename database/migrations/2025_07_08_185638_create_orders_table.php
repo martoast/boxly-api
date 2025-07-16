@@ -26,7 +26,7 @@ return new class extends Migration
             ])->default('collecting');
             
             // Box information (selected at checkout)
-            $table->enum('box_size', ['small', 'medium', 'large', 'xl']);
+            $table->enum('box_size', ['extra-small', 'small', 'medium', 'large', 'extra-large']);
             $table->decimal('box_price', 10, 2)->comment('Price paid for the box in USD');
             $table->decimal('declared_value', 10, 2)->comment('Total declared value for IVA calculation');
             $table->decimal('iva_amount', 10, 2)->comment('16% IVA on declared value');
