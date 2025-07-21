@@ -1,5 +1,4 @@
 <?php
-
 namespace App\Http\Controllers;
 
 use App\Models\Order;
@@ -30,24 +29,7 @@ class CheckoutController extends Controller
         ]);
 
         $user = $request->user();
-
-        // Ensure user has Stripe customer ID
-        if (!$user->stripe_id) {
-            $user->createAsStripeCustomer([
-                'name' => $user->name,
-                'email' => $user->email,
-                'phone' => $user->phone,
-                'address' => [
-                    'line1' => $request->delivery_address['street'] . ' ' . $request->delivery_address['exterior_number'],
-                    'line2' => $request->delivery_address['interior_number'] ?? null,
-                    'city' => $request->delivery_address['municipio'],
-                    'state' => $request->delivery_address['estado'],
-                    'postal_code' => $request->delivery_address['postal_code'],
-                    'country' => 'MX',
-                ],
-            ]);
-        }
-
+        
         try {
             // Get the price details from Stripe
             $price = Cashier::stripe()->prices->retrieve($request->price_id, [
@@ -77,18 +59,28 @@ class CheckoutController extends Controller
                 $ivaAmount = round($declaredValue * 0.16, 2);
             }
             
+            // Get current USD to MXN exchange rate
+            $usdToMxnRate = 18.00;
+            
+            // Convert amounts to MXN
+            $ivaAmountMxn = round($ivaAmount * $usdToMxnRate, 2);
+            $ruralSurchargeMxn = 360; // $20 USD * 18.00
+            
             // Build line items array
             $lineItems = [];
             
             // 1. Main box product
-            $lineItems[$request->price_id] = 1; // price_id => quantity
+            $lineItems[] = [
+                'price' => $request->price_id,
+                'quantity' => 1
+            ];
             
             // 2. IVA as a dynamic price line item - ONLY if applicable
             if ($ivaAmount > 0) {
                 $lineItems[] = [
                     'price_data' => [
-                        'currency' => 'usd',
-                        'unit_amount' => intval($ivaAmount * 100), // Convert to cents
+                        'currency' => 'mxn',
+                        'unit_amount' => intval($ivaAmountMxn * 100), // Convert to cents
                         'product_data' => [
                             'name' => 'IVA (16% Import Tax)',
                             'description' => sprintf('16%% IVA on declared value of $%.2f USD', $declaredValue),
@@ -102,8 +94,8 @@ class CheckoutController extends Controller
             if ($request->is_rural) {
                 $lineItems[] = [
                     'price_data' => [
-                        'currency' => 'usd',
-                        'unit_amount' => 2000, // $20.00 in cents
+                        'currency' => 'mxn',
+                        'unit_amount' => $ruralSurchargeMxn * 100, // Convert to cents
                         'product_data' => [
                             'name' => 'Rural Delivery Surcharge',
                             'description' => 'Additional charge for delivery to rural areas in Mexico',
@@ -113,11 +105,11 @@ class CheckoutController extends Controller
                 ];
             }
 
-            // Create checkout session using the checkout method
+            // Create checkout session
             $checkout = $user->checkout($lineItems, [
                 'success_url' => config('app.frontend_url') . '/app/orders/success?session_id={CHECKOUT_SESSION_ID}',
                 'cancel_url' => config('app.frontend_url') . '/app/orders/create',
-                'payment_method_types' => ['card', 'link'],
+                'payment_method_types' => ['card'],
                 'metadata' => [
                     'user_id' => $user->id,
                     'box_type' => $boxType,
@@ -126,6 +118,7 @@ class CheckoutController extends Controller
                     'price_id' => $price->id,
                     'declared_value' => strval($declaredValue),
                     'iva_amount' => strval($ivaAmount),
+                    'iva_amount_mxn' => strval($ivaAmountMxn),
                     'delivery_address' => json_encode($request->delivery_address),
                     // Add box dimensions to metadata
                     'box_dimensions' => $boxMetadata->dimensions ?? null,
@@ -156,20 +149,22 @@ class CheckoutController extends Controller
                 ],
             ]);
 
-            // Calculate total for response
-            $boxPrice = $price->unit_amount / 100;
-            $ruralCharge = $request->is_rural ? 20 : 0;
-            $totalAmount = $boxPrice + $ivaAmount + $ruralCharge;
-
+            // Calculate total for response (in MXN)
+            $boxPriceMxn = $price->unit_amount / 100; // This is already in MXN
+            $ruralChargeMxn = $request->is_rural ? $ruralSurchargeMxn : 0;
+            $totalAmountMxn = $boxPriceMxn + $ivaAmountMxn + $ruralChargeMxn;
+            
+            // Also calculate USD equivalents for the breakdown
+            $boxPriceUsd = $boxPriceMxn / $usdToMxnRate;
+            $ruralChargeUsd = $request->is_rural ? 20 : 0;
+            $totalAmountUsd = $boxPriceUsd + $ivaAmount + $ruralChargeUsd;
+            
             // Log checkout creation for monitoring
             Log::info('Checkout session created', [
                 'session_id' => $checkout->id,
                 'user_id' => $user->id,
-                'total_amount' => $totalAmount,
+                'total_amount_mxn' => $totalAmountMxn,
                 'box_type' => $boxType,
-                'declared_value' => $declaredValue,
-                'iva_applied' => $ivaAmount > 0,
-                'iva_amount' => $ivaAmount,
             ]);
 
             return response()->json([
@@ -177,12 +172,22 @@ class CheckoutController extends Controller
                 'checkout_url' => $checkout->url,
                 'session_id' => $checkout->id,
                 'breakdown' => [
-                    'box_price' => $boxPrice,
-                    'declared_value' => $declaredValue,
-                    'iva_amount' => $ivaAmount,
-                    'rural_surcharge' => $ruralCharge,
-                    'total' => $totalAmount,
-                    'currency' => 'USD'
+                    'mxn' => [
+                        'box_price' => $boxPriceMxn,
+                        'iva_amount' => $ivaAmountMxn,
+                        'rural_surcharge' => $ruralChargeMxn,
+                        'total' => $totalAmountMxn,
+                        'currency' => 'MXN'
+                    ],
+                    'usd_equivalent' => [
+                        'box_price' => round($boxPriceUsd, 2),
+                        'declared_value' => $declaredValue,
+                        'iva_amount' => $ivaAmount,
+                        'rural_surcharge' => $ruralChargeUsd,
+                        'total' => round($totalAmountUsd, 2),
+                        'currency' => 'USD',
+                        'exchange_rate' => $usdToMxnRate
+                    ]
                 ]
             ]);
 
@@ -214,7 +219,8 @@ class CheckoutController extends Controller
             
         } catch (\Exception $e) {
             Log::error('Checkout creation failed: ' . $e->getMessage(), [
-                'trace' => $e->getTraceAsString()
+                'user_id' => $user->id,
+                'price_id' => $request->price_id,
             ]);
             
             return response()->json([
