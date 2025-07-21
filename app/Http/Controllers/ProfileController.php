@@ -22,6 +22,7 @@ class ProfileController extends Controller
                 'name' => $user->name,
                 'email' => $user->email,
                 'phone' => $user->phone,
+                'preferred_language' => $user->preferred_language,
                 'address' => $user->address,
                 'has_complete_address' => $user->hasCompleteAddress(),
                 'created_at' => $user->created_at,

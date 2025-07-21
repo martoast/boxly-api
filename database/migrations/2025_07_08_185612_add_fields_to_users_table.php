@@ -11,6 +11,7 @@ return new class extends Migration
         Schema::table('users', function (Blueprint $table) {
             // Personal info
             $table->string('phone')->nullable()->after('email');
+            $table->string('preferred_language', 5)->default('es')->after('phone');
             
             // Mexican address format
             $table->string('street')->nullable();
@@ -40,6 +41,7 @@ return new class extends Migration
         Schema::table('users', function (Blueprint $table) {
             $table->dropColumn([
                 'phone',
+                'preferred_language',
                 'street',
                 'exterior_number',
                 'interior_number',

@@ -22,6 +22,7 @@ class User extends Authenticatable
         'email',
         'password',
         'phone',
+        'preferred_language',
         'street',
         'exterior_number',
         'interior_number',
