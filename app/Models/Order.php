@@ -209,4 +209,13 @@ class Order extends Model
     {
         return $query->where('user_id', $userId);
     }
+
+    /**
+     * Calculate total weight from all items
+     */
+    public function calculateTotalWeight(): ?float
+    {
+        $totalWeight = $this->items()->whereNotNull('weight')->sum('weight');
+        return $totalWeight > 0 ? $totalWeight : null;
+    }
 }

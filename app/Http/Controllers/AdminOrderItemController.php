@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Http\Requests\AdminMarkItemArrivedRequest;
+use App\Http\Requests\AdminUpdateOrderItemRequest;
 use App\Models\Order;
 use App\Models\OrderItem;
 use Illuminate\Http\Request;
@@ -68,6 +69,59 @@ class AdminOrderItemController extends Controller
         return response()->json([
             'success' => true,
             'data' => $packages
+        ]);
+    }
+
+    /**
+     * Display the specified package item.
+     */
+    public function show(OrderItem $item)
+    {
+        $item->load(['order.user']);
+
+        return response()->json([
+            'success' => true,
+            'data' => $item
+        ]);
+    }
+
+    /**
+     * Update package item details (admin can edit any field)
+     */
+    public function update(AdminUpdateOrderItemRequest $request, OrderItem $item)
+    {
+        // Get the original values for tracking changes
+        $originalDeclaredValue = $item->declared_value;
+        $originalWeight = $item->weight;
+        
+        // Update the item with validated data
+        $item->update($request->validated());
+
+        // If carrier is not provided but tracking number changed, try to detect it
+        if ($request->has('tracking_number') && !$request->has('carrier')) {
+            $item->carrier = $item->detectCarrier();
+            $item->save();
+        }
+
+        // If declared value changed, we need to recalculate IVA for the order
+        if ($request->has('declared_value') && $originalDeclaredValue != $item->declared_value) {
+            $this->recalculateOrderIVA($item->order);
+        }
+
+        // If weight changed and all items are weighed, update order total weight
+        if ($request->has('weight') && $originalWeight != $item->weight) {
+            $item->order->update([
+                'total_weight' => $item->order->calculateTotalWeight()
+            ]);
+        }
+
+        // Check if order status needs updating
+        $item->order->checkAndUpdatePackageStatus();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Package details updated successfully',
+            'data' => $item->fresh()->load(['order.user'])
         ]);
     }
 
@@ -142,55 +196,6 @@ class AdminOrderItemController extends Controller
             ]
         ]);
     }
-
-    /**
-     * Bulk mark items as arrived (for scanning multiple packages)
-     */
-    public function bulkArrived(Request $request)
-    {
-        $request->validate([
-            'tracking_numbers' => 'required|array',
-            'tracking_numbers.*' => 'required|string',
-            'weight' => 'nullable|numeric|min:0.01'
-        ]);
-
-        $results = [];
-        $defaultWeight = $request->weight;
-
-        foreach ($request->tracking_numbers as $trackingNumber) {
-            $item = OrderItem::where('tracking_number', $trackingNumber)
-                ->where('arrived', false)
-                ->first();
-
-            if ($item) {
-                $item->markAsArrived();
-                
-                if ($defaultWeight) {
-                    $item->weight = $defaultWeight;
-                    $item->save();
-                }
-
-                $results[] = [
-                    'tracking_number' => $trackingNumber,
-                    'success' => true,
-                    'order_number' => $item->order->order_number,
-                    'customer' => $item->order->user->name
-                ];
-            } else {
-                $results[] = [
-                    'tracking_number' => $trackingNumber,
-                    'success' => false,
-                    'message' => 'Package not found or already arrived'
-                ];
-            }
-        }
-
-        return response()->json([
-            'success' => true,
-            'data' => $results
-        ]);
-    }
-
     /**
      * Get items missing weight measurements
      */
@@ -205,6 +210,27 @@ class AdminOrderItemController extends Controller
         return response()->json([
             'success' => true,
             'data' => $items
+        ]);
+    }
+
+    /**
+     * Recalculate order IVA based on all items' declared values
+     */
+    private function recalculateOrderIVA(Order $order)
+    {
+        // Sum all declared values from items
+        $totalDeclaredValue = $order->items()->sum('declared_value');
+        
+        // IVA only applies when declared value is $50 USD or more
+        $ivaAmount = 0;
+        if ($totalDeclaredValue >= 50) {
+            $ivaAmount = round($totalDeclaredValue * 0.16, 2);
+        }
+        
+        // Update order with new values
+        $order->update([
+            'declared_value' => $totalDeclaredValue,
+            'iva_amount' => $ivaAmount
         ]);
     }
 }

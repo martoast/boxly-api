@@ -86,7 +86,8 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/', [AdminOrderItemController::class, 'index']);
             Route::get('/pending', [AdminOrderItemController::class, 'pending']);
             Route::get('/missing-weight', [AdminOrderItemController::class, 'missingWeight']);
-            Route::post('/bulk-arrived', [AdminOrderItemController::class, 'bulkArrived']);
+            Route::get('/{item}', [AdminOrderItemController::class, 'show']); // NEW
+            Route::put('/{item}', [AdminOrderItemController::class, 'update']); // NEW
         });
         
         // Customers
