@@ -29,7 +29,7 @@ class AdminUpdateOrderStatusRequest extends FormRequest
                     Order::STATUS_DELIVERED,
                 ])
             ],
-            'tracking_number' => 'required_if:status,shipped|nullable|string|max:255',
+            'tracking_number' => 'nullable|string|max:255',
             'estimated_delivery_date' => 'required_if:status,shipped|nullable|date|after:today',
         ];
     }
@@ -40,7 +40,6 @@ class AdminUpdateOrderStatusRequest extends FormRequest
     public function messages(): array
     {
         return [
-            'tracking_number.required_if' => 'Tracking number is required when marking as shipped.',
             'estimated_delivery_date.required_if' => 'Estimated delivery date is required when marking as shipped.',
         ];
     }

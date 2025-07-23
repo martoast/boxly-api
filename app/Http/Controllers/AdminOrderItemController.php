@@ -164,6 +164,9 @@ class AdminOrderItemController extends Controller
             ], 404);
         }
 
+        // Store original declared value for tracking changes
+        $originalDeclaredValue = $item->declared_value;
+
         if ($request->arrived) {
             $item->arrived = true;
             $item->arrived_at = now();
@@ -175,17 +178,32 @@ class AdminOrderItemController extends Controller
             if ($request->has('dimensions')) {
                 $item->dimensions = $request->dimensions;
             }
+            
+            if ($request->has('declared_value')) {
+                $item->declared_value = $request->declared_value;
+            }
         } else {
             $item->arrived = false;
             $item->arrived_at = null;
             $item->weight = null;
             $item->dimensions = null;
+            // Note: We don't reset declared_value when marking as not arrived
         }
 
         $item->save();
 
+        // If declared value changed, recalculate IVA for the order
+        if ($request->has('declared_value') && $originalDeclaredValue != $item->declared_value) {
+            $this->recalculateOrderIVA($order);
+        }
+
         // Check if all items have arrived and update order status
         $order->checkAndUpdatePackageStatus();
+
+        // Update order's total weight
+        $order->update([
+            'total_weight' => $order->calculateTotalWeight()
+        ]);
 
         return response()->json([
             'success' => true,

@@ -218,7 +218,7 @@ class OrderController extends Controller
             ], 403);
         }
 
-        if ($order->status !== Order::STATUS_QUOTE_SENT || !$order->stripe_invoice_url) {
+        if (!$order->stripe_invoice_url) {
             return response()->json([
                 'success' => false,
                 'message' => 'No quote available for this order'

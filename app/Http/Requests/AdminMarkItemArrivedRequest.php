@@ -26,6 +26,7 @@ class AdminMarkItemArrivedRequest extends FormRequest
             'dimensions.length' => 'nullable|numeric|min:1|max:999',
             'dimensions.width' => 'nullable|numeric|min:1|max:999',
             'dimensions.height' => 'nullable|numeric|min:1|max:999',
+            'declared_value' => 'nullable|numeric|min:0|max:99999.99',
         ];
     }
 
@@ -37,6 +38,8 @@ class AdminMarkItemArrivedRequest extends FormRequest
         return [
             'weight.required_if' => 'Weight is required when marking item as arrived.',
             'weight.min' => 'Weight must be at least 0.01 kg.',
+            'declared_value.min' => 'Declared value cannot be negative.',
+            'declared_value.max' => 'Declared value cannot exceed $99,999.99.',
         ];
     }
 }
