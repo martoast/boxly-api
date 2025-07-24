@@ -117,14 +117,4 @@ class User extends Authenticatable
                $this->estado &&
                $this->postal_code;
     }
-
-    /**
-     * Check if user has any unpaid quotes
-     */
-    public function hasUnpaidQuotes(): bool
-    {
-        return $this->orders()
-            ->where('status', 'quote_sent')
-            ->exists();
-    }
 }

@@ -11,6 +11,8 @@ use App\Http\Controllers\AdminCustomerController;
 use App\Http\Controllers\StripeWebhookController;
 use App\Http\Controllers\ProductController;
 use App\Http\Controllers\CheckoutController;
+use App\Http\Controllers\Auth\AuthSocialRedirectController;
+use App\Http\Controllers\Auth\AuthSocialCallbackController;
 
 /*
 |--------------------------------------------------------------------------
@@ -22,12 +24,19 @@ use App\Http\Controllers\CheckoutController;
 Route::post('/webhooks/stripe', [StripeWebhookController::class, 'handle']);
 
 // Public routes
-Route::get('/health', function () {
+Route::get('/', function () {
     return response()->json(['status' => 'ok']);
 });
 
 // Products endpoint (public for pricing page)
 Route::get('/products', [ProductController::class, 'index']);
+
+Route::middleware(['web'])->group(function () {
+    Route::get('/auth/{provider}/redirect', AuthSocialRedirectController::class)
+        ->whereIn('provider', ['google', 'facebook']);
+    Route::get('/auth/{provider}/callback', AuthSocialCallbackController::class)
+        ->whereIn('provider', ['google', 'facebook']);
+});
 
 // Protected routes
 Route::middleware('auth:sanctum')->group(function () {
@@ -36,15 +45,15 @@ Route::middleware('auth:sanctum')->group(function () {
         return $request->user();
     });
     
-    // Checkout
-    Route::post('/checkout', [CheckoutController::class, 'createCheckout']);
-    
-    // Profile
+    // Profile routes
     Route::prefix('profile')->group(function () {
         Route::get('/', [ProfileController::class, 'show']);
         Route::put('/', [ProfileController::class, 'update']);
         Route::get('/dashboard', [ProfileController::class, 'dashboard']);
     });
+    
+    // Checkout
+    Route::post('/checkout', [CheckoutController::class, 'createCheckout']);
     
     // Orders
     Route::prefix('orders')->group(function () {
@@ -86,8 +95,8 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/', [AdminOrderItemController::class, 'index']);
             Route::get('/pending', [AdminOrderItemController::class, 'pending']);
             Route::get('/missing-weight', [AdminOrderItemController::class, 'missingWeight']);
-            Route::get('/{item}', [AdminOrderItemController::class, 'show']); // NEW
-            Route::put('/{item}', [AdminOrderItemController::class, 'update']); // NEW
+            Route::get('/{item}', [AdminOrderItemController::class, 'show']);
+            Route::put('/{item}', [AdminOrderItemController::class, 'update']);
         });
         
         // Customers
