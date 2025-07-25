@@ -13,6 +13,7 @@ use App\Http\Controllers\ProductController;
 use App\Http\Controllers\CheckoutController;
 use App\Http\Controllers\Auth\AuthSocialRedirectController;
 use App\Http\Controllers\Auth\AuthSocialCallbackController;
+use App\Http\Controllers\PaymentMethodController;
 
 /*
 |--------------------------------------------------------------------------
@@ -50,6 +51,16 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/', [ProfileController::class, 'show']);
         Route::put('/', [ProfileController::class, 'update']);
         Route::get('/dashboard', [ProfileController::class, 'dashboard']);
+    });
+
+    // Payment Methods
+    Route::prefix('payment-methods')->group(function () {
+        Route::get('/', [PaymentMethodController::class, 'index']);
+        Route::post('/setup-session', [PaymentMethodController::class, 'createSetupSession']);
+        Route::post('/setup-intent', [PaymentMethodController::class, 'createSetupIntent']);
+        Route::post('/', [PaymentMethodController::class, 'store']);
+        Route::delete('/{paymentMethodId}', [PaymentMethodController::class, 'destroy']);
+        Route::put('/{paymentMethodId}/default', [PaymentMethodController::class, 'setDefault']);
     });
     
     // Checkout

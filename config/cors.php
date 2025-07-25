@@ -25,7 +25,9 @@ return [
         'profile',
         'profile/*',
         'products',
-        'checkout'
+        'checkout',
+        'payment-methods',
+        'payment-methods/*'
     ],
 
     'allowed_methods' => ['*'],
