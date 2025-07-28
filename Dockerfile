@@ -73,4 +73,9 @@ RUN composer install --no-dev --optimize-autoloader --no-scripts
 
 USER root
 
-CMD ["/usr/bin/supervisord"]
+# Create a startup script that runs migrations before starting supervisor
+RUN echo '#!/bin/bash\n\
+php artisan migrate --force\n\
+exec /usr/bin/supervisord' > /start.sh && chmod +x /start.sh
+
+CMD ["/start.sh"]
