@@ -124,5 +124,5 @@ return [
     ],
 
     'frontend_url' => env('APP_FRONTEND_URL', 'http://localhost:3000'),
-
+    'spa_url' => env('SPA_URL', 'http://localhost:3000'),
 ];
