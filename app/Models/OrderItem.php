@@ -116,6 +116,10 @@ class OrderItem extends Model
      */
     public function extractRetailer(): ?string
     {
+        if (!$this->product_url) {
+            return null;
+        }
+        
         $url = parse_url($this->product_url, PHP_URL_HOST);
         
         if (!$url) return null;
@@ -259,8 +263,8 @@ class OrderItem extends Model
         parent::boot();
         
         static::creating(function ($item) {
-            // Auto-detect retailer if not set
-            if (!$item->retailer) {
+            // Auto-detect retailer if not set and URL is provided
+            if (!$item->retailer && $item->product_url) {
                 $item->retailer = $item->extractRetailer();
             }
             

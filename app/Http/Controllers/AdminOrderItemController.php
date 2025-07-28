@@ -153,7 +153,7 @@ class AdminOrderItemController extends Controller
 
     /**
      * Mark item as arrived with weight
-     */
+    */
     public function markArrived(AdminMarkItemArrivedRequest $request, Order $order, OrderItem $item)
     {
         // Verify item belongs to order
@@ -162,6 +162,14 @@ class AdminOrderItemController extends Controller
                 'success' => false,
                 'message' => 'Item does not belong to this order'
             ], 404);
+        }
+
+        // Check if order is in collecting status when trying to mark as arrived
+        if ($request->arrived && $order->status === Order::STATUS_COLLECTING) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cannot mark items as arrived. The user has not completed the order yet.'
+            ], 422);
         }
 
         // Store original declared value for tracking changes

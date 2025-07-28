@@ -26,9 +26,10 @@ class StoreOrderItemRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'product_url' => 'required|url|max:1000',
+            'product_url' => 'nullable|url|max:1000',
             'product_name' => 'required|string|max:255', 
             'quantity' => 'required|integer|min:1|max:99',
+            'declared_value' => 'nullable|numeric|min:0|max:999999.99',
             'tracking_number' => 'nullable|string|max:255',
             'tracking_url' => 'nullable|url|max:1000',
             'carrier' => [
@@ -44,7 +45,10 @@ class StoreOrderItemRequest extends FormRequest
     public function messages(): array
     {
         return [
-            'product_url.required' => 'Please provide the product URL.',
+            'product_name.required' => 'Please provide the product name.',
+            'quantity.required' => 'Please specify the quantity.',
+            'quantity.integer' => 'Quantity must be a whole number.',
+            'quantity.min' => 'Quantity must be at least 1.',
             'product_url.url' => 'Please provide a valid URL.',
             'tracking_url.url' => 'Please provide a valid tracking URL.',
         ];

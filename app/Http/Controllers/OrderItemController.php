@@ -16,7 +16,7 @@ class OrderItemController extends Controller
     public function store(StoreOrderItemRequest $request, Order $order)
     {
         $item = $order->items()->create([
-            'product_url' => $request->product_url,
+            'product_url' => $request->product_url, // This can now be null
             'product_name' => $request->product_name,
             'quantity' => $request->quantity,
             'declared_value' => $request->declared_value,
@@ -25,11 +25,12 @@ class OrderItemController extends Controller
             'carrier' => $request->carrier,
         ]);
 
-        // Auto-detect retailer and carrier if not provided
-        if (!$item->retailer) {
+        // Auto-detect retailer if URL is provided
+        if ($item->product_url && !$item->retailer) {
             $item->retailer = $item->extractRetailer();
         }
         
+        // Auto-detect carrier if tracking number is provided
         if (!$item->carrier && $item->tracking_number) {
             $item->carrier = $item->detectCarrier();
         }

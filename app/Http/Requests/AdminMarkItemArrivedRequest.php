@@ -2,7 +2,9 @@
 
 namespace App\Http\Requests;
 
+use App\Models\Order;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Validator;
 
 class AdminMarkItemArrivedRequest extends FormRequest
 {
@@ -28,6 +30,23 @@ class AdminMarkItemArrivedRequest extends FormRequest
             'dimensions.height' => 'nullable|numeric|min:1|max:999',
             'declared_value' => 'nullable|numeric|min:0|max:99999.99',
         ];
+    }
+
+    /**
+     * Configure the validator instance.
+     */
+    public function withValidator(Validator $validator): void
+    {
+        $validator->after(function ($validator) {
+            // Only validate order status if trying to mark as arrived
+            if ($this->input('arrived') === true) {
+                $order = $this->route('order');
+                
+                if ($order && $order->status === Order::STATUS_COLLECTING) {
+                    $validator->errors()->add('arrived', 'Cannot mark items as arrived. The user has not completed the order yet.');
+                }
+            }
+        });
     }
 
     /**
