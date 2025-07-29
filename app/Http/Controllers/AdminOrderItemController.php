@@ -259,4 +259,30 @@ class AdminOrderItemController extends Controller
             'iva_amount' => $ivaAmount
         ]);
     }
+
+    /**
+     * View proof of purchase for an item (admin access)
+     */
+    public function viewProof(Request $request, OrderItem $item)
+    {
+        $item->load(['order.user']);
+
+        if (!$item->proof_of_purchase_path) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No proof of purchase file found'
+            ], 404);
+        }
+
+        // Since files are public, redirect to the URL
+        if ($item->proof_of_purchase_url) {
+            return redirect($item->proof_of_purchase_url);
+        }
+
+        // Fallback if URL is not set
+        return response()->json([
+            'success' => false,
+            'message' => 'File URL not available'
+        ], 404);
+    }
 }

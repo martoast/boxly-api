@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Facades\Storage;
 
 class OrderItem extends Model
 {
@@ -25,6 +26,12 @@ class OrderItem extends Model
         'arrived_at',
         'weight',
         'dimensions',
+        // New proof of purchase fields
+        'proof_of_purchase_path',
+        'proof_of_purchase_filename',
+        'proof_of_purchase_mime_type',
+        'proof_of_purchase_size',
+        'proof_of_purchase_url',
     ];
 
     protected $casts = [
@@ -34,7 +41,15 @@ class OrderItem extends Model
         'arrived_at' => 'datetime',
         'weight' => 'decimal:2',
         'dimensions' => 'array',
+        'proof_of_purchase_size' => 'integer',
     ];
+
+    /**
+     * The accessors to append to the model's array form.
+     *
+     * @var array
+     */
+    protected $appends = ['proof_of_purchase_full_url'];
 
     /**
      * Carrier constants
@@ -116,10 +131,6 @@ class OrderItem extends Model
      */
     public function extractRetailer(): ?string
     {
-        if (!$this->product_url) {
-            return null;
-        }
-        
         $url = parse_url($this->product_url, PHP_URL_HOST);
         
         if (!$url) return null;
@@ -232,6 +243,42 @@ class OrderItem extends Model
     }
 
     /**
+     * Get the full URL for the proof of purchase file
+     */
+    public function getProofOfPurchaseFullUrlAttribute(): ?string
+    {
+        if (!$this->proof_of_purchase_url) {
+            return null;
+        }
+        
+        // If it's already a full URL, return it
+        if (filter_var($this->proof_of_purchase_url, FILTER_VALIDATE_URL)) {
+            return $this->proof_of_purchase_url;
+        }
+        
+        // Otherwise, prepend the DO Spaces URL
+        return config('filesystems.disks.spaces.url') . '/' . $this->proof_of_purchase_url;
+    }
+
+    /**
+     * Delete the proof of purchase file
+     */
+    public function deleteProofOfPurchase(): void
+    {
+        if ($this->proof_of_purchase_path) {
+            Storage::disk('spaces')->delete($this->proof_of_purchase_path);
+            
+            $this->update([
+                'proof_of_purchase_path' => null,
+                'proof_of_purchase_filename' => null,
+                'proof_of_purchase_mime_type' => null,
+                'proof_of_purchase_size' => null,
+                'proof_of_purchase_url' => null,
+            ]);
+        }
+    }
+
+    /**
      * Scope for arrived items
      */
     public function scopeArrived($query)
@@ -263,8 +310,8 @@ class OrderItem extends Model
         parent::boot();
         
         static::creating(function ($item) {
-            // Auto-detect retailer if not set and URL is provided
-            if (!$item->retailer && $item->product_url) {
+            // Auto-detect retailer if not set
+            if (!$item->retailer) {
                 $item->retailer = $item->extractRetailer();
             }
             
@@ -272,6 +319,11 @@ class OrderItem extends Model
             if (!$item->carrier && $item->tracking_number) {
                 $item->carrier = $item->detectCarrier();
             }
+        });
+        
+        // Clean up file when deleting item
+        static::deleting(function ($item) {
+            $item->deleteProofOfPurchase();
         });
     }
 }

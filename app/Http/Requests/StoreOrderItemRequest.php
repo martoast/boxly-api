@@ -5,6 +5,7 @@ namespace App\Http\Requests;
 use App\Models\OrderItem;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\Rules\File;
 
 class StoreOrderItemRequest extends FormRequest
 {
@@ -36,6 +37,12 @@ class StoreOrderItemRequest extends FormRequest
                 'nullable',
                 Rule::in(array_keys(OrderItem::CARRIERS))
             ],
+            'proof_of_purchase' => [
+                'nullable',
+                'file',
+                File::types(['pdf', 'png', 'jpg', 'jpeg'])
+                    ->max(10 * 1024) // 10MB
+            ],
         ];
     }
 
@@ -51,6 +58,8 @@ class StoreOrderItemRequest extends FormRequest
             'quantity.min' => 'Quantity must be at least 1.',
             'product_url.url' => 'Please provide a valid URL.',
             'tracking_url.url' => 'Please provide a valid tracking URL.',
+            'proof_of_purchase.file' => 'The proof of purchase must be a valid file.',
+            'proof_of_purchase.max' => 'The proof of purchase file may not be greater than 10 megabytes.',
         ];
     }
 }

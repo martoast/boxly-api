@@ -82,6 +82,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/{order}/items', [OrderItemController::class, 'store']);
         Route::put('/{order}/items/{item}', [OrderItemController::class, 'update']);
         Route::delete('/{order}/items/{item}', [OrderItemController::class, 'destroy']);
+        Route::get('/{order}/items/{item}/proof', [OrderItemController::class, 'viewProof']);
     });
     
     // Admin routes
@@ -108,6 +109,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/missing-weight', [AdminOrderItemController::class, 'missingWeight']);
             Route::get('/{item}', [AdminOrderItemController::class, 'show']);
             Route::put('/{item}', [AdminOrderItemController::class, 'update']);
+            Route::get('/{item}/proof', [AdminOrderItemController::class, 'viewProof']);
         });
         
         // Customers
