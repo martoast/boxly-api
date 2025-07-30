@@ -21,11 +21,24 @@ class StripeWebhookController extends Controller
         $sigHeader = $request->header('Stripe-Signature');
         $webhookSecret = config('cashier.webhook.secret');
 
+        Log::info('Webhook received', [
+            'has_signature' => !empty($sigHeader),
+            'webhook_secret_configured' => !empty($webhookSecret),
+            'webhook_secret_starts_with' => substr($webhookSecret, 0, 10) . '...',
+        ]);
+
         try {
             $event = Webhook::constructEvent($payload, $sigHeader, $webhookSecret);
+            Log::info('Webhook event constructed successfully', ['type' => $event->type]);
         } catch (SignatureVerificationException $e) {
+            Log::error('Webhook signature verification failed', [
+                'error' => $e->getMessage(),
+                'signature' => $sigHeader,
+                'secret_configured' => !empty($webhookSecret)
+            ]);
             return response()->json(['error' => 'Invalid signature'], 400);
         } catch (\Exception $e) {
+            Log::error('Webhook error', ['error' => $e->getMessage()]);
             return response()->json(['error' => 'Webhook error'], 400);
         }
 
@@ -49,6 +62,11 @@ class StripeWebhookController extends Controller
     protected function handleCheckoutSessionCompleted(Event $event)
     {
         $session = $event->data->object;
+        
+        Log::info('Processing checkout.session.completed', [
+            'session_id' => $session->id,
+            'metadata' => $session->metadata ? $session->metadata->toArray() : null
+        ]);
         
         // Get user from metadata
         $userId = $session->metadata->user_id ?? null;
@@ -82,7 +100,7 @@ class StripeWebhookController extends Controller
         $isRural = $session->metadata->is_rural === 'true';
         $ruralSurcharge = $isRural ? 20 : null;
 
-        // Create the order
+        // Create the order with tracking and order numbers
         try {
             $order = Order::create([
                 'user_id' => $user->id,
@@ -105,9 +123,10 @@ class StripeWebhookController extends Controller
                 'paid_at' => now(),
             ]);
 
-            Log::info('Order created from checkout session', [
+            Log::info('Order created successfully from checkout session', [
                 'order_id' => $order->id,
                 'order_number' => $order->order_number,
+                'tracking_number' => $order->tracking_number,
                 'session_id' => $session->id,
                 'user_id' => $user->id,
                 'box_type' => $order->box_size,
@@ -124,7 +143,8 @@ class StripeWebhookController extends Controller
             Log::error('Failed to create order from checkout session', [
                 'session_id' => $session->id,
                 'user_id' => $user->id,
-                'error' => $e->getMessage()
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
             ]);
         }
     }

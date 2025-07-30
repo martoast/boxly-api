@@ -14,6 +14,7 @@ class Order extends Model
     protected $fillable = [
         'user_id',
         'order_number',
+        'tracking_number',
         'status',
         'box_size',
         'box_price',
@@ -29,7 +30,6 @@ class Order extends Model
         'amount_paid',
         'currency',
         'paid_at',
-        'tracking_number',
         'delivery_address',
         'estimated_delivery_date',
         'actual_delivery_date',
@@ -45,6 +45,8 @@ class Order extends Model
         'rural_surcharge' => 'decimal:2',
         'total_weight' => 'decimal:2',
         'amount_paid' => 'decimal:2',
+        'declared_value' => 'decimal:2',
+        'iva_amount' => 'decimal:2',
         'paid_at' => 'datetime',
         'estimated_delivery_date' => 'date',
         'actual_delivery_date' => 'date',
@@ -121,6 +123,28 @@ class Order extends Model
     }
 
     /**
+     * Check if all items have been weighed
+     */
+    public function allItemsWeighed(): bool
+    {
+        if ($this->items()->count() === 0) {
+            return false;
+        }
+        
+        return $this->items()->whereNull('weight')->count() === 0;
+    }
+
+    /**
+     * Check if order can be quoted (all items arrived and weighed)
+     */
+    public function canBeQuoted(): bool
+    {
+        return $this->status === self::STATUS_PACKAGES_COMPLETE && 
+               $this->allItemsArrived() && 
+               $this->allItemsWeighed();
+    }
+
+    /**
      * Get arrival progress percentage
      */
     public function getArrivalProgressAttribute(): int
@@ -159,7 +183,7 @@ class Order extends Model
         if ($this->status === self::STATUS_AWAITING_PACKAGES && $this->allItemsArrived()) {
             $this->update([
                 'status' => self::STATUS_PACKAGES_COMPLETE,
-                'total_weight' => $this->items()->sum('weight'),
+                'total_weight' => $this->calculateTotalWeight(),
             ]);
         }
     }

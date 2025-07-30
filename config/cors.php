@@ -27,7 +27,8 @@ return [
         'products',
         'checkout',
         'payment-methods',
-        'payment-methods/*'
+        'payment-methods/*',
+        'track'
     ],
 
     'allowed_methods' => ['*'],

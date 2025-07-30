@@ -2,7 +2,6 @@
 
 namespace App\Http\Controllers;
 
-use App\Http\Requests\StoreOrderRequest;
 use App\Http\Requests\CompleteOrderRequest;
 use App\Http\Requests\UpdateOrderRequest;
 use App\Models\Order;
@@ -35,27 +34,6 @@ class OrderController extends Controller
             'success' => true,
             'data' => $orders
         ]);
-    }
-
-    /**
-     * Store a newly created order.
-     */
-    public function store(StoreOrderRequest $request)
-    {
-        $order = Order::create([
-            'user_id' => $request->user()->id,
-            'order_number' => Order::generateOrderNumber(),
-            'tracking_number' => Order::generateTrackingNumber(),
-            'delivery_address' => $request->delivery_address,
-            'is_rural' => $request->is_rural ?? false,
-            'status' => Order::STATUS_COLLECTING,
-        ]);
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Order created successfully',
-            'data' => $order
-        ], 201);
     }
 
     /**
@@ -196,38 +174,11 @@ class OrderController extends Controller
             'total_weight' => $order->total_weight,
             'estimated_delivery_date' => $order->estimated_delivery_date?->format('Y-m-d'),
             'actual_delivery_date' => $order->actual_delivery_date?->format('Y-m-d'),
-            'stripe_invoice_url' => $order->stripe_invoice_url,
         ];
 
         return response()->json([
             'success' => true,
             'data' => $trackingInfo
-        ]);
-    }
-
-    /**
-     * Pay for quoted order (redirect to Stripe invoice)
-     */
-    public function pay(Request $request, Order $order)
-    {
-        // Check if user owns this order
-        if ($order->user_id !== $request->user()->id) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Unauthorized'
-            ], 403);
-        }
-
-        if (!$order->stripe_invoice_url) {
-            return response()->json([
-                'success' => false,
-                'message' => 'No quote available for this order'
-            ], 400);
-        }
-
-        return response()->json([
-            'success' => true,
-            'invoice_url' => $order->stripe_invoice_url
         ]);
     }
 
@@ -245,7 +196,7 @@ class OrderController extends Controller
         }
 
         // Only allow reopening if order is in awaiting_packages status
-        // Don't allow if packages have already arrived or quote has been sent
+        // Don't allow if packages have already arrived
         if (!in_array($order->status, [Order::STATUS_AWAITING_PACKAGES])) {
             return response()->json([
                 'success' => false,
@@ -273,112 +224,27 @@ class OrderController extends Controller
         }
     }
 
-     /**
+    /**
      * Get order by session after stripe checkout
+     * The order should already exist from the webhook
      */
     public function findBySession(Request $request, $sessionId)
     {
-        // First check if order already exists
+        // Find the order by stripe checkout session ID
         $order = Order::where('stripe_checkout_session_id', $sessionId)
             ->where('user_id', $request->user()->id)
             ->first();
         
-        if ($order) {
-            return response()->json([
-                'success' => true,
-                'data' => $order->load('items')
-            ]);
-        }
-
-        // If no order exists, create it from the Stripe session
-        try {
-            // Retrieve the session from Stripe
-            $session = \Laravel\Cashier\Cashier::stripe()->checkout->sessions->retrieve($sessionId, [
-                'expand' => ['payment_intent', 'line_items']
-            ]);
-
-            // Verify session belongs to this user
-            if ($session->metadata->user_id != $request->user()->id) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Unauthorized'
-                ], 403);
-            }
-
-            // Check if payment was successful
-            if ($session->payment_status !== 'paid') {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Payment not completed',
-                    'payment_status' => $session->payment_status
-                ], 400);
-            }
-
-            // Parse metadata
-            $metadata = $session->metadata;
-            $deliveryAddress = json_decode($metadata->delivery_address, true);
-            $declaredValue = floatval($metadata->declared_value);
-            $ivaAmount = floatval($metadata->iva_amount);
-            $isRural = $metadata->is_rural === 'true';
-            
-            // Calculate box price from line items (first item should be the box)
-            $boxPrice = 0;
-            $ruralSurcharge = 0;
-            
-            foreach ($session->line_items->data as $lineItem) {
-                if (isset($lineItem->price->id) && $lineItem->price->id === $metadata->price_id) {
-                    $boxPrice = $lineItem->amount_total / 100; // Convert from cents
-                } elseif (strpos(strtolower($lineItem->description ?? ''), 'rural') !== false) {
-                    $ruralSurcharge = $lineItem->amount_total / 100;
-                }
-            }
-            
-            // Create the order
-            $order = Order::create([
-                'user_id' => $request->user()->id,
-                'order_number' => Order::generateOrderNumber(),
-                'tracking_number' => Order::generateTrackingNumber(),
-                'status' => Order::STATUS_COLLECTING,
-                'box_size' => $metadata->box_type,
-                'box_price' => $boxPrice,
-                'declared_value' => $declaredValue,
-                'iva_amount' => $ivaAmount,
-                'is_rural' => $isRural,
-                'rural_surcharge' => $isRural ? $ruralSurcharge : null,
-                'delivery_address' => $deliveryAddress,
-                'amount_paid' => $session->amount_total / 100, // Convert from cents
-                'currency' => $session->currency,
-                'stripe_product_id' => $metadata->product_id,
-                'stripe_price_id' => $metadata->price_id,
-                'stripe_checkout_session_id' => $sessionId,
-                'stripe_payment_intent_id' => $session->payment_intent->id ?? $session->payment_intent,
-                'paid_at' => now(),
-            ]);
-
-            \Illuminate\Support\Facades\Log::info('Order created from Stripe session', [
-                'order_id' => $order->id,
-                'order_number' => $order->order_number,
-                'session_id' => $sessionId,
-                'amount_paid' => $order->amount_paid
-            ]);
-
-            return response()->json([
-                'success' => true,
-                'data' => $order->load('items')
-            ]);
-
-        } catch (\Exception $e) {
-            \Illuminate\Support\Facades\Log::error('Error creating order from session', [
-                'error' => $e->getMessage(),
-                'session_id' => $sessionId,
-                'user_id' => $request->user()->id
-            ]);
-
+        if (!$order) {
             return response()->json([
                 'success' => false,
-                'message' => 'Error processing order',
-                'error' => config('app.debug') ? $e->getMessage() : null
-            ], 500);
+                'message' => 'Order not found. It may still be processing. Please try again in a moment.'
+            ], 404);
         }
+
+        return response()->json([
+            'success' => true,
+            'data' => $order->load('items')
+        ]);
     }
 }

@@ -14,6 +14,7 @@ use App\Http\Controllers\CheckoutController;
 use App\Http\Controllers\Auth\AuthSocialRedirectController;
 use App\Http\Controllers\Auth\AuthSocialCallbackController;
 use App\Http\Controllers\PaymentMethodController;
+use App\Http\Controllers\TrackingController;
 
 /*
 |--------------------------------------------------------------------------
@@ -31,6 +32,10 @@ Route::get('/', function () {
 
 // Products endpoint (public for pricing page)
 Route::get('/products', [ProductController::class, 'index']);
+
+// Public tracking endpoints
+Route::post('/track', [TrackingController::class, 'track']);
+Route::get('/track', [TrackingController::class, 'form']);
 
 Route::middleware(['web'])->group(function () {
     Route::get('/auth/{provider}/redirect', AuthSocialRedirectController::class)
@@ -66,7 +71,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Checkout
     Route::post('/checkout', [CheckoutController::class, 'createCheckout']);
     
-    // Orders
+    // Orders - Note: No POST route for manual order creation
     Route::prefix('orders')->group(function () {
         Route::get('/', [OrderController::class, 'index']);
         Route::get('/by-session/{sessionId}', [OrderController::class, 'findBySession']);
