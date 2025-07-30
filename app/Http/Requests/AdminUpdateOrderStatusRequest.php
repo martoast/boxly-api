@@ -29,7 +29,6 @@ class AdminUpdateOrderStatusRequest extends FormRequest
                     Order::STATUS_DELIVERED,
                 ])
             ],
-            'tracking_number' => 'nullable|string|max:255',
             'estimated_delivery_date' => 'required_if:status,shipped|nullable|date|after:today',
         ];
     }

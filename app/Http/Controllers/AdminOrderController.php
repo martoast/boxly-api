@@ -77,7 +77,6 @@ class AdminOrderController extends Controller
         $data = ['status' => $request->status];
 
         if ($request->status === Order::STATUS_SHIPPED) {
-            $data['tracking_number'] = $request->tracking_number;
             $data['estimated_delivery_date'] = $request->estimated_delivery_date;
             $data['shipped_at'] = now();
         }
