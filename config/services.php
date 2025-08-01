@@ -40,5 +40,9 @@ return [
         'client_secret' => env('GOOGLE_CLIENT_SECRET'),
         'redirect' => env('GOOGLE_REDIRECT_URI', env('APP_URL') . '/auth/google/callback'),
     ],
+    
+    'gohighlevel' => [
+        'webhook_url' => env('GOHIGHLEVEL_WEBHOOK_URL', 'https://services.leadconnectorhq.com/hooks/2Pr7Q71krQMxeqK7aWJl/webhook-trigger/cf022b90-d43b-478b-b08e-de4367dd4142'),
+    ],
 
 ];

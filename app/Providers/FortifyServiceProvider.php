@@ -6,6 +6,7 @@ use App\Actions\Fortify\CreateNewUser;
 use App\Actions\Fortify\ResetUserPassword;
 use App\Actions\Fortify\UpdateUserPassword;
 use App\Actions\Fortify\UpdateUserProfileInformation;
+use App\Jobs\SendFunnelCaptureWebhookJob;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\RateLimiter;
@@ -57,6 +58,21 @@ class FortifyServiceProvider extends ServiceProvider
                 ]);
             } catch (\Exception $e) {
                 Log::error('Failed to create Stripe customer for user ' . $user->id . ': ' . $e->getMessage());
+            }
+
+            try {
+                SendFunnelCaptureWebhookJob::dispatch(
+                    $user->name,
+                    $user->email,
+                    $user->phone ?? ''
+                );
+                
+                Log::info('Dispatched GoHighLevel webhook job for new user registration', [
+                    'user_id' => $user->id,
+                    'email' => $user->email,
+                ]);
+            } catch (\Exception $e) {
+                Log::error('Failed to dispatch GoHighLevel webhook job for user ' . $user->id . ': ' . $e->getMessage());
             }
         });
     }

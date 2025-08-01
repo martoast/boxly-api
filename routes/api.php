@@ -15,7 +15,7 @@ use App\Http\Controllers\Auth\AuthSocialRedirectController;
 use App\Http\Controllers\Auth\AuthSocialCallbackController;
 use App\Http\Controllers\PaymentMethodController;
 use App\Http\Controllers\TrackingController;
-use Illuminate\Support\Facades\Mail;
+use App\Http\Controllers\FunnelCaptureController;
 
 /*
 |--------------------------------------------------------------------------
@@ -37,6 +37,8 @@ Route::get('/products', [ProductController::class, 'index']);
 // Public tracking endpoints
 Route::post('/track', [TrackingController::class, 'track']);
 Route::get('/track', [TrackingController::class, 'form']);
+
+Route::post('/funnel-capture', [FunnelCaptureController::class, 'store']);
 
 Route::middleware(['web'])->group(function () {
     Route::get('/auth/{provider}/redirect', AuthSocialRedirectController::class)
@@ -126,19 +128,6 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/{customer}/collecting-orders', [AdminCustomerController::class, 'collectingOrders']);
         });
     });
-});
-
-Route::get('/test-email', function () {
-    try {
-        \Mail::raw('Test email content', function ($message) {
-            $message->to('alexmartos96@gmail.com')
-                    ->subject('Test Email');
-        });
-        
-        return response()->json(['success' => true, 'message' => 'Email sent']);
-    } catch (\Exception $e) {
-        return response()->json(['success' => false, 'error' => $e->getMessage()]);
-    }
 });
 
 // Fallback route

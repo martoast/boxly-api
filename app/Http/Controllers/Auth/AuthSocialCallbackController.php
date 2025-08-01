@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Auth;
 
 use App\Enums\SocialProviderEnum;
 use App\Http\Controllers\Controller;
+use App\Jobs\SendFunnelCaptureWebhookJob;
 use App\Models\User;
 use Exception;
 use Illuminate\Support\Facades\Auth;
@@ -61,6 +62,23 @@ final class AuthSocialCallbackController extends Controller
                 } catch (\Exception $e) {
                     Log::error('Failed to create Stripe customer for OAuth user: ' . $e->getMessage());
                 }
+            }
+
+            // Send to GoHighLevel CRM for new social registrations
+            try {
+                SendFunnelCaptureWebhookJob::dispatch(
+                    $user->name,
+                    $user->email,
+                    '' // No phone yet for social logins
+                );
+                
+                Log::info('Dispatched GoHighLevel webhook job for new social user registration', [
+                    'user_id' => $user->id,
+                    'email' => $user->email,
+                    'provider' => $provider->value,
+                ]);
+            } catch (\Exception $e) {
+                Log::error('Failed to dispatch GoHighLevel webhook job for social user: ' . $e->getMessage());
             }
 
             // Log the new user in

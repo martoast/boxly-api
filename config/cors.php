@@ -28,7 +28,8 @@ return [
         'checkout',
         'payment-methods',
         'payment-methods/*',
-        'track'
+        'track',
+        'funnel-capture'
     ],
 
     'allowed_methods' => ['*'],
