@@ -153,7 +153,7 @@ class AdminOrderItemController extends Controller
 
     /**
      * Mark item as arrived with weight
-    */
+     */
     public function markArrived(AdminMarkItemArrivedRequest $request, Order $order, OrderItem $item)
     {
         // Verify item belongs to order
@@ -176,39 +176,47 @@ class AdminOrderItemController extends Controller
         $originalDeclaredValue = $item->declared_value;
 
         if ($request->arrived) {
-            $item->arrived = true;
-            $item->arrived_at = now();
+            // First, update weight, dimensions, and declared_value if provided
+            $updateData = [];
             
             if ($request->has('weight')) {
-                $item->weight = $request->weight;
+                $updateData['weight'] = $request->weight;
             }
             
             if ($request->has('dimensions')) {
-                $item->dimensions = $request->dimensions;
+                $updateData['dimensions'] = $request->dimensions;
             }
             
             if ($request->has('declared_value')) {
-                $item->declared_value = $request->declared_value;
+                $updateData['declared_value'] = $request->declared_value;
             }
+            
+            // Update these fields if there's data to update
+            if (!empty($updateData)) {
+                $item->update($updateData);
+            }
+            
+            // Now call markAsArrived which handles the arrived status and email
+            $item->markAsArrived();
+            
         } else {
-            $item->arrived = false;
-            $item->arrived_at = null;
-            $item->weight = null;
-            $item->dimensions = null;
-            // Note: We don't reset declared_value when marking as not arrived
+            // Mark as not arrived - use the existing method
+            $item->markAsNotArrived();
+            
+            // Also clear weight and dimensions when marking as not arrived
+            $item->update([
+                'weight' => null,
+                'dimensions' => null
+            ]);
         }
-
-        $item->save();
 
         // If declared value changed, recalculate IVA for the order
         if ($request->has('declared_value') && $originalDeclaredValue != $item->declared_value) {
             $this->recalculateOrderIVA($order);
         }
 
-        // Check if all items have arrived and update order status
-        $order->checkAndUpdatePackageStatus();
-
-        // Update order's total weight
+        // Update order's total weight (this happens automatically in markAsArrived, 
+        // but we need it for the not arrived case too)
         $order->update([
             'total_weight' => $order->calculateTotalWeight()
         ]);

@@ -15,6 +15,7 @@ use App\Http\Controllers\Auth\AuthSocialRedirectController;
 use App\Http\Controllers\Auth\AuthSocialCallbackController;
 use App\Http\Controllers\PaymentMethodController;
 use App\Http\Controllers\TrackingController;
+use Illuminate\Support\Facades\Mail;
 
 /*
 |--------------------------------------------------------------------------
@@ -125,6 +126,19 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/{customer}/collecting-orders', [AdminCustomerController::class, 'collectingOrders']);
         });
     });
+});
+
+Route::get('/test-email', function () {
+    try {
+        \Mail::raw('Test email content', function ($message) {
+            $message->to('alexmartos96@gmail.com')
+                    ->subject('Test Email');
+        });
+        
+        return response()->json(['success' => true, 'message' => 'Email sent']);
+    } catch (\Exception $e) {
+        return response()->json(['success' => false, 'error' => $e->getMessage()]);
+    }
 });
 
 // Fallback route

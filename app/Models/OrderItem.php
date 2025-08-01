@@ -6,6 +6,8 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Mail;
+use App\Mail\PackageArrived;
 
 class OrderItem extends Model
 {
@@ -79,10 +81,17 @@ class OrderItem extends Model
      */
     public function markAsArrived(): void
     {
+        $wasNotArrived = !$this->arrived;
+        
         $this->update([
             'arrived' => true,
             'arrived_at' => now(),
         ]);
+        
+        // Send notification if item wasn't already marked as arrived
+        if ($wasNotArrived) {
+            Mail::to($this->order->user)->send(new PackageArrived($this));
+        }
         
         // Check if all items have arrived
         $this->order->checkAndUpdatePackageStatus();

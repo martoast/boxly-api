@@ -9,6 +9,10 @@ use Stripe\Event;
 use Stripe\Exception\SignatureVerificationException;
 use Stripe\Webhook;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
+use App\Mail\OrderCreated;
+use App\Notifications\NewOrderNotification;
+use Illuminate\Support\Facades\Notification;
 
 class StripeWebhookController extends Controller
 {
@@ -133,11 +137,22 @@ class StripeWebhookController extends Controller
                 'amount_paid' => $order->amount_paid,
             ]);
 
-            // TODO: Send confirmation email to customer
-            // Mail::to($user)->send(new OrderConfirmation($order));
+            // Send confirmation email to customer
+            Mail::to($user)->send(new OrderCreated($order));
+            Log::info('Order confirmation email sent to customer', [
+                'order_id' => $order->id,
+                'user_email' => $user->email
+            ]);
 
-            // TODO: Notify admin of new order
-            // Notification::send($admins, new NewOrderNotification($order));
+            // Notify admin of new order
+            $admins = User::where('role', 'admin')->get();
+            if ($admins->count() > 0) {
+                Notification::send($admins, new NewOrderNotification($order));
+                Log::info('Admin notification sent', [
+                    'order_id' => $order->id,
+                    'admin_count' => $admins->count()
+                ]);
+            }
 
         } catch (\Exception $e) {
             Log::error('Failed to create order from checkout session', [

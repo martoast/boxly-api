@@ -6,6 +6,9 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\Mail;
+use App\Mail\OrderStatusChanged;
+use Illuminate\Support\Facades\Log;
 
 class Order extends Model
 {
@@ -64,6 +67,51 @@ class Order extends Model
     const STATUS_SHIPPED = 'shipped';
     const STATUS_DELIVERED = 'delivered';
 
+    /**
+     * Temporary property to store previous status
+     */
+    public $previousStatus;
+
+    /**
+     * Boot method for the model
+     */
+    protected static function boot()
+    {
+        parent::boot();
+        
+        // Watch for status changes
+        static::updating(function ($order) {
+            if ($order->isDirty('status')) {
+                $order->previousStatus = $order->getOriginal('status');
+            }
+        });
+        
+        static::updated(function ($order) {
+            // Send email when status changes
+            if ($order->isDirty('status') && isset($order->previousStatus)) {
+                // Make sure user relationship is loaded
+                $order->load('user');
+                
+                Log::info('Sending order status change email', [
+                    'order_id' => $order->id,
+                    'order_number' => $order->order_number,
+                    'previous_status' => $order->previousStatus,
+                    'new_status' => $order->status,
+                    'user_email' => $order->user->email
+                ]);
+                
+                try {
+                    Mail::to($order->user)->send(new OrderStatusChanged($order, $order->previousStatus));
+                    Log::info('Order status change email sent successfully');
+                } catch (\Exception $e) {
+                    Log::error('Failed to send order status change email', [
+                        'order_id' => $order->id,
+                        'error' => $e->getMessage()
+                    ]);
+                }
+            }
+        });
+    }
     /**
      * Get all available statuses
      */
