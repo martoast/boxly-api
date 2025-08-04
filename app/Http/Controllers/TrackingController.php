@@ -30,6 +30,7 @@ class TrackingController extends Controller
 
         // Prepare public tracking data (limited information)
         $trackingData = [
+            'id' => $order->id,
             'tracking_number' => $order->tracking_number,
             'status' => $order->status,
             'status_label' => Order::getStatuses()[$order->status] ?? 'Unknown',

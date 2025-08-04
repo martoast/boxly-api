@@ -13,6 +13,13 @@ class User extends Authenticatable
     use HasFactory, Notifiable, Billable, HasApiTokens;
 
     /**
+     * User type constants
+     */
+    const TYPE_EXPAT = 'expat';
+    const TYPE_BUSINESS = 'business';
+    const TYPE_SHOPPER = 'shopper';
+
+    /**
      * The attributes that are mass assignable.
      *
      * @var array<int, string>
@@ -32,6 +39,8 @@ class User extends Authenticatable
         'postal_code',
         'provider',
         'role',
+        'user_type',
+        'registration_source',
     ];
 
     /**
@@ -54,7 +63,121 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'registration_source' => 'array', // Automatically cast JSON to array
         ];
+    }
+
+    /**
+     * Get all available user types
+     */
+    public static function getUserTypes(): array
+    {
+        return [
+            self::TYPE_EXPAT => [
+                'label' => 'Expat',
+                'description' => 'Foreign nationals living in Mexico',
+                'icon' => 'globe',
+            ],
+            self::TYPE_BUSINESS => [
+                'label' => 'Business',
+                'description' => 'Companies needing B2B solutions',
+                'icon' => 'briefcase',
+            ],
+            self::TYPE_SHOPPER => [
+                'label' => 'Online Shopper',
+                'description' => 'Shop from US/international online stores',
+                'icon' => 'shopping-cart',
+            ],
+        ];
+    }
+
+    /**
+     * Check if user is an expat
+     */
+    public function isExpat(): bool
+    {
+        return $this->user_type === self::TYPE_EXPAT;
+    }
+
+    /**
+     * Check if user is a business
+     */
+    public function isBusiness(): bool
+    {
+        return $this->user_type === self::TYPE_BUSINESS;
+    }
+
+    /**
+     * Check if user is a shopper
+     */
+    public function isShopper(): bool
+    {
+        return $this->user_type === self::TYPE_SHOPPER;
+    }
+
+    /**
+     * Get the user type label
+     */
+    public function getUserTypeLabel(): string
+    {
+        $types = self::getUserTypes();
+        return $types[$this->user_type]['label'] ?? 'Unknown';
+    }
+
+    /**
+     * Get registration source as array (handles both JSON and old string format)
+     */
+    public function getRegistrationSourceData(): array
+    {
+        if (!$this->registration_source) {
+            return [];
+        }
+
+        // If it's already an array (cast worked), return it
+        if (is_array($this->registration_source)) {
+            return $this->registration_source;
+        }
+
+        // Try to decode if it's a JSON string
+        $decoded = json_decode($this->registration_source, true);
+        if (json_last_error() === JSON_ERROR_NONE) {
+            return $decoded;
+        }
+
+        // If it's a plain string (old format), wrap it
+        return ['source' => $this->registration_source];
+    }
+
+    /**
+     * Scope for filtering by user type
+     */
+    public function scopeOfType($query, $type)
+    {
+        return $query->where('user_type', $type);
+    }
+
+    /**
+     * Scope for business users
+     */
+    public function scopeBusinesses($query)
+    {
+        return $query->where('user_type', self::TYPE_BUSINESS);
+    }
+
+    /**
+     * Scope for expat users
+     */
+    public function scopeExpats($query)
+    {
+        return $query->where('user_type', self::TYPE_EXPAT);
+    }
+
+    /**
+     * Scope for shopper users
+     */
+    public function scopeShoppers($query)
+    {
+        return $query->where('user_type', self::TYPE_SHOPPER);
     }
 
     /**

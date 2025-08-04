@@ -3,8 +3,11 @@
 namespace App\Http\Controllers;
 
 use App\Http\Requests\UpdateProfileRequest;
+use App\Jobs\SendFunnelCaptureWebhookJob;
 use Illuminate\Http\Request;
 use App\Models\Order;
+use Illuminate\Validation\Rule;
+use Illuminate\Support\Facades\Log;
 
 class ProfileController extends Controller
 {
@@ -22,9 +25,13 @@ class ProfileController extends Controller
                 'name' => $user->name,
                 'email' => $user->email,
                 'phone' => $user->phone,
+                'user_type' => $user->user_type,
+                'user_type_label' => $user->getUserTypeLabel(),
+                'is_business' => $user->isBusiness(),
                 'preferred_language' => $user->preferred_language,
                 'address' => $user->address,
                 'has_complete_address' => $user->hasCompleteAddress(),
+                'registration_source' => $user->getRegistrationSourceData(), // Returns parsed array
                 'created_at' => $user->created_at,
                 // Stats
                 'total_orders' => $user->orders()->count(),
@@ -44,10 +51,109 @@ class ProfileController extends Controller
     /**
      * Update the authenticated user's profile
      */
-    public function update(UpdateProfileRequest $request)
+    public function update(Request $request)
     {
         $user = $request->user();
-        $user->update($request->validated());
+        
+        // Track if this is the first time setting critical fields
+        $isFirstTimeSettingPhone = !$user->phone && $request->has('phone');
+        $isFirstTimeSettingUserType = !$user->user_type && $request->has('user_type');
+        $wasProfileIncomplete = !$user->phone || !$user->user_type;
+        
+        $validated = $request->validate([
+            'name' => 'sometimes|required|string|max:255',
+            'email' => [
+                'sometimes',
+                'required',
+                'string',
+                'email',
+                'max:255',
+                Rule::unique('users')->ignore($user->id),
+            ],
+            'phone' => 'nullable|string|max:20',
+            'preferred_language' => 'nullable|string|in:es,en',
+            'street' => 'nullable|string|max:255',
+            'exterior_number' => 'nullable|string|max:20',
+            'interior_number' => 'nullable|string|max:20',
+            'colonia' => 'nullable|string|max:100',
+            'municipio' => 'nullable|string|max:100',
+            'estado' => 'nullable|string|max:100',
+            'postal_code' => 'nullable|string|regex:/^\d{5}$/',
+            'user_type' => [
+                'sometimes',
+                Rule::in(['expat', 'business', 'shopper']),
+                Rule::requiredIf(!$user->user_type),
+            ],
+            'registration_source' => 'nullable|json', // Now expects JSON
+        ], [
+            'email.unique' => 'This email is already in use.',
+            'postal_code.regex' => 'Postal code must be 5 digits.',
+            'registration_source.json' => 'Invalid tracking data format.',
+        ]);
+        
+        // Prevent changing user type if already set
+        if ($user->user_type && isset($validated['user_type']) && $validated['user_type'] !== $user->user_type) {
+            return response()->json([
+                'success' => false,
+                'message' => 'User type cannot be changed once set.',
+                'errors' => [
+                    'user_type' => ['User type cannot be changed once set.']
+                ]
+            ], 422);
+        }
+        
+        // Handle registration_source JSON encoding
+        if (isset($validated['registration_source'])) {
+            if (is_string($validated['registration_source'])) {
+                // It's already a JSON string, validate and keep it
+                $decoded = json_decode($validated['registration_source'], true);
+                if (json_last_error() !== JSON_ERROR_NONE) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Invalid tracking data format.',
+                        'errors' => [
+                            'registration_source' => ['Invalid JSON format.']
+                        ]
+                    ], 422);
+                }
+            } elseif (is_array($validated['registration_source'])) {
+                // Convert array to JSON string for storage
+                $validated['registration_source'] = json_encode($validated['registration_source']);
+            }
+        }
+        
+        // Update language preference based on user type if setting for first time
+        if ($isFirstTimeSettingUserType && isset($validated['user_type'])) {
+            $validated['preferred_language'] = $validated['user_type'] === 'expat' ? 'en' : 'es';
+        }
+        
+        $user->update($validated);
+        
+        // If profile was incomplete and is now complete, send to CRM
+        if ($wasProfileIncomplete && $user->phone && $user->user_type) {
+            try {
+                // Get registration source data for CRM
+                $sourceData = $user->getRegistrationSourceData();
+                
+                SendFunnelCaptureWebhookJob::dispatch(
+                    $user->name,
+                    $user->email,
+                    $user->phone,
+                    $user->user_type,
+                    $sourceData // Send the full tracking data array
+                );
+                
+                Log::info('Sent completed profile to GoHighLevel', [
+                    'user_id' => $user->id,
+                    'email' => $user->email,
+                    'user_type' => $user->user_type,
+                    'registration_source' => $sourceData,
+                    'was_social_login' => !empty($user->provider),
+                ]);
+            } catch (\Exception $e) {
+                Log::error('Failed to send completed profile to GoHighLevel: ' . $e->getMessage());
+            }
+        }
 
         return response()->json([
             'success' => true,
@@ -64,6 +170,12 @@ class ProfileController extends Controller
         $user = $request->user();
         
         $stats = [
+            'user_info' => [
+                'user_type' => $user->user_type,
+                'user_type_label' => $user->getUserTypeLabel(),
+                'is_business' => $user->isBusiness(),
+                'member_since' => $user->created_at->format('F Y'),
+            ],
             'orders' => [
                 'collecting' => $user->orders()->where('status', Order::STATUS_COLLECTING)->count(),
                 'awaiting_packages' => $user->orders()->where('status', Order::STATUS_AWAITING_PACKAGES)->count(),

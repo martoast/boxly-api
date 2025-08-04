@@ -34,6 +34,33 @@ Route::get('/', function () {
 // Products endpoint (public for pricing page)
 Route::get('/products', [ProductController::class, 'index']);
 
+// User types endpoint (public for registration)
+Route::get('/user-types', function () {
+    return response()->json([
+        'success' => true,
+        'data' => [
+            [
+                'value' => 'expat',
+                'label' => 'Expat',
+                'description' => 'Foreign nationals living in Mexico',
+                'icon' => 'globe',
+            ],
+            [
+                'value' => 'business',
+                'label' => 'Business',
+                'description' => 'Companies needing B2B solutions',
+                'icon' => 'briefcase',
+            ],
+            [
+                'value' => 'shopper',
+                'label' => 'Online Shopper',
+                'description' => 'Shop from US/international online stores',
+                'icon' => 'shopping-cart',
+            ],
+        ]
+    ]);
+});
+
 // Public tracking endpoints
 Route::post('/track', [TrackingController::class, 'track']);
 Route::get('/track', [TrackingController::class, 'form']);
@@ -51,7 +78,18 @@ Route::middleware(['web'])->group(function () {
 Route::middleware('auth:sanctum')->group(function () {
     // User info
     Route::get('/user', function (Request $request) {
-        return $request->user();
+        $user = $request->user();
+        return [
+            'id' => $user->id,
+            'name' => $user->name,
+            'email' => $user->email,
+            'phone' => $user->phone,
+            'user_type' => $user->user_type,
+            'preferred_language' => $user->preferred_language,
+            'role' => $user->role,
+            'email_verified_at' => $user->email_verified_at,
+            'created_at' => $user->created_at,
+        ];
     });
     
     // Profile routes

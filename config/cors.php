@@ -29,7 +29,8 @@ return [
         'payment-methods',
         'payment-methods/*',
         'track',
-        'funnel-capture'
+        'funnel-capture',
+        'user-types'
     ],
 
     'allowed_methods' => ['*'],

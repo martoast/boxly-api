@@ -55,21 +55,30 @@ class FortifyServiceProvider extends ServiceProvider
                     'name' => $user->name,
                     'email' => $user->email,
                     'phone' => $user->phone,
+                    'metadata' => [
+                        'user_type' => $user->user_type,
+                        'registration_source' => $user->registration_source,
+                    ]
                 ]);
             } catch (\Exception $e) {
                 Log::error('Failed to create Stripe customer for user ' . $user->id . ': ' . $e->getMessage());
             }
 
             try {
+                // Send to CRM with user type and registration source
                 SendFunnelCaptureWebhookJob::dispatch(
                     $user->name,
                     $user->email,
-                    $user->phone ?? ''
+                    $user->phone ?? '',
+                    $user->user_type,
+                    $user->registration_source
                 );
                 
                 Log::info('Dispatched GoHighLevel webhook job for new user registration', [
                     'user_id' => $user->id,
                     'email' => $user->email,
+                    'user_type' => $user->user_type,
+                    'registration_source' => $user->registration_source,
                 ]);
             } catch (\Exception $e) {
                 Log::error('Failed to dispatch GoHighLevel webhook job for user ' . $user->id . ': ' . $e->getMessage());
