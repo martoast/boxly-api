@@ -54,13 +54,13 @@ class AdminOrderController extends Controller
     }
 
     /**
-     * Get orders ready to ship (all packages arrived and weighed)
+     * Get orders ready to ship (paid orders)
      */
     public function readyToShip()
     {
         $orders = Order::with(['user', 'items'])
-            ->status(Order::STATUS_PACKAGES_COMPLETE)
-            ->oldest('completed_at')
+            ->status(Order::STATUS_PAID)
+            ->oldest('paid_at')
             ->paginate(20);
 
         return response()->json([
@@ -70,30 +70,22 @@ class AdminOrderController extends Controller
     }
 
     /**
-     * Update order status (ship or mark delivered)
+     * Get orders ready for processing (all packages arrived)
      */
-    public function updateStatus(AdminUpdateOrderStatusRequest $request, Order $order)
+    public function readyToProcess()
     {
-        $data = ['status' => $request->status];
-
-        if ($request->status === Order::STATUS_SHIPPED) {
-            $data['estimated_delivery_date'] = $request->estimated_delivery_date;
-            $data['shipped_at'] = now();
-        }
-
-        if ($request->status === Order::STATUS_DELIVERED) {
-            $data['actual_delivery_date'] = now();
-            $data['delivered_at'] = now();
-        }
-
-        $order->update($data);
+        $orders = Order::with(['user', 'items'])
+            ->status(Order::STATUS_PACKAGES_COMPLETE)
+            ->oldest('updated_at')
+            ->paginate(20);
 
         return response()->json([
             'success' => true,
-            'message' => 'Order status updated successfully',
-            'data' => $order->fresh()->load(['user', 'items'])
+            'data' => $orders
         ]);
     }
+    
+    
 
     /**
      * Get dashboard statistics
@@ -106,8 +98,12 @@ class AdminOrderController extends Controller
                 'collecting' => Order::status(Order::STATUS_COLLECTING)->count(),
                 'awaiting_packages' => Order::status(Order::STATUS_AWAITING_PACKAGES)->count(),
                 'packages_complete' => Order::status(Order::STATUS_PACKAGES_COMPLETE)->count(),
-                'in_transit' => Order::status(Order::STATUS_SHIPPED)->count(),
+                'processing' => Order::status(Order::STATUS_PROCESSING)->count(),
+                'quote_sent' => Order::status(Order::STATUS_QUOTE_SENT)->count(),
+                'paid' => Order::status(Order::STATUS_PAID)->count(),
+                'shipped' => Order::status(Order::STATUS_SHIPPED)->count(),
                 'delivered' => Order::status(Order::STATUS_DELIVERED)->count(),
+                'cancelled' => Order::status(Order::STATUS_CANCELLED)->count(),
             ],
             'revenue' => [
                 'today' => Order::whereDate('paid_at', today())->sum('amount_paid'),
@@ -116,21 +112,108 @@ class AdminOrderController extends Controller
                 'total' => Order::sum('amount_paid'),
             ],
             'packages' => [
-                'awaiting_arrival' => \App\Models\OrderItem::where('arrived', false)->count(),
+                'awaiting_arrival' => \App\Models\OrderItem::where('arrived', false)
+                    ->whereHas('order', function($q) {
+                        $q->whereIn('status', [
+                            Order::STATUS_AWAITING_PACKAGES,
+                            Order::STATUS_PACKAGES_COMPLETE
+                        ]);
+                    })
+                    ->count(),
                 'arrived_today' => \App\Models\OrderItem::whereDate('arrived_at', today())->count(),
                 'missing_weight' => \App\Models\OrderItem::where('arrived', true)->whereNull('weight')->count(),
             ],
+            'actions_needed' => [
+                'ready_to_process' => Order::status(Order::STATUS_PACKAGES_COMPLETE)->count(),
+                'needs_quote' => Order::status(Order::STATUS_PROCESSING)->count(),
+                'awaiting_payment' => Order::status(Order::STATUS_QUOTE_SENT)->count(),
+                'ready_to_ship' => Order::status(Order::STATUS_PAID)->count(),
+            ],
             'box_distribution' => [
+                'extra-small' => Order::where('box_size', 'extra-small')->count(),
                 'small' => Order::where('box_size', 'small')->count(),
                 'medium' => Order::where('box_size', 'medium')->count(),
                 'large' => Order::where('box_size', 'large')->count(),
-                'xl' => Order::where('box_size', 'xl')->count(),
+                'extra-large' => Order::where('box_size', 'extra-large')->count(),
             ]
+        ];
+
+        // Add recent activity
+        $stats['recent_activity'] = [
+            'orders_completed_today' => Order::whereDate('completed_at', today())->count(),
+            'quotes_sent_today' => Order::whereDate('quote_sent_at', today())->count(),
+            'payments_received_today' => Order::whereDate('paid_at', today())->count(),
+            'orders_shipped_today' => Order::whereDate('shipped_at', today())->count(),
         ];
 
         return response()->json([
             'success' => true,
             'data' => $stats
+        ]);
+    }
+
+    /**
+     * Get orders by status for admin dashboard
+     */
+    public function byStatus($status)
+    {
+        $validStatuses = [
+            Order::STATUS_COLLECTING,
+            Order::STATUS_AWAITING_PACKAGES,
+            Order::STATUS_PACKAGES_COMPLETE,
+            Order::STATUS_PROCESSING,
+            Order::STATUS_QUOTE_SENT,
+            Order::STATUS_PAID,
+            Order::STATUS_SHIPPED,
+            Order::STATUS_DELIVERED,
+            Order::STATUS_CANCELLED,
+        ];
+
+        if (!in_array($status, $validStatuses)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invalid status'
+            ], 400);
+        }
+
+        $query = Order::with(['user', 'items'])->status($status);
+
+        // Order by relevant timestamp for each status
+        switch ($status) {
+            case Order::STATUS_COLLECTING:
+                $query->latest('created_at');
+                break;
+            case Order::STATUS_AWAITING_PACKAGES:
+                $query->oldest('completed_at');
+                break;
+            case Order::STATUS_PACKAGES_COMPLETE:
+                $query->oldest('updated_at');
+                break;
+            case Order::STATUS_PROCESSING:
+                $query->oldest('processing_started_at');
+                break;
+            case Order::STATUS_QUOTE_SENT:
+                $query->oldest('quote_sent_at');
+                break;
+            case Order::STATUS_PAID:
+                $query->oldest('paid_at');
+                break;
+            case Order::STATUS_SHIPPED:
+                $query->latest('shipped_at');
+                break;
+            case Order::STATUS_DELIVERED:
+                $query->latest('delivered_at');
+                break;
+            case Order::STATUS_CANCELLED:
+                $query->latest('updated_at');
+                break;
+        }
+
+        $orders = $query->paginate(20);
+
+        return response()->json([
+            'success' => true,
+            'data' => $orders
         ]);
     }
 }

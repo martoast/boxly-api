@@ -20,18 +20,7 @@
         @endif
     </p>
     
-    <p>
-        {{ __('emails.order.package_arrived.packages_progress', [
-            'arrived' => $arrivedCount,
-            'total' => $totalCount,
-            'percentage' => $arrivalProgress
-        ]) }}
-    </p>
-    
-    @if($arrivedCount === $totalCount)
-        <p><strong>{{ __('emails.order.package_arrived.all_arrived') }}</strong></p>
-    @endif
-    
+   
     <div style="text-align: center;">
         <a href="{{ config('app.frontend_url') }}/app/orders/{{ $order->id }}" class="button">
             {{ __('emails.order.package_arrived.view_order') }}

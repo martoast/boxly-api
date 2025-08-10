@@ -7,10 +7,10 @@ use App\Http\Controllers\OrderItemController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\AdminOrderController;
 use App\Http\Controllers\AdminOrderItemController;
+use App\Http\Controllers\AdminQuoteController;
 use App\Http\Controllers\AdminCustomerController;
 use App\Http\Controllers\StripeWebhookController;
 use App\Http\Controllers\ProductController;
-use App\Http\Controllers\CheckoutController;
 use App\Http\Controllers\Auth\AuthSocialRedirectController;
 use App\Http\Controllers\Auth\AuthSocialCallbackController;
 use App\Http\Controllers\PaymentMethodController;
@@ -109,26 +109,31 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/{paymentMethodId}/default', [PaymentMethodController::class, 'setDefault']);
     });
     
-    // Checkout
-    Route::post('/checkout', [CheckoutController::class, 'createCheckout']);
-    
-    // Orders - Note: No POST route for manual order creation
+    // Orders - All consolidated in OrderController
     Route::prefix('orders')->group(function () {
-        Route::get('/', [OrderController::class, 'index']);
-        Route::get('/by-session/{sessionId}', [OrderController::class, 'findBySession']);
-        Route::get('/collecting', [OrderController::class, 'collecting']);
-        Route::get('/{order}', [OrderController::class, 'show']);
-        Route::put('/{order}', [OrderController::class, 'update']);
-        Route::delete('/{order}', [OrderController::class, 'destroy']);
-        Route::put('/{order}/complete', [OrderController::class, 'complete']);
-        Route::put('/{order}/reopen', [OrderController::class, 'reopen']);
-        Route::get('/{order}/tracking', [OrderController::class, 'tracking']);
+        // Order Management
+        Route::get('/', [OrderController::class, 'index']);                           // List all user's orders
+        Route::post('/', [OrderController::class, 'create']);                          // Create new order (RESTful)
+        Route::get('/unpaid', [OrderController::class, 'unpaidWithQuotes']);          // Orders with pending quotes
+        Route::get('/{order}', [OrderController::class, 'show']);                      // View specific order
+        Route::put('/{order}', [OrderController::class, 'update']);                    // Update order (address, etc.)
+        Route::delete('/{order}', [OrderController::class, 'destroy']);                // Delete order
+
+        Route::put('/{order}/complete', [OrderController::class, 'complete']);          // Complete order ready for shipment
+        Route::put('/{order}/reopen', [OrderController::class, 'reopen']);              // Reopen to add/remove items
         
-        // Order Items
-        Route::post('/{order}/items', [OrderItemController::class, 'store']);
-        Route::put('/{order}/items/{item}', [OrderItemController::class, 'update']);
-        Route::delete('/{order}/items/{item}', [OrderItemController::class, 'destroy']);
-        Route::get('/{order}/items/{item}/proof', [OrderItemController::class, 'viewProof']);
+        // Order Status & Tracking
+        Route::get('/{order}/tracking', [OrderController::class, 'tracking']);         // Get tracking info
+        Route::get('/{order}/quote', [OrderController::class, 'viewQuote']);          // View quote details
+        Route::post('/{order}/pay-quote', [OrderController::class, 'payQuote']);      // Get payment link
+        
+        // Order Items Management
+        Route::post('/{order}/items', [OrderItemController::class, 'store']);          // Add single item to order
+        Route::put('/{order}/items/{item}', [OrderItemController::class, 'update']);   // Update specific item
+        Route::delete('/{order}/items/{item}', [OrderItemController::class, 'destroy']); // Remove item
+        Route::get('/{order}/items/{item}/proof', [OrderItemController::class, 'viewProof']); // View proof of purchase
+
+        
     });
     
     // Admin routes
@@ -137,33 +142,42 @@ Route::middleware('auth:sanctum')->group(function () {
         // Dashboard
         Route::get('/dashboard', [AdminOrderController::class, 'dashboard']);
         
-        // Orders
+        // Admin Order Management
         Route::prefix('orders')->group(function () {
-            Route::get('/', [AdminOrderController::class, 'index']);
-            Route::get('/ready-to-ship', [AdminOrderController::class, 'readyToShip']);
-            Route::get('/{order}', [AdminOrderController::class, 'show']);
-            Route::put('/{order}/status', [AdminOrderController::class, 'updateStatus']);
+            // Order Listing & Filtering
+            Route::get('/', [AdminOrderController::class, 'index']);                              // All orders
+            Route::get('/ready-to-process', [AdminOrderController::class, 'readyToProcess']);     // Packages arrived, need quote
+            Route::get('/awaiting-payment', [AdminOrderController::class, 'awaitingPayment']);    // Quotes sent, awaiting payment
             
-            // Order Items
-            Route::put('/{order}/items/{item}/arrived', [AdminOrderItemController::class, 'markArrived']);
+            // Order Details & Status
+            Route::get('/{order}', [AdminOrderController::class, 'show']);                        // View order details
+            
+            // Quote Management
+            Route::put('/{order}/process', [AdminQuoteController::class, 'markAsProcessing']);    // Mark as processing
+            Route::post('/{order}/prepare-quote', [AdminQuoteController::class, 'prepareQuote']); // Prepare quote with flexibility
+            Route::post('/{order}/send-quote', [AdminQuoteController::class, 'sendQuote']);       // Send quote to customer
+            Route::post('/{order}/resend-quote', [AdminQuoteController::class, 'resendQuote']);   // Resend quote email
+            Route::post('/{order}/cancel-quote', [AdminQuoteController::class, 'cancelQuote']);   // Cancel/void quote
+            
+            // Package Management
+            Route::put('/{order}/items/{item}/arrived', [AdminOrderItemController::class, 'markArrived']); // Mark package arrived
         });
         
-        // Package Management
+        // Package/Item Management
         Route::prefix('packages')->group(function () {
-            Route::get('/', [AdminOrderItemController::class, 'index']);
-            Route::get('/pending', [AdminOrderItemController::class, 'pending']);
-            Route::get('/missing-weight', [AdminOrderItemController::class, 'missingWeight']);
-            Route::get('/{item}', [AdminOrderItemController::class, 'show']);
-            Route::put('/{item}', [AdminOrderItemController::class, 'update']);
-            Route::get('/{item}/proof', [AdminOrderItemController::class, 'viewProof']);
+            Route::get('/', [AdminOrderItemController::class, 'index']);                          // All packages
+            Route::get('/pending', [AdminOrderItemController::class, 'pending']);                 // Not yet arrived
+            Route::get('/missing-weight', [AdminOrderItemController::class, 'missingWeight']);    // Need weighing
+            Route::get('/{item}', [AdminOrderItemController::class, 'show']);                     // Package details
+            Route::put('/{item}', [AdminOrderItemController::class, 'update']);                   // Update package info
+            Route::get('/{item}/proof', [AdminOrderItemController::class, 'viewProof']);          // View proof of purchase
         });
         
-        // Customers
+        // Customer Management
         Route::prefix('customers')->group(function () {
-            Route::get('/', [AdminCustomerController::class, 'index']);
-            Route::get('/{customer}', [AdminCustomerController::class, 'show']);
-            Route::get('/{customer}/orders', [AdminCustomerController::class, 'orders']);
-            Route::get('/{customer}/collecting-orders', [AdminCustomerController::class, 'collectingOrders']);
+            Route::get('/', [AdminCustomerController::class, 'index']);                           // List all customers
+            Route::get('/{customer}', [AdminCustomerController::class, 'show']);                  // Customer details
+            Route::get('/{customer}/orders', [AdminCustomerController::class, 'orders']);         // Customer's orders
         });
     });
 });

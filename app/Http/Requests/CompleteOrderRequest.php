@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests;
 
+use App\Models\Order;
 use Illuminate\Foundation\Http\FormRequest;
 
 class CompleteOrderRequest extends FormRequest
@@ -13,9 +14,9 @@ class CompleteOrderRequest extends FormRequest
     {
         $order = $this->route('order');
         
-        // Check if user owns the order and it's in collecting status
+        // Check if user owns the order and it's in the correct status
         return $order->user_id === $this->user()->id && 
-               $order->status === 'collecting' &&
+               $order->status === Order::STATUS_COLLECTING &&  // Changed to 'collecting'
                $order->items()->count() > 0;
     }
 

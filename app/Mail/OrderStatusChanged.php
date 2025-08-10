@@ -20,7 +20,10 @@ class OrderStatusChanged extends Mailable implements ShouldQueue
     public function __construct(
         public Order $order,
         public string $previousStatus
-    ) {}
+    ) {
+        // Load relationships to avoid N+1 queries in the view
+        $this->order->load(['user', 'items']);
+    }
 
     /**
      * Get the message envelope.
@@ -29,16 +32,51 @@ class OrderStatusChanged extends Mailable implements ShouldQueue
     {
         $locale = $this->order->user->preferred_language ?? 'es';
         
-        $subjectKey = match($this->order->status) {
-            Order::STATUS_AWAITING_PACKAGES => 'emails.order.status_changed.subject.awaiting_packages',
-            Order::STATUS_PACKAGES_COMPLETE => 'emails.order.status_changed.subject.packages_complete',
-            Order::STATUS_SHIPPED => 'emails.order.status_changed.subject.shipped',
-            Order::STATUS_DELIVERED => 'emails.order.status_changed.subject.delivered',
-            default => 'emails.order.status_changed.subject.default',
+        // Status-specific subject lines
+        $subject = match($this->order->status) {
+            Order::STATUS_COLLECTING => $locale === 'es' 
+                ? "Orden {$this->order->order_number} - Lista para agregar productos"
+                : "Order {$this->order->order_number} - Ready to add products",
+                
+            Order::STATUS_AWAITING_PACKAGES => $locale === 'es'
+                ? "✅ Orden {$this->order->order_number} enviada - Esperando paquetes"
+                : "✅ Order {$this->order->order_number} submitted - Awaiting packages",
+                
+            Order::STATUS_PACKAGES_COMPLETE => $locale === 'es'
+                ? "🎉 ¡Todos tus paquetes han llegado! - {$this->order->order_number}"
+                : "🎉 All your packages have arrived! - {$this->order->order_number}",
+                
+            Order::STATUS_PROCESSING => $locale === 'es'
+                ? "⚙️ Procesando tu orden - {$this->order->order_number}"
+                : "⚙️ Processing your order - {$this->order->order_number}",
+                
+            Order::STATUS_QUOTE_SENT => $locale === 'es'
+                ? "💰 Tu cotización está lista - {$this->order->order_number}"
+                : "💰 Your quote is ready - {$this->order->order_number}",
+                
+            Order::STATUS_PAID => $locale === 'es'
+                ? "✅ Pago recibido - {$this->order->order_number}"
+                : "✅ Payment received - {$this->order->order_number}",
+                
+            Order::STATUS_SHIPPED => $locale === 'es'
+                ? "🚛 Tu paquete está en camino - {$this->order->order_number}"
+                : "🚛 Your package is on the way - {$this->order->order_number}",
+                
+            Order::STATUS_DELIVERED => $locale === 'es'
+                ? "🎉 Paquete entregado - {$this->order->order_number}"
+                : "🎉 Package delivered - {$this->order->order_number}",
+                
+            Order::STATUS_CANCELLED => $locale === 'es'
+                ? "Orden cancelada - {$this->order->order_number}"
+                : "Order cancelled - {$this->order->order_number}",
+                
+            default => $locale === 'es'
+                ? "Actualización de orden - {$this->order->order_number}"
+                : "Order update - {$this->order->order_number}",
         };
 
         return new Envelope(
-            subject: __($subjectKey, ['order_number' => $this->order->order_number], $locale),
+            subject: $subject,
         );
     }
 
@@ -50,8 +88,11 @@ class OrderStatusChanged extends Mailable implements ShouldQueue
         return new Content(
             view: 'emails.orders.status-changed',
             with: [
-                'statusLabel' => Order::getStatuses()[$this->order->status] ?? 'Unknown',
-                'previousStatusLabel' => Order::getStatuses()[$this->previousStatus] ?? 'Unknown',
+                'order' => $this->order,
+                'previousStatus' => $this->previousStatus,
+                'subject' => $this->envelope()->subject,
+                'statusLabel' => $this->getStatusLabel($this->order->status),
+                'previousStatusLabel' => $this->getStatusLabel($this->previousStatus),
             ]
         );
     }
@@ -64,5 +105,59 @@ class OrderStatusChanged extends Mailable implements ShouldQueue
     public function attachments(): array
     {
         return [];
+    }
+
+    /**
+     * Get localized status label
+     */
+    private function getStatusLabel(string $status): string
+    {
+        $locale = $this->order->user->preferred_language ?? 'es';
+        
+        $labels = [
+            'es' => [
+                Order::STATUS_COLLECTING => 'Agregando Artículos',
+                Order::STATUS_AWAITING_PACKAGES => 'Esperando Paquetes',
+                Order::STATUS_PACKAGES_COMPLETE => 'Paquetes Completos',
+                Order::STATUS_PROCESSING => 'Procesando',
+                Order::STATUS_QUOTE_SENT => 'Cotización Enviada',
+                Order::STATUS_PAID => 'Pagado',
+                Order::STATUS_SHIPPED => 'Enviado',
+                Order::STATUS_DELIVERED => 'Entregado',
+                Order::STATUS_CANCELLED => 'Cancelado',
+            ],
+            'en' => [
+                Order::STATUS_COLLECTING => 'Adding Items',
+                Order::STATUS_AWAITING_PACKAGES => 'Awaiting Packages',
+                Order::STATUS_PACKAGES_COMPLETE => 'Packages Complete',
+                Order::STATUS_PROCESSING => 'Processing',
+                Order::STATUS_QUOTE_SENT => 'Quote Sent',
+                Order::STATUS_PAID => 'Paid',
+                Order::STATUS_SHIPPED => 'Shipped',
+                Order::STATUS_DELIVERED => 'Delivered',
+                Order::STATUS_CANCELLED => 'Cancelled',
+            ],
+        ];
+
+        return $labels[$locale][$status] ?? $status;
+    }
+
+    /**
+     * Determine if the email should be sent
+     * Some status changes might not need notifications
+     */
+    public function shouldSend(): bool
+    {
+        // Don't send email for certain transitions
+        $skipTransitions = [
+            // Example: Don't send email when moving from cancelled to cancelled
+            Order::STATUS_CANCELLED => [Order::STATUS_CANCELLED],
+        ];
+
+        if (isset($skipTransitions[$this->previousStatus])) {
+            return !in_array($this->order->status, $skipTransitions[$this->previousStatus]);
+        }
+
+        return true;
     }
 }

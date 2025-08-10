@@ -51,7 +51,7 @@ return [
             'view_details' => 'View Order Details',
         ],
         'package_arrived' => [
-            'subject' => 'Package Received at USA Warehouse - :product_name',
+            'subject' => 'Package Received at our US Warehouse - :product_name',
             'title' => 'Your package arrived at our USA warehouse!',
             'hello' => 'Hello :name,',
             'intro' => 'Great news! Your package has arrived at our warehouse:',
