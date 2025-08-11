@@ -92,7 +92,7 @@
                     </p>
                 </div>
                 
-                <p>Ahora nuestro equipo comenzará a procesar tu orden. Te enviaremos una cotización una vez que esté lista.</p>
+                <p>Ahora nuestro equipo comenzará a procesar tu orden.</p>
             @else
                 <p><strong>Great news!</strong> We have received all packages for your order <strong>{{ $order->tracking_number }}</strong> at our warehouse.</p>
                 
@@ -117,7 +117,7 @@
                     </p>
                 </div>
                 
-                <p>Our team will now begin processing your order. We'll send you a quote once it's ready.</p>
+                <p>Our team will now begin processing your order.</p>
             @endif
             @break
             
