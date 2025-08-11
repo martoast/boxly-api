@@ -148,9 +148,11 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/', [AdminOrderController::class, 'index']);                              // All orders
             Route::get('/ready-to-process', [AdminOrderController::class, 'readyToProcess']);     // Packages arrived, need quote
             Route::get('/awaiting-payment', [AdminOrderController::class, 'awaitingPayment']);    // Quotes sent, awaiting payment
+            Route::get('/ready-for-quote', [AdminQuoteController::class, 'ordersReadyForQuote']); // Orders ready for quotes
             
             // Order Details & Status
             Route::get('/{order}', [AdminOrderController::class, 'show']);                        // View order details
+            Route::put('/{order}/status', [AdminOrderController::class, 'updateStatus']);         // Manual status update
             
             // Quote Management
             Route::put('/{order}/process', [AdminQuoteController::class, 'markAsProcessing']);    // Mark as processing

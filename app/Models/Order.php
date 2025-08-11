@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Facades\Mail;
 use App\Mail\OrderStatusChanged;
+use App\Mail\QuoteSent;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
@@ -115,7 +116,7 @@ class Order extends Model
         static::updated(function ($order) {
             // Send email when status changes
             if ($order->isDirty('status') && isset($order->previousStatus)) {
-                $order->load('user');
+                $order->load('user', 'items');
 
                 Log::info('Order status changed', [
                     'order_id' => $order->id,
@@ -125,38 +126,9 @@ class Order extends Model
                 ]);
 
                 try {
-                    // Define transitions that should NOT send email
-                    $skipEmail = false;
-
-                    // Skip when transitioning TO quote_sent (Stripe handles it)
-                    if ($order->status === self::STATUS_QUOTE_SENT) {
-                        Log::info('Quote sent - Stripe will handle the invoice email');
-                        $skipEmail = true;
-                    }
-
-                    // Skip when transitioning from awaiting_packages to processing
-                    elseif (
-                        $order->previousStatus === self::STATUS_AWAITING_PACKAGES &&
-                        $order->status === self::STATUS_PROCESSING
-                    ) {
-                        Log::info('Skipping email for awaiting_packages to processing transition');
-                        $skipEmail = true;
-                    }
-
-                    // Skip when transitioning from packages_complete to processing
-                    elseif (
-                        $order->previousStatus === self::STATUS_PACKAGES_COMPLETE &&
-                        $order->status === self::STATUS_PROCESSING
-                    ) {
-                        Log::info('Skipping email for packages_complete to processing transition');
-                        $skipEmail = true;
-                    }
-
-                    // Send email only if not skipped
-                    if (!$skipEmail) {
-                        Mail::to($order->user)->send(new OrderStatusChanged($order, $order->previousStatus));
-                        Log::info('Order status change email sent successfully');
-                    }
+                    // Send email for ALL status changes using the same template
+                    Mail::to($order->user)->send(new OrderStatusChanged($order, $order->previousStatus));
+                    Log::info('Order status change email sent successfully');
                 } catch (\Exception $e) {
                     Log::error('Failed to send order status email', [
                         'order_id' => $order->id,

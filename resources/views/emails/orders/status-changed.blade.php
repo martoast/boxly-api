@@ -13,10 +13,10 @@
                 {{ $locale === 'es' ? '📦 Tu orden está lista para recibir productos' : '📦 Your order is ready for products' }}
                 @break
             @case(\App\Models\Order::STATUS_AWAITING_PACKAGES)
-                {{ $locale === 'es' ? '📦 Esperando tus paquetes' : '📦Awaiting your packages' }}
+                {{ $locale === 'es' ? '⏳ Esperando tus paquetes' : '⏳ Awaiting your packages' }}
                 @break
             @case(\App\Models\Order::STATUS_PACKAGES_COMPLETE)
-                {{ $locale === 'es' ? '✅ ¡Todos tus paquetes han llegado!' : '✅ All your packages have arrived!' }}
+                {{ $locale === 'es' ? '✅ Hemos recibido todos tus paquetes' : '✅ We have received all your packages' }}
                 @break
             @case(\App\Models\Order::STATUS_PROCESSING)
                 {{ $locale === 'es' ? '⚙️ Procesando tu orden' : '⚙️ Processing your order' }}
@@ -55,111 +55,230 @@
             
         @case(\App\Models\Order::STATUS_AWAITING_PACKAGES)
             @if($locale === 'es')
-                <p>Estamos esperando que lleguen tus {{ $order->items->count() }} paquete(s) a nuestro almacén en USA.</p>
+                <p>Tu orden <strong>{{ $order->tracking_number }}</strong> ha sido creada exitosamente.</p>
+                <p>Estamos esperando que lleguen tus paquete(s) a nuestro almacén en USA.</p>
                 
                 
             @else
-                <p>We're waiting for your {{ $order->items->count() }} package(s) to arrive at our USA warehouse.</p>
-            
-               
+                <p>Your order <strong>{{ $order->tracking_number }}</strong> has been created successfully.</p>
+                <p>We're waiting for your package(s) to arrive at our USA warehouse.</p>
+                
+              
             @endif
             @break
             
         @case(\App\Models\Order::STATUS_PACKAGES_COMPLETE)
             @if($locale === 'es')
-                <p><strong>¡Excelentes noticias!</strong> Todos los paquetes de tu orden <strong>{{ $order->tracking_number }}</strong> han llegado a nuestro almacén.</p>
-                <p>Peso total recibido: <strong>{{ $order->total_weight }} kg</strong></p>
-                <p>Nuestro equipo comenzará a procesar tu orden pronto. Te enviaremos una cotización una vez que esté lista.</p>
+                <p><strong>¡Excelentes noticias!</strong> Hemos recibido todos los paquetes de tu orden <strong>{{ $order->tracking_number }}</strong> en nuestro almacén.</p>
+                
+                {{-- Items List --}}
+                <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 20px 0;">
+                    <h3 style="margin: 0 0 10px 0; font-size: 16px;">Productos recibidos:</h3>
+                    <ul style="margin: 0; padding-left: 20px;">
+                        @foreach($order->items as $item)
+                            <li style="margin: 5px 0;">
+                                {{ $item->product_name }}
+                                @if($item->quantity > 1)
+                                    (Cantidad: {{ $item->quantity }})
+                                @endif
+                            </li>
+                        @endforeach
+                    </ul>
+                    <p style="margin: 10px 0 0 0; padding-top: 10px; border-top: 1px solid #dee2e6;">
+                        <strong>Total de artículos:</strong> {{ $order->items->sum('quantity') }}<br>
+                        @if($order->total_weight)
+                            <strong>Peso total:</strong> {{ number_format($order->total_weight, 2) }} kg
+                        @endif
+                    </p>
+                </div>
+                
+                <p>Ahora nuestro equipo comenzará a procesar tu orden. Te enviaremos una cotización una vez que esté lista.</p>
             @else
-                <p><strong>Great news!</strong> All packages for your order <strong>{{ $order->tracking_number }}</strong> have arrived at our warehouse.</p>
-                <p>Total weight received: <strong>{{ $order->total_weight }} kg</strong></p>
-                <p>Our team will start processing your order soon. We'll send you a quote once it's ready.</p>
+                <p><strong>Great news!</strong> We have received all packages for your order <strong>{{ $order->tracking_number }}</strong> at our warehouse.</p>
+                
+                {{-- Items List --}}
+                <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 20px 0;">
+                    <h3 style="margin: 0 0 10px 0; font-size: 16px;">Items received:</h3>
+                    <ul style="margin: 0; padding-left: 20px;">
+                        @foreach($order->items as $item)
+                            <li style="margin: 5px 0;">
+                                {{ $item->product_name }}
+                                @if($item->quantity > 1)
+                                    (Quantity: {{ $item->quantity }})
+                                @endif
+                            </li>
+                        @endforeach
+                    </ul>
+                    <p style="margin: 10px 0 0 0; padding-top: 10px; border-top: 1px solid #dee2e6;">
+                        <strong>Total items:</strong> {{ $order->items->sum('quantity') }}<br>
+                        @if($order->total_weight)
+                            <strong>Total weight:</strong> {{ number_format($order->total_weight, 2) }} kg
+                        @endif
+                    </p>
+                </div>
+                
+                <p>Our team will now begin processing your order. We'll send you a quote once it's ready.</p>
             @endif
             @break
             
         @case(\App\Models\Order::STATUS_PROCESSING)
             @if($locale === 'es')
                 <p>Tu orden <strong>{{ $order->tracking_number }}</strong> está siendo procesada por nuestro equipo.</p>
-                <p>Estamos:</p>
-                <ul>
-                    <li>Verificando todos tus artículos</li>
-                    <li>Calculando el mejor tamaño de caja para tu envío</li>
-                    <li>Preparando tu cotización final</li>
-                </ul>
-                <p>Recibirás tu cotización en las próximas 24-48 horas.</p>
+                
+                {{-- Items Being Processed --}}
+                <div style="background: #e7f5ff; padding: 15px; border-radius: 8px; margin: 20px 0;">
+                    <h3 style="margin: 0 0 10px 0; font-size: 16px; color: #0c5460;">📦 Productos en tu envío:</h3>
+                    <ul style="margin: 0; padding-left: 20px;">
+                        @foreach($order->items as $item)
+                            <li style="margin: 5px 0;">
+                                {{ $item->product_name }}
+                                @if($item->quantity > 1)
+                                    (Cantidad: {{ $item->quantity }})
+                                @endif
+                            </li>
+                        @endforeach
+                    </ul>
+                    <p style="margin: 10px 0 0 0; padding-top: 10px; border-top: 1px solid #bee5eb;">
+                        <strong>Total de artículos:</strong> {{ $order->items->sum('quantity') }}<br>
+                        @if($order->total_weight)
+                            <strong>Peso total:</strong> {{ number_format($order->total_weight, 2) }} kg
+                        @endif
+                    </p>
+                </div>
+                
+                <div style="background: #fff3cd; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #ffc107;">
+                    <p style="margin: 0; font-weight: bold; color: #856404;">
+                        💰 ¿Qué sigue?
+                    </p>
+                    <p style="margin: 10px 0 0 0; color: #856404;">
+                        Estamos calculando el mejor tamaño de caja y preparando tu cotización final. 
+                        <strong>Pronto recibirás un correo con tu cotización y las instrucciones de pago.</strong>
+                    </p>
+                </div>
+                
+                <p>El proceso de cotización normalmente toma entre 24-48 horas hábiles.</p>
             @else
                 <p>Your order <strong>{{ $order->tracking_number }}</strong> is being processed by our team.</p>
-                <p>We are:</p>
-                <ul>
-                    <li>Verifying all your items</li>
-                    <li>Calculating the best box size for your shipment</li>
-                    <li>Preparing your final quote</li>
-                </ul>
-                <p>You'll receive your quote within the next 24-48 hours.</p>
+                
+                {{-- Items Being Processed --}}
+                <div style="background: #e7f5ff; padding: 15px; border-radius: 8px; margin: 20px 0;">
+                    <h3 style="margin: 0 0 10px 0; font-size: 16px; color: #0c5460;">📦 Items in your shipment:</h3>
+                    <ul style="margin: 0; padding-left: 20px;">
+                        @foreach($order->items as $item)
+                            <li style="margin: 5px 0;">
+                                {{ $item->product_name }}
+                                @if($item->quantity > 1)
+                                    (Quantity: {{ $item->quantity }})
+                                @endif
+                            </li>
+                        @endforeach
+                    </ul>
+                    <p style="margin: 10px 0 0 0; padding-top: 10px; border-top: 1px solid #bee5eb;">
+                        <strong>Total items:</strong> {{ $order->items->sum('quantity') }}<br>
+                        @if($order->total_weight)
+                            <strong>Total weight:</strong> {{ number_format($order->total_weight, 2) }} kg
+                        @endif
+                    </p>
+                </div>
+                
+                <div style="background: #fff3cd; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #ffc107;">
+                    <p style="margin: 0; font-weight: bold; color: #856404;">
+                        💰 What's next?
+                    </p>
+                    <p style="margin: 10px 0 0 0; color: #856404;">
+                        We are calculating the best box size and preparing your final quote. 
+                        <strong>You'll soon receive an email with your quote and payment instructions.</strong>
+                    </p>
+                </div>
+                
+                <p>The quote process normally takes 24-48 business hours.</p>
             @endif
             @break
             
         @case(\App\Models\Order::STATUS_QUOTE_SENT)
             @if($locale === 'es')
-                <p><strong>Tu cotización está lista</strong> para la orden <strong>{{ $order->tracking_number }}</strong>.</p>
+                <p>Hemos preparado la cotización para tu orden <strong>{{ $order->tracking_number }}</strong>.</p>
                 
-                @if($order->quote_breakdown)
-                    <div style="background: #fff3cd; padding: 15px; border-radius: 8px; margin: 20px 0; border: 1px solid #ffc107;">
-                        <h3 style="margin: 0 0 10px 0; color: #856404;">Detalle de cotización:</h3>
-                        @foreach($order->quote_breakdown as $item)
-                            <div style="display: flex; justify-content: space-between; margin: 5px 0;">
-                                <span>{{ $item['description'] ?? '' }}</span>
-                                <strong>${{ number_format($item['amount'] ?? 0, 2) }} MXN</strong>
-                            </div>
+                {{-- Items List --}}
+                <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 20px 0;">
+                    <h3 style="margin: 0 0 10px 0; font-size: 16px;">📦 Productos en tu envío:</h3>
+                    <ul style="margin: 0; padding-left: 20px;">
+                        @foreach($order->items as $item)
+                            <li style="margin: 5px 0;">
+                                {{ $item->product_name }}
+                                @if($item->quantity > 1)
+                                    (Cantidad: {{ $item->quantity }})
+                                @endif
+                            </li>
                         @endforeach
-                        <div style="border-top: 2px solid #ffc107; margin-top: 10px; padding-top: 10px;">
-                            <div style="display: flex; justify-content: space-between;">
-                                <strong>TOTAL:</strong>
-                                <strong style="color: #856404; font-size: 18px;">${{ number_format($order->quoted_amount, 2) }} MXN</strong>
-                            </div>
-                        </div>
-                    </div>
-                @endif
+                    </ul>
+                    <p style="margin: 10px 0 0 0; padding-top: 10px; border-top: 1px solid #dee2e6;">
+                        <strong>Total de artículos:</strong> {{ $order->items->sum('quantity') }}<br>
+                        @if($order->total_weight)
+                            <strong>Peso total:</strong> {{ number_format($order->total_weight, 2) }} kg
+                        @endif
+                    </p>
+                </div>
                 
-                <p><strong>⏰ Esta cotización expira el:</strong> {{ $order->quote_expires_at ? $order->quote_expires_at->format('d/m/Y') : 'En 7 días' }}</p>
+                {{-- Total Amount --}}
+                <div style="background: #e7f5ff; padding: 20px; border-radius: 8px; margin: 20px 0; border: 2px solid #17a2b8;">
+                    <p style="margin: 0; font-size: 18px; text-align: center;">
+                        <strong>Total a pagar:</strong><br>
+                        <span style="font-size: 28px; color: #17a2b8;">${{ number_format($order->quoted_amount, 2) }} MXN</span>
+                    </p>
+                </div>
                 
-                @if($order->payment_link)
-                    <div style="text-align: center; margin: 30px 0;">
-                        <a href="{{ $order->payment_link }}" style="background: #28a745; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold;">
-                            💳 PAGAR AHORA
-                        </a>
-                    </div>
+                @if($order->quote_expires_at)
+                    <p style="text-align: center; color: #dc3545;">
+                        ⏰ Esta cotización expira el {{ $order->quote_expires_at->format('d/m/Y') }}
+                    </p>
                 @endif
             @else
-                <p><strong>Your quote is ready</strong> for order <strong>{{ $order->tracking_number }}</strong>.</p>
+                <p>We have prepared the quote for your order <strong>{{ $order->tracking_number }}</strong>.</p>
                 
-                @if($order->quote_breakdown)
-                    <div style="background: #fff3cd; padding: 15px; border-radius: 8px; margin: 20px 0; border: 1px solid #ffc107;">
-                        <h3 style="margin: 0 0 10px 0; color: #856404;">Quote breakdown:</h3>
-                        @foreach($order->quote_breakdown as $item)
-                            <div style="display: flex; justify-content: space-between; margin: 5px 0;">
-                                <span>{{ $item['description'] ?? '' }}</span>
-                                <strong>${{ number_format($item['amount'] ?? 0, 2) }} MXN</strong>
-                            </div>
+                {{-- Items List --}}
+                <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 20px 0;">
+                    <h3 style="margin: 0 0 10px 0; font-size: 16px;">📦 Items in your shipment:</h3>
+                    <ul style="margin: 0; padding-left: 20px;">
+                        @foreach($order->items as $item)
+                            <li style="margin: 5px 0;">
+                                {{ $item->product_name }}
+                                @if($item->quantity > 1)
+                                    (Quantity: {{ $item->quantity }})
+                                @endif
+                            </li>
                         @endforeach
-                        <div style="border-top: 2px solid #ffc107; margin-top: 10px; padding-top: 10px;">
-                            <div style="display: flex; justify-content: space-between;">
-                                <strong>TOTAL:</strong>
-                                <strong style="color: #856404; font-size: 18px;">${{ number_format($order->quoted_amount, 2) }} MXN</strong>
-                            </div>
-                        </div>
-                    </div>
-                @endif
+                    </ul>
+                    <p style="margin: 10px 0 0 0; padding-top: 10px; border-top: 1px solid #dee2e6;">
+                        <strong>Total items:</strong> {{ $order->items->sum('quantity') }}<br>
+                        @if($order->total_weight)
+                            <strong>Total weight:</strong> {{ number_format($order->total_weight, 2) }} kg
+                        @endif
+                    </p>
+                </div>
                 
-                <p><strong>⏰ This quote expires on:</strong> {{ $order->quote_expires_at ? $order->quote_expires_at->format('m/d/Y') : 'In 7 days' }}</p>
+                {{-- Total Amount --}}
+                <div style="background: #e7f5ff; padding: 20px; border-radius: 8px; margin: 20px 0; border: 2px solid #17a2b8;">
+                    <p style="margin: 0; font-size: 18px; text-align: center;">
+                        <strong>Total to pay:</strong><br>
+                        <span style="font-size: 28px; color: #17a2b8;">${{ number_format($order->quoted_amount, 2) }} MXN</span>
+                    </p>
+                </div>
                 
-                @if($order->payment_link)
-                    <div style="text-align: center; margin: 30px 0;">
-                        <a href="{{ $order->payment_link }}" style="background: #28a745; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold;">
-                            💳 PAY NOW
-                        </a>
-                    </div>
+                @if($order->quote_expires_at)
+                    <p style="text-align: center; color: #dc3545;">
+                        ⏰ This quote expires on {{ $order->quote_expires_at->format('m/d/Y') }}
+                    </p>
                 @endif
+            @endif
+            
+            {{-- Payment CTA Button --}}
+            @if($order->payment_link)
+                <div style="text-align: center; margin: 30px 0;">
+                    <a href="{{ $order->payment_link }}" style="background: #28a745; color: white; padding: 15px 40px; text-decoration: none; border-radius: 5px; display: inline-block; font-size: 18px; font-weight: bold;">
+                        {{ $locale === 'es' ? '💳 Pagar Ahora' : '💳 Pay Now' }}
+                    </a>
+                </div>
             @endif
             @break
             
@@ -199,11 +318,13 @@
                         @if($order->estimated_delivery_date)
                             <li><strong>Fecha estimada de entrega:</strong> {{ $order->estimated_delivery_date->format('d/m/Y') }}</li>
                         @endif
-                        <li><strong>Dirección de entrega:</strong><br>
-                            {{ $order->delivery_address['street'] }} {{ $order->delivery_address['exterior_number'] }}<br>
-                            {{ $order->delivery_address['colonia'] }}, {{ $order->delivery_address['municipio'] }}<br>
-                            {{ $order->delivery_address['estado'] }}, C.P. {{ $order->delivery_address['postal_code'] }}
-                        </li>
+                        @if($order->delivery_address)
+                            <li><strong>Dirección de entrega:</strong><br>
+                                {{ $order->delivery_address['street'] }} {{ $order->delivery_address['exterior_number'] }}<br>
+                                {{ $order->delivery_address['colonia'] }}, {{ $order->delivery_address['municipio'] }}<br>
+                                {{ $order->delivery_address['estado'] }}, C.P. {{ $order->delivery_address['postal_code'] }}
+                            </li>
+                        @endif
                     </ul>
                 </div>
                 
@@ -219,11 +340,13 @@
                         @if($order->estimated_delivery_date)
                             <li><strong>Estimated delivery date:</strong> {{ $order->estimated_delivery_date->format('m/d/Y') }}</li>
                         @endif
-                        <li><strong>Delivery address:</strong><br>
-                            {{ $order->delivery_address['street'] }} {{ $order->delivery_address['exterior_number'] }}<br>
-                            {{ $order->delivery_address['colonia'] }}, {{ $order->delivery_address['municipio'] }}<br>
-                            {{ $order->delivery_address['estado'] }}, C.P. {{ $order->delivery_address['postal_code'] }}
-                        </li>
+                        @if($order->delivery_address)
+                            <li><strong>Delivery address:</strong><br>
+                                {{ $order->delivery_address['street'] }} {{ $order->delivery_address['exterior_number'] }}<br>
+                                {{ $order->delivery_address['colonia'] }}, {{ $order->delivery_address['municipio'] }}<br>
+                                {{ $order->delivery_address['estado'] }}, C.P. {{ $order->delivery_address['postal_code'] }}
+                            </li>
+                        @endif
                     </ul>
                 </div>
                 
@@ -236,28 +359,22 @@
                 <p><strong>¡Tu paquete ha sido entregado exitosamente!</strong> 🎉</p>
                 <p>Tu orden <strong>{{ $order->tracking_number }}</strong> ha sido entregada en la dirección registrada.</p>
                 
+                @if($order->delivered_at)
+                    <p><strong>Fecha de entrega:</strong> {{ $order->delivered_at->format('d/m/Y') }}</p>
+                @endif
+                
                 <p>Gracias por confiar en nosotros para tus envíos a México. ¡Esperamos verte pronto!</p>
                 
-                <div style="text-align: center; margin: 30px 0;">
-                    <a href="{{ config('app.frontend_url') }}/app/orders/create" style="background: #007bff; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;">
-                        Crear Nueva Orden
-                    </a>
-                </div>
             @else
                 <p><strong>Your package has been successfully delivered!</strong> 🎉</p>
                 <p>Your order <strong>{{ $order->tracking_number }}</strong> has been delivered to the registered address.</p>
                 
                 @if($order->delivered_at)
-                    <p><strong>Delivery date:</strong> {{ $order->delivered_at->format('m/d/Y H:i') }}</p>
+                    <p><strong>Delivery date:</strong> {{ $order->delivered_at->format('m/d/Y') }}</p>
                 @endif
                 
                 <p>Thank you for trusting us with your shipments to Mexico. We hope to see you again soon!</p>
                 
-                <div style="text-align: center; margin: 30px 0;">
-                    <a href="{{ config('app.frontend_url') }}/app/orders/new" style="background: #007bff; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;">
-                        Create New Order
-                    </a>
-                </div>
             @endif
             @break
             
@@ -278,12 +395,14 @@
             @break
     @endswitch
     
-    {{-- Call to action button --}}
-    <div style="text-align: center; margin: 30px 0;">
-        <a href="{{ config('app.frontend_url') }}/app/orders/{{ $order->id }}" style="background: #007bff; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;">
-            {{ $locale === 'es' ? 'Ver Detalles de la Orden' : 'View Order Details' }}
-        </a>
-    </div>
+    {{-- Call to action button (except for quote_sent which has its own payment button) --}}
+    @if($order->status !== \App\Models\Order::STATUS_QUOTE_SENT)
+        <div style="text-align: center; margin: 30px 0;">
+            <a href="{{ config('app.frontend_url') }}/app/orders/{{ $order->id }}" style="background: #007bff; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;">
+                {{ $locale === 'es' ? 'Ver Detalles de la Orden' : 'View Order Details' }}
+            </a>
+        </div>
+    @endif
     
     {{-- Footer message --}}
     @if($locale === 'es')

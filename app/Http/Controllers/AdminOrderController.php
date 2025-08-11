@@ -84,8 +84,79 @@ class AdminOrderController extends Controller
             'data' => $orders
         ]);
     }
-    
-    
+
+    /**
+     * Get orders needing quotes
+     */
+    public function needingQuotes()
+    {
+        $orders = Order::with(['user', 'items'])
+            ->status(Order::STATUS_PROCESSING)
+            ->oldest('processing_started_at')
+            ->paginate(20);
+
+        return response()->json([
+            'success' => true,
+            'data' => $orders
+        ]);
+    }
+
+    /**
+     * Update order status
+     */
+    public function updateStatus(AdminUpdateOrderStatusRequest $request, Order $order)
+    {
+        $data = ['status' => $request->status];
+
+        // Handle status-specific updates
+        switch ($request->status) {
+            case Order::STATUS_PROCESSING:
+                $data['processing_started_at'] = now();
+                break;
+                
+            case Order::STATUS_QUOTE_SENT:
+                // Quote sending is handled in a separate controller
+                // This is just for manual status updates if needed
+                if (!$order->quote_sent_at) {
+                    $data['quote_sent_at'] = now();
+                    $data['quote_expires_at'] = now()->addDays(7);
+                }
+                break;
+                
+            case Order::STATUS_PAID:
+                // Payment is usually handled via webhook
+                // This is for manual marking if needed
+                if (!$order->paid_at) {
+                    $data['paid_at'] = now();
+                }
+                break;
+                
+            case Order::STATUS_SHIPPED:
+                $data['estimated_delivery_date'] = $request->estimated_delivery_date;
+                $data['shipped_at'] = now();
+                break;
+                
+            case Order::STATUS_DELIVERED:
+                $data['actual_delivery_date'] = now();
+                $data['delivered_at'] = now();
+                break;
+                
+            case Order::STATUS_CANCELLED:
+                // Optional: Add cancellation reason if needed
+                if ($request->has('notes')) {
+                    $data['notes'] = $order->notes . "\nCancelled: " . $request->notes;
+                }
+                break;
+        }
+
+        $order->update($data);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Order status updated successfully',
+            'data' => $order->fresh()->load(['user', 'items'])
+        ]);
+    }
 
     /**
      * Get dashboard statistics

@@ -101,7 +101,7 @@ class OrderController extends Controller
             DB::commit();
 
             // Send confirmation email to customer
-            Mail::to($user)->send(new OrderCreatedNoPayment($order));
+            // Mail::to($user)->send(new OrderCreatedNoPayment($order));
 
             // Notify admins about new order
             $admins = User::where('role', 'admin')->get();

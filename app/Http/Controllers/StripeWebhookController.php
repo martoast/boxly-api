@@ -10,10 +10,7 @@ use Stripe\Exception\SignatureVerificationException;
 use Stripe\Webhook;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
-use App\Mail\OrderCreated;
-use App\Mail\OrderCreatedNoPayment;
 use App\Mail\PaymentReceived;
-use App\Notifications\NewOrderNotification;
 use App\Notifications\OrderPaidNotification;
 use Illuminate\Support\Facades\Notification;
 
@@ -142,7 +139,7 @@ class StripeWebhookController extends Controller
                 'user_email' => $order->user->email
             ]);
             
-            // Notify admin that order has been paid
+            // Notify admin that order has been paidOrderPaidNotification
             $admins = User::where('role', 'admin')->get();
             if ($admins->count() > 0) {
                 Notification::send($admins, new OrderPaidNotification($order));

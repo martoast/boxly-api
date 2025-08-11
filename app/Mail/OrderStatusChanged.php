@@ -35,44 +35,44 @@ class OrderStatusChanged extends Mailable implements ShouldQueue
         // Status-specific subject lines
         $subject = match($this->order->status) {
             Order::STATUS_COLLECTING => $locale === 'es' 
-                ? "Orden {$this->order->order_number} - Lista para agregar productos"
-                : "Order {$this->order->order_number} - Ready to add products",
+                ? "Orden {$this->order->tracking_number} - Lista para agregar productos"
+                : "Order {$this->order->tracking_number} - Ready to add products",
                 
             Order::STATUS_AWAITING_PACKAGES => $locale === 'es'
-                ? "✅ Orden {$this->order->order_number} enviada - Esperando paquetes"
-                : "✅ Order {$this->order->order_number} submitted - Awaiting packages",
+                ? "✅ Orden {$this->order->tracking_number} creada - Esperando paquetes"
+                : "✅ Order {$this->order->tracking_number} created - Awaiting packages",
                 
             Order::STATUS_PACKAGES_COMPLETE => $locale === 'es'
-                ? "🎉 ¡Todos tus paquetes han llegado! - {$this->order->order_number}"
-                : "🎉 All your packages have arrived! - {$this->order->order_number}",
+                ? "🎉 ¡Todos tus paquetes han llegado! - {$this->order->tracking_number}"
+                : "🎉 All your packages have arrived! - {$this->order->tracking_number}",
                 
             Order::STATUS_PROCESSING => $locale === 'es'
-                ? "⚙️ Procesando tu orden - {$this->order->order_number}"
-                : "⚙️ Processing your order - {$this->order->order_number}",
+                ? "⚙️ Procesando tu orden - {$this->order->tracking_number}"
+                : "⚙️ Processing your order - {$this->order->tracking_number}",
                 
             Order::STATUS_QUOTE_SENT => $locale === 'es'
-                ? "💰 Tu cotización está lista - {$this->order->order_number}"
-                : "💰 Your quote is ready - {$this->order->order_number}",
+                ? "💰 Tu cotización está lista - {$this->order->tracking_number}"
+                : "💰 Your quote is ready - {$this->order->tracking_number}",
                 
             Order::STATUS_PAID => $locale === 'es'
-                ? "✅ Pago recibido - {$this->order->order_number}"
-                : "✅ Payment received - {$this->order->order_number}",
+                ? "✅ Pago recibido - {$this->order->tracking_number}"
+                : "✅ Payment received - {$this->order->tracking_number}",
                 
             Order::STATUS_SHIPPED => $locale === 'es'
-                ? "🚛 Tu paquete está en camino - {$this->order->order_number}"
-                : "🚛 Your package is on the way - {$this->order->order_number}",
+                ? "🛫 Tu paquete está en camino - {$this->order->tracking_number}"
+                : "🛫 Your package is on the way - {$this->order->tracking_number}",
                 
             Order::STATUS_DELIVERED => $locale === 'es'
-                ? "🎉 Paquete entregado - {$this->order->order_number}"
-                : "🎉 Package delivered - {$this->order->order_number}",
+                ? "🎉 Paquete entregado - {$this->order->tracking_number}"
+                : "🎉 Package delivered - {$this->order->tracking_number}",
                 
             Order::STATUS_CANCELLED => $locale === 'es'
-                ? "Orden cancelada - {$this->order->order_number}"
-                : "Order cancelled - {$this->order->order_number}",
+                ? "Orden cancelada - {$this->order->tracking_number}"
+                : "Order cancelled - {$this->order->tracking_number}",
                 
             default => $locale === 'es'
-                ? "Actualización de orden - {$this->order->order_number}"
-                : "Order update - {$this->order->order_number}",
+                ? "Actualización de orden - {$this->order->tracking_number}"
+                : "Order update - {$this->order->tracking_number}",
         };
 
         return new Envelope(
