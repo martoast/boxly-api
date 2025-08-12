@@ -21,27 +21,18 @@ class ProductController extends Controller
 
             $products = collect($prices->data)
                 ->filter(function ($price) {
-                    // Only show active products with box types
+                    // Only show active products with weight metadata
                     return $price->product->active && 
-                           isset($price->product->metadata->type) &&
-                           in_array($price->product->metadata->type, ['extra-small', 'small', 'medium', 'large', 'extra-large']);
+                           isset($price->product->metadata->min_weight) &&
+                           isset($price->product->metadata->max_weight);
                 })
                 ->groupBy('product.id') // Group by product ID to handle duplicates
                 ->map(function ($pricesForProduct) {
                     // Take the most recent price (highest price_id typically)
                     $latestPrice = $pricesForProduct->sortByDesc('created')->first();
                     
-                    $boxType = $latestPrice->product->metadata->type;
-                    
                     // Get metadata from the product
                     $metadata = $latestPrice->product->metadata;
-                    
-                    // Build dimensions string if not already present
-                    $dimensions = $metadata->dimensions ?? null;
-                    if (!$dimensions && isset($metadata->max_length, $metadata->max_width, $metadata->max_height)) {
-                        // Follow your format: length x width x height
-                        $dimensions = $metadata->max_length . 'x' . $metadata->max_width . 'x' . $metadata->max_height . 'cm';
-                    }
                     
                     return [
                         'id' => $latestPrice->product->id,
@@ -51,31 +42,15 @@ class ProductController extends Controller
                         'description' => $latestPrice->product->description,
                         'price' => $latestPrice->unit_amount / 100, // Convert from cents
                         'currency' => strtoupper($latestPrice->currency),
-                        'type' => $boxType,
+                        'min_weight' => floatval($metadata->min_weight),
+                        'max_weight' => floatval($metadata->max_weight),
                         'metadata' => [
-                            'type' => $boxType,
-                            'dimensions' => $dimensions,
-                            'max_length' => $metadata->max_length ?? null,
-                            'max_width' => $metadata->max_width ?? null,
-                            'max_height' => $metadata->max_height ?? null,
-                            'max_weight' => $metadata->max_weight ?? null,
-                        ],
-                        // Keep these for backward compatibility
-                        'dimensions' => $dimensions,
-                        'max_weight' => $metadata->max_weight ?? null,
+                            'min_weight' => $metadata->min_weight,
+                            'max_weight' => $metadata->max_weight,
+                        ]
                     ];
                 })
-                ->sortBy(function ($product) {
-                    // Sort by size order
-                    $order = [
-                        'extra-small' => 1, 
-                        'small' => 2, 
-                        'medium' => 3, 
-                        'large' => 4, 
-                        'extra-large' => 5
-                    ];
-                    return $order[$product['type']] ?? 6;
-                })
+                ->sortBy('min_weight') // Sort by minimum weight
                 ->values()
                 ->toArray();
 
