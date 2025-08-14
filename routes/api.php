@@ -153,6 +153,7 @@ Route::middleware('auth:sanctum')->group(function () {
             // Order Details & Status
             Route::get('/{order}', [AdminOrderController::class, 'show']);                        // View order details
             Route::put('/{order}/status', [AdminOrderController::class, 'updateStatus']);         // Manual status update
+            Route::delete('/{order}', [AdminOrderController::class, 'destroy']);                  // Delete order (admin)
             
             // Quote Management
             Route::put('/{order}/process', [AdminQuoteController::class, 'markAsProcessing']);    // Mark as processing

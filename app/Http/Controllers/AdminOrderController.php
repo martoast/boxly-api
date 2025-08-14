@@ -159,6 +159,61 @@ class AdminOrderController extends Controller
     }
 
     /**
+     * Delete an order (admin can delete if still collecting and no packages arrived)
+     */
+    public function destroy(Request $request, Order $order)
+    {
+        // Only allow deletion if order is still collecting
+        if ($order->status !== Order::STATUS_COLLECTING) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cannot delete order that has been completed. Only orders still adding products can be deleted.'
+            ], 400);
+        }
+
+        // Don't allow deletion if any packages have arrived
+        if ($order->arrivedItems()->count() > 0) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cannot delete order with packages that have already arrived at the warehouse.'
+            ], 400);
+        }
+
+        DB::beginTransaction();
+        
+        try {
+            $orderNumber = $order->order_number;
+            $trackingNumber = $order->tracking_number;
+            $userId = $order->user_id;
+            $userEmail = $order->user->email;
+            
+            // Delete all items first (this will trigger the model event to delete proof of purchase files)
+            $order->items()->each(function ($item) {
+                $item->delete();
+            });
+            
+            // Now delete the order
+            $order->delete();
+            
+            DB::commit();
+        
+            return response()->json([
+                'success' => true,
+                'message' => "Order '{$orderNumber}' has been deleted successfully."
+            ]);
+            
+        } catch (\Exception $e) {
+            DB::rollBack();
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to delete order. Please try again.',
+                'error' => config('app.debug') ? $e->getMessage() : null
+            ], 500);
+        }
+    }
+
+    /**
      * Get dashboard statistics
      */
     public function dashboard()
