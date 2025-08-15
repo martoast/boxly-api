@@ -289,49 +289,53 @@ app()->setLocale($locale);
 
 @case(\App\Models\Order::STATUS_SHIPPED)
 @if($locale === 'es')
-<p><strong>¡Tu paquete está en camino a México!</strong> 🚛</p>
 <p>Tu orden <strong>{{ $order->tracking_number }}</strong> ha sido enviada.</p>
 
-<div style="background: #d4edda; padding: 15px; border-radius: 8px; margin: 20px 0; border: 1px solid #c3e6cb;">
-    <p style="margin: 0 0 10px 0;"><strong>Información de envío:</strong></p>
-    <ul style="margin: 0;">
-        <li><strong>Número de rastreo:</strong> {{ $order->tracking_number }}</li>
-        @if($order->estimated_delivery_date)
-        <li><strong>Fecha estimada de entrega:</strong> {{ $order->estimated_delivery_date->format('d/m/Y') }}</li>
-        @endif
-        @if($order->delivery_address)
-        <li><strong>Dirección de entrega:</strong><br>
-            {{ $order->delivery_address['street'] }} {{ $order->delivery_address['exterior_number'] }}<br>
-            {{ $order->delivery_address['colonia'] }}, {{ $order->delivery_address['municipio'] }}<br>
-            {{ $order->delivery_address['estado'] }}, C.P. {{ $order->delivery_address['postal_code'] }}
-        </li>
-        @endif
-    </ul>
-</div>
+<p>Información de envío:</p>
+<p style="margin-left: 20px;">
+    Número de guía DHL: {{ $order->dhl_waybill_number }}<br>
+    Fecha estimada de entrega: {{ $order->estimated_delivery_date->format('d/m/Y') }}<br>
+    <br>
+    Dirección de entrega:<br>
+    {{ $order->delivery_address['street'] }} {{ $order->delivery_address['exterior_number'] }}<br>
+    {{ $order->delivery_address['colonia'] }}, {{ $order->delivery_address['municipio'] }}<br>
+    {{ $order->delivery_address['estado'] }}, C.P. {{ $order->delivery_address['postal_code'] }}
+</p>
 
-<p>Puedes rastrear tu paquete usando el número de rastreo proporcionado.</p>
+@if($order->gia_url)
+<p>Tu documento GIA (Guía de Importación Aduanal) está disponible. Este documento es importante para el proceso aduanal.</p>
+<p><a href="{{ $order->gia_full_url }}" style="color: #0066cc; text-decoration: none;">Descargar documento GIA</a></p>
+@endif
+
+@if($order->dhl_waybill_number)
+<p>Puedes rastrear tu paquete con DHL Express:</p>
+<p><a href="{{ $order->dhl_tracking_url }}" style="color: #0066cc; text-decoration: none;">Rastrear paquete con DHL</a></p>
+@endif
+
 @else
-<p><strong>Your package is on its way to Mexico!</strong> 🚛</p>
 <p>Your order <strong>{{ $order->tracking_number }}</strong> has been shipped.</p>
 
-<div style="background: #d4edda; padding: 15px; border-radius: 8px; margin: 20px 0; border: 1px solid #c3e6cb;">
-    <p style="margin: 0 0 10px 0;"><strong>Shipping information:</strong></p>
-    <ul style="margin: 0;">
-        <li><strong>Tracking number:</strong> {{ $order->tracking_number }}</li>
-        @if($order->estimated_delivery_date)
-        <li><strong>Estimated delivery date:</strong> {{ $order->estimated_delivery_date->format('m/d/Y') }}</li>
-        @endif
-        @if($order->delivery_address)
-        <li><strong>Delivery address:</strong><br>
-            {{ $order->delivery_address['street'] }} {{ $order->delivery_address['exterior_number'] }}<br>
-            {{ $order->delivery_address['colonia'] }}, {{ $order->delivery_address['municipio'] }}<br>
-            {{ $order->delivery_address['estado'] }}, C.P. {{ $order->delivery_address['postal_code'] }}
-        </li>
-        @endif
-    </ul>
-</div>
+<p>Shipping information:</p>
+<p style="margin-left: 20px;">
+    DHL waybill number: {{ $order->dhl_waybill_number }}<br>
+    Estimated delivery date: {{ $order->estimated_delivery_date->format('m/d/Y') }}<br>
+    <br>
+    Delivery address:<br>
+    {{ $order->delivery_address['street'] }} {{ $order->delivery_address['exterior_number'] }}<br>
+    {{ $order->delivery_address['colonia'] }}, {{ $order->delivery_address['municipio'] }}<br>
+    {{ $order->delivery_address['estado'] }}, C.P. {{ $order->delivery_address['postal_code'] }}
+</p>
 
-<p>You can track your package using the provided tracking number.</p>
+@if($order->gia_url)
+<p>Your GIA document (Customs Import Guide) is available. This document is important for the customs process.</p>
+<p><a href="{{ $order->gia_full_url }}" style="color: #0066cc; text-decoration: none;">Download GIA document</a></p>
+@endif
+
+@if($order->dhl_waybill_number)
+<p>You can track your package with DHL Express:</p>
+<p><a href="{{ $order->dhl_tracking_url }}" style="color: #0066cc; text-decoration: none;">Track package with DHL</a></p>
+@endif
+
 @endif
 @break
 

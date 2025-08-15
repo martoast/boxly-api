@@ -154,6 +154,8 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/{order}', [AdminOrderController::class, 'show']);                        // View order details
             Route::put('/{order}/status', [AdminOrderController::class, 'updateStatus']);         // Manual status update
             Route::delete('/{order}', [AdminOrderController::class, 'destroy']);                  // Delete order (admin)
+
+            
             
             // Quote Management
             Route::put('/{order}/process', [AdminQuoteController::class, 'markAsProcessing']);    // Mark as processing
@@ -161,6 +163,10 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/{order}/send-quote', [AdminQuoteController::class, 'sendQuote']);       // Send quote to customer
             Route::post('/{order}/resend-quote', [AdminQuoteController::class, 'resendQuote']);   // Resend quote email
             Route::post('/{order}/cancel-quote', [AdminQuoteController::class, 'cancelQuote']);   // Cancel/void quote
+
+            // Shipping Management (add these new routes)
+            Route::post('/{order}/ship', [AdminOrderController::class, 'shipOrder']);             // Ship order with GIA & waybill
+            Route::get('/{order}/gia', [AdminOrderController::class, 'viewGia']);  
             
             // Package Management
             Route::put('/{order}/items/{item}/arrived', [AdminOrderItemController::class, 'markArrived']); // Mark package arrived

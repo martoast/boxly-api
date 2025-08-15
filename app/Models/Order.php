@@ -53,6 +53,12 @@ class Order extends Model
         'shipped_at',
         'delivered_at',
         'notes',
+        'gia_path',
+        'gia_filename',
+        'gia_mime_type',
+        'gia_size',
+        'gia_url',
+        'dhl_waybill_number',
     ];
 
     protected $casts = [
@@ -79,6 +85,7 @@ class Order extends Model
         'quote_expires_at' => 'datetime',
         'shipped_at' => 'datetime',
         'delivered_at' => 'datetime',
+        'gia_size' => 'integer',
     ];
 
     /**
@@ -474,5 +481,78 @@ class Order extends Model
     {
         $exchangeRate = config('services.exchange_rate.usd_to_mxn', 18.00);
         return round($usdAmount * $exchangeRate, 2);
+    }
+
+    /**
+     * Get the full URL for the GIA file
+     */
+    public function getGiaFullUrlAttribute(): ?string
+    {
+        if (!$this->gia_url) {
+            return null;
+        }
+
+        // If it's already a full URL, return it
+        if (filter_var($this->gia_url, FILTER_VALIDATE_URL)) {
+            return $this->gia_url;
+        }
+
+        // Otherwise, prepend the DO Spaces URL
+        return config('filesystems.disks.spaces.url') . '/' . $this->gia_url;
+    }
+
+    /**
+     * Get DHL tracking URL
+     */
+    public function getDhlTrackingUrlAttribute(): ?string
+    {
+        if (!$this->dhl_waybill_number) {
+            return null;
+        }
+
+        // Remove spaces for the URL
+        $cleanWaybill = str_replace(' ', '', $this->dhl_waybill_number);
+
+        // DHL Express tracking URL format
+        return "https://www.dhl.com/mx-es/home/tracking.html?tracking-id={$cleanWaybill}";
+    }
+
+    /**
+     * Delete the GIA file
+     */
+    public function deleteGia(): void
+    {
+        if ($this->gia_path) {
+            \Illuminate\Support\Facades\Storage::disk('spaces')->delete($this->gia_path);
+
+            $this->update([
+                'gia_path' => null,
+                'gia_filename' => null,
+                'gia_mime_type' => null,
+                'gia_size' => null,
+                'gia_url' => null,
+            ]);
+        }
+    }
+
+    /**
+     * Format DHL waybill number for display
+     */
+    public function getFormattedWaybillAttribute(): ?string
+    {
+        if (!$this->dhl_waybill_number) {
+            return null;
+        }
+
+        // Ensure it's formatted with spaces (e.g., "84 1597 5142")
+        $clean = str_replace(' ', '', $this->dhl_waybill_number);
+
+        // Format as groups of 2-4-4 if it's 10 digits
+        if (strlen($clean) === 10) {
+            return substr($clean, 0, 2) . ' ' . substr($clean, 2, 4) . ' ' . substr($clean, 6, 4);
+        }
+
+        // Otherwise return as is
+        return $this->dhl_waybill_number;
     }
 }

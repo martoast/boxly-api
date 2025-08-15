@@ -3,9 +3,13 @@
 namespace App\Http\Controllers;
 
 use App\Http\Requests\AdminUpdateOrderStatusRequest;
+use App\Http\Requests\AdminShipOrderRequest;
 use App\Models\Order;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Log;
 
 class AdminOrderController extends Controller
 {
@@ -26,11 +30,11 @@ class AdminOrderController extends Controller
             $search = $request->search;
             $query->where(function ($q) use ($search) {
                 $q->where('order_number', 'like', "%{$search}%")
-                  ->orWhere('tracking_number', 'like', "%{$search}%")
-                  ->orWhereHas('user', function ($q) use ($search) {
-                      $q->where('name', 'like', "%{$search}%")
-                        ->orWhere('email', 'like', "%{$search}%");
-                  });
+                    ->orWhere('tracking_number', 'like', "%{$search}%")
+                    ->orWhereHas('user', function ($q) use ($search) {
+                        $q->where('name', 'like', "%{$search}%")
+                            ->orWhere('email', 'like', "%{$search}%");
+                    });
             });
         }
 
@@ -113,7 +117,7 @@ class AdminOrderController extends Controller
             case Order::STATUS_PROCESSING:
                 $data['processing_started_at'] = now();
                 break;
-                
+
             case Order::STATUS_QUOTE_SENT:
                 // Quote sending is handled in a separate controller
                 // This is just for manual status updates if needed
@@ -122,7 +126,7 @@ class AdminOrderController extends Controller
                     $data['quote_expires_at'] = now()->addDays(7);
                 }
                 break;
-                
+
             case Order::STATUS_PAID:
                 // Payment is usually handled via webhook
                 // This is for manual marking if needed
@@ -130,17 +134,17 @@ class AdminOrderController extends Controller
                     $data['paid_at'] = now();
                 }
                 break;
-                
+
             case Order::STATUS_SHIPPED:
                 $data['estimated_delivery_date'] = $request->estimated_delivery_date;
                 $data['shipped_at'] = now();
                 break;
-                
+
             case Order::STATUS_DELIVERED:
                 $data['actual_delivery_date'] = now();
                 $data['delivered_at'] = now();
                 break;
-                
+
             case Order::STATUS_CANCELLED:
                 // Optional: Add cancellation reason if needed
                 if ($request->has('notes')) {
@@ -156,6 +160,138 @@ class AdminOrderController extends Controller
             'message' => 'Order status updated successfully',
             'data' => $order->fresh()->load(['user', 'items'])
         ]);
+    }
+
+    /**
+     * Ship an order with GIA and DHL waybill
+     */
+    public function shipOrder(AdminShipOrderRequest $request, Order $order)
+    {
+        // Validate order can be shipped
+        if ($order->status !== Order::STATUS_PAID) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Only paid orders can be shipped'
+            ], 400);
+        }
+
+        DB::beginTransaction();
+
+        try {
+            // Handle GIA file upload
+            if ($request->hasFile('gia_file')) {
+                $file = $request->file('gia_file');
+
+                // Create storage path following the pattern: users/{userName}-{userId}/orders/{orderNumber}/shipping
+                $user = $order->user;
+                $userName = Str::slug($user->name);
+                $storagePath = "users/{$userName}-{$user->id}/orders/{$order->order_number}/shipping";
+
+                // Generate filename with timestamp to ensure uniqueness
+                $filename = "gia-" . time() . ".pdf";
+
+                // Store the file
+                $path = Storage::disk('spaces')->putFileAs(
+                    $storagePath,
+                    $file,
+                    $filename,
+                    'public'
+                );
+
+                // Build the public URL
+                $url = config('filesystems.disks.spaces.url') . '/' . $path;
+
+                // Update order with GIA and shipping information
+                $order->update([
+                    'status' => Order::STATUS_SHIPPED,
+                    'dhl_waybill_number' => $request->dhl_waybill_number,
+                    'estimated_delivery_date' => $request->estimated_delivery_date,
+                    'shipped_at' => now(),
+                    'gia_path' => $path,
+                    'gia_filename' => $file->getClientOriginalName(),
+                    'gia_mime_type' => $file->getClientMimeType(),
+                    'gia_size' => $file->getSize(),
+                    'gia_url' => $url,
+                ]);
+
+                // Add notes if provided
+                if ($request->has('notes')) {
+                    $order->notes = ($order->notes ? $order->notes . "\n" : '') .
+                        "Shipped: " . $request->notes;
+                    $order->save();
+                }
+            }
+
+            DB::commit();
+
+            Log::info('Order shipped successfully', [
+                'order_id' => $order->id,
+                'order_number' => $order->order_number,
+                'user_id' => $user->id,
+                'user_name' => $user->name,
+                'dhl_waybill' => $order->dhl_waybill_number,
+                'gia_path' => $path ?? null,
+                'gia_url' => $order->gia_url,
+                'admin_id' => $request->user()->id,
+            ]);
+
+            // The email will be sent automatically by the model's updated event
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Order shipped successfully',
+                'data' => [
+                    'order' => $order->fresh()->load(['user', 'items']),
+                    'dhl_tracking_url' => $order->dhl_tracking_url,
+                    'gia_url' => $order->gia_full_url,
+                ]
+            ]);
+        } catch (\Exception $e) {
+            DB::rollBack();
+
+            // Clean up uploaded file if it exists
+            if (isset($path)) {
+                Storage::disk('spaces')->delete($path);
+            }
+
+            Log::error('Failed to ship order', [
+                'order_id' => $order->id,
+                'user_id' => $order->user_id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to ship order',
+                'error' => config('app.debug') ? $e->getMessage() : null
+            ], 500);
+        }
+    }
+
+    /**
+     * View GIA document
+     */
+    public function viewGia(Request $request, Order $order)
+    {
+        // Check if GIA exists
+        if (!$order->gia_path) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No GIA document found for this order'
+            ], 404);
+        }
+
+        // For public files, redirect to the URL
+        if ($order->gia_url) {
+            return redirect($order->gia_full_url);
+        }
+
+        // Fallback if URL is not set
+        return response()->json([
+            'success' => false,
+            'message' => 'GIA document URL not available'
+        ], 404);
     }
 
     /**
@@ -180,31 +316,30 @@ class AdminOrderController extends Controller
         }
 
         DB::beginTransaction();
-        
+
         try {
             $orderNumber = $order->order_number;
             $trackingNumber = $order->tracking_number;
             $userId = $order->user_id;
             $userEmail = $order->user->email;
-            
+
             // Delete all items first (this will trigger the model event to delete proof of purchase files)
             $order->items()->each(function ($item) {
                 $item->delete();
             });
-            
+
             // Now delete the order
             $order->delete();
-            
+
             DB::commit();
-        
+
             return response()->json([
                 'success' => true,
                 'message' => "Order '{$orderNumber}' has been deleted successfully."
             ]);
-            
         } catch (\Exception $e) {
             DB::rollBack();
-            
+
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to delete order. Please try again.',
@@ -239,7 +374,7 @@ class AdminOrderController extends Controller
             ],
             'packages' => [
                 'awaiting_arrival' => \App\Models\OrderItem::where('arrived', false)
-                    ->whereHas('order', function($q) {
+                    ->whereHas('order', function ($q) {
                         $q->whereIn('status', [
                             Order::STATUS_AWAITING_PACKAGES,
                             Order::STATUS_PACKAGES_COMPLETE
