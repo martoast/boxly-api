@@ -35,6 +35,10 @@ class ProductController extends Controller
                         'currency' => strtoupper($price->currency),
                         'min_weight' => $product->metadata->min_weight ?? null,
                         'max_weight' => $product->metadata->max_weight ?? null,
+                        'max_length' => $product->metadata->max_length ?? null,
+                        'max_height' => $product->metadata->max_height ?? null,
+                        'max_width' => $product->metadata->max_width ?? null,
+                        'consolidated' => $product->metadata->consolidated ?? null,
                     ];
                 })
                 ->values()
