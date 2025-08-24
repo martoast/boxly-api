@@ -38,7 +38,7 @@ class AdminOrderManagementController extends Controller
             $user = User::find($request->user_id);
             
             // Create the order
-            $order = Order::create([
+            $order = new Order([
                 'user_id' => $user->id,
                 'order_number' => Order::generateOrderNumber(),
                 'tracking_number' => Order::generateTrackingNumber(),
@@ -48,6 +48,10 @@ class AdminOrderManagementController extends Controller
                 'currency' => 'mxn',
                 'notes' => $request->notes,
             ]);
+
+            // Skip email notifications for admin-created orders
+            $order->skipEmailNotifications = true;
+            $order->save();
 
             DB::commit();
 
@@ -129,6 +133,9 @@ class AdminOrderManagementController extends Controller
         DB::beginTransaction();
 
         try {
+            // Skip email notifications for admin manual updates
+            $order->skipEmailNotifications = true;
+            
             // Update the order with any provided fields
             $order->update($request->all());
 

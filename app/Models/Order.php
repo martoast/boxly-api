@@ -91,20 +91,25 @@ class Order extends Model
     /**
      * Status constants
      */
-    const STATUS_COLLECTING = 'collecting'; // User is adding items
-    const STATUS_AWAITING_PACKAGES = 'awaiting_packages'; // Items added, waiting for packages
-    const STATUS_PACKAGES_COMPLETE = 'packages_complete'; // All packages arrived
-    const STATUS_PROCESSING = 'processing'; // Admin is processing the order
-    const STATUS_QUOTE_SENT = 'quote_sent'; // Quote has been sent to customer
-    const STATUS_PAID = 'paid'; // Customer has paid
-    const STATUS_SHIPPED = 'shipped'; // Order has been shipped
-    const STATUS_DELIVERED = 'delivered'; // Order has been delivered
-    const STATUS_CANCELLED = 'cancelled'; // Order was cancelled
+    const STATUS_COLLECTING = 'collecting';
+    const STATUS_AWAITING_PACKAGES = 'awaiting_packages';
+    const STATUS_PACKAGES_COMPLETE = 'packages_complete';
+    const STATUS_PROCESSING = 'processing';
+    const STATUS_QUOTE_SENT = 'quote_sent';
+    const STATUS_PAID = 'paid';
+    const STATUS_SHIPPED = 'shipped';
+    const STATUS_DELIVERED = 'delivered';
+    const STATUS_CANCELLED = 'cancelled';
 
     /**
      * Temporary property to store previous status
      */
     public $previousStatus;
+    
+    /**
+     * Flag to bypass email notifications for admin manual operations
+     */
+    public $skipEmailNotifications = false;
 
     /**
      * Boot method for the model
@@ -121,6 +126,17 @@ class Order extends Model
         });
 
         static::updated(function ($order) {
+            // Skip email notifications if flag is set (for admin manual operations)
+            if ($order->skipEmailNotifications) {
+                Log::info('Email notification skipped for admin manual operation', [
+                    'order_id' => $order->id,
+                    'order_number' => $order->order_number,
+                    'previous_status' => $order->previousStatus ?? null,
+                    'new_status' => $order->status,
+                ]);
+                return;
+            }
+
             // Send email when status changes
             if ($order->isDirty('status') && isset($order->previousStatus)) {
                 $order->load('user', 'items');
