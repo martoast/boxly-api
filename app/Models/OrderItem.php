@@ -89,9 +89,9 @@ class OrderItem extends Model
         ]);
         
         // Send notification if item wasn't already marked as arrived
-        if ($wasNotArrived) {
-            Mail::to($this->order->user)->send(new PackageArrived($this));
-        }
+        // if ($wasNotArrived) {
+        //     Mail::to($this->order->user)->send(new PackageArrived($this));
+        // }
         
         // Check if all items have arrived
         $this->order->checkAndUpdatePackageStatus();
