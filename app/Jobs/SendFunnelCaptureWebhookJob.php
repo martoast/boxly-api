@@ -38,7 +38,7 @@ class SendFunnelCaptureWebhookJob implements ShouldQueue
         }
 
         try {
-            // Build webhook payload
+            // Build webhook payload - KEEP IT SIMPLE like the test that worked
             $payload = [
                 'name' => $this->name,
                 'email' => $this->email,
@@ -50,55 +50,85 @@ class SendFunnelCaptureWebhookJob implements ShouldQueue
             // Add user type if provided
             if ($this->userType) {
                 $payload['user_type'] = $this->userType;
-                $payload['customer_segment'] = $this->userType; // Alternative field name for CRM
+                $payload['customer_segment'] = $this->userType;
             }
             
-            // Handle registration source - can be array or string
+            // Handle registration source - FIXED to not send objects
             if ($this->registrationSource) {
-                if (is_array($this->registrationSource)) {
-                    // Add individual UTM parameters for CRM
-                    if (isset($this->registrationSource['utm_source'])) {
-                        $payload['utm_source'] = $this->registrationSource['utm_source'];
+                // Try to decode if it's JSON string
+                $sourceData = is_string($this->registrationSource) 
+                    ? json_decode($this->registrationSource, true) 
+                    : $this->registrationSource;
+                
+                if (is_array($sourceData)) {
+                    // Add individual UTM parameters as simple string fields
+                    if (!empty($sourceData['utm_source'])) {
+                        $payload['utm_source'] = (string)$sourceData['utm_source'];
                     }
-                    if (isset($this->registrationSource['utm_medium'])) {
-                        $payload['utm_medium'] = $this->registrationSource['utm_medium'];
+                    if (!empty($sourceData['utm_medium'])) {
+                        $payload['utm_medium'] = (string)$sourceData['utm_medium'];
                     }
-                    if (isset($this->registrationSource['utm_campaign'])) {
-                        $payload['utm_campaign'] = $this->registrationSource['utm_campaign'];
+                    if (!empty($sourceData['utm_campaign'])) {
+                        $payload['utm_campaign'] = (string)$sourceData['utm_campaign'];
                     }
-                    if (isset($this->registrationSource['utm_content'])) {
-                        $payload['utm_content'] = $this->registrationSource['utm_content'];
+                    if (!empty($sourceData['utm_content'])) {
+                        $payload['utm_content'] = (string)$sourceData['utm_content'];
                     }
-                    if (isset($this->registrationSource['utm_term'])) {
-                        $payload['utm_term'] = $this->registrationSource['utm_term'];
+                    if (!empty($sourceData['utm_term'])) {
+                        $payload['utm_term'] = (string)$sourceData['utm_term'];
                     }
-                    if (isset($this->registrationSource['fbclid'])) {
-                        $payload['fbclid'] = $this->registrationSource['fbclid'];
+                    if (!empty($sourceData['fbclid'])) {
+                        $payload['fbclid'] = (string)$sourceData['fbclid'];
                     }
-                    if (isset($this->registrationSource['landing_page'])) {
-                        $payload['landing_page'] = $this->registrationSource['landing_page'];
+                    if (!empty($sourceData['landing_page'])) {
+                        $payload['landing_page'] = (string)$sourceData['landing_page'];
                     }
                     
-                    // Also send the full tracking data as JSON string
-                    $payload['tracking_data'] = json_encode($this->registrationSource);
+                    // Set lead_source as a SIMPLE STRING, not an object
+                    // Priority: utm_source > landing_page > 'direct'
+                    $leadSource = 'direct';
+                    if (!empty($sourceData['utm_source'])) {
+                        $leadSource = (string)$sourceData['utm_source'];
+                    } elseif (!empty($sourceData['landing_page'])) {
+                        $leadSource = (string)$sourceData['landing_page'];
+                    }
+                    $payload['lead_source'] = $leadSource;
+                    
+                    // Store full tracking data as JSON STRING (not object)
+                    $payload['tracking_data'] = json_encode($sourceData);
                 } else {
-                    // If it's a string, treat it as a simple source
-                    $payload['lead_source'] = $this->registrationSource;
+                    // If it's already a string, use it directly
+                    $payload['lead_source'] = (string)$this->registrationSource;
                 }
+            } else {
+                // No registration source provided
+                $payload['lead_source'] = 'direct';
             }
+
+            // Log what we're sending
+            Log::info('Sending to GoHighLevel', [
+                'url' => $webhookUrl,
+                'name' => $payload['name'],
+                'email' => $payload['email'],
+                'phone' => $payload['phone'],
+                'lead_source_type' => gettype($payload['lead_source'] ?? null),
+                'lead_source_value' => $payload['lead_source'] ?? null,
+            ]);
 
             $response = Http::timeout(30)->post($webhookUrl, $payload);
 
             if ($response->successful()) {
                 Log::info('Successfully sent funnel capture to GoHighLevel', [
                     'email' => $this->email,
+                    'phone' => $this->phone,
                     'user_type' => $this->userType,
-                    'registration_source' => $this->registrationSource,
                     'status' => $response->status(),
+                    'response' => $response->body(),
                 ]);
             } else {
                 Log::warning('GoHighLevel webhook returned non-success status', [
                     'email' => $this->email,
+                    'phone' => $this->phone,
                     'status' => $response->status(),
                     'body' => $response->body(),
                 ]);
@@ -106,8 +136,12 @@ class SendFunnelCaptureWebhookJob implements ShouldQueue
         } catch (\Exception $e) {
             Log::error('Failed to send funnel capture to GoHighLevel', [
                 'email' => $this->email,
+                'phone' => $this->phone,
                 'error' => $e->getMessage(),
             ]);
+            
+            // Re-throw to trigger retry
+            throw $e;
         }
     }
 }
