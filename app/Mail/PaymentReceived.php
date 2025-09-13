@@ -50,10 +50,10 @@ class PaymentReceived extends Mailable implements ShouldQueue
         return new Envelope(
             from: new Address(
                 config('mail.from.address', 'noreply@example.com'),
-                config('mail.from.name', 'Envios Comerciales')
+                config('mail.from.name', 'Boxly')
             ),
             replyTo: [
-                new Address('envioscomercialestj@gmail.com', 'Envios Comerciales Support'),
+                new Address('contact@boxly.mx', 'Boxly Support'),
             ],
             subject: $subject,
             tags: ['payment-received', 'order-paid'],
@@ -87,7 +87,7 @@ class PaymentReceived extends Mailable implements ShouldQueue
                 'totalWeight' => $this->order->actual_weight ?? $this->order->total_weight,
                 'estimatedDelivery' => $this->getEstimatedDelivery(),
                 'frontendUrl' => config('app.frontend_url'),
-                'supportEmail' => 'envioscomercialestj@gmail.com',
+                'supportEmail' => 'contact@boxly.mx',
                 'supportPhone' => '+52 (664) 123-4567',
             ]
         );

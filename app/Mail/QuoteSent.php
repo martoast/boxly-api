@@ -49,10 +49,10 @@ class QuoteSent extends Mailable implements ShouldQueue
         return new Envelope(
             from: new Address(
                 config('mail.from.address', 'noreply@example.com'),
-                config('mail.from.name', 'Envios Comerciales')
+                config('mail.from.name', 'Boxly')
             ),
             replyTo: [
-                new Address('envioscomercialestj@gmail.com', 'Envios Comerciales Support'),
+                new Address('contact@boxly.mx', 'Boxly Support'),
             ],
             subject: $subject,
             metadata: [
@@ -85,7 +85,7 @@ class QuoteSent extends Mailable implements ShouldQueue
                 'paymentLink' => $this->order->payment_link,
                 'quoteExpiresAt' => $this->order->quote_expires_at,
                 'frontendUrl' => config('app.frontend_url'),
-                'supportEmail' => 'envioscomercialestj@gmail.com',
+                'supportEmail' => 'contact@boxly.mx',
             ]
         );
     }

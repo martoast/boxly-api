@@ -100,7 +100,7 @@
             @endphp
             <p>
                 {{ __('emails.footer.questions', [], $locale) }}
-                <a href="mailto:envioscomercialestj@gmail.com">envioscomercialestj@gmail.com</a>
+                <a href="mailto:contact@boxly.mx">contact@boxly.mx</a>
             </p>
             <p style="font-size: 12px;">
                 {{ __('emails.footer.copyright', ['year' => date('Y'), 'app_name' => config('app.name')], $locale) }}

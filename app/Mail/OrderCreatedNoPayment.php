@@ -49,10 +49,10 @@ class OrderCreatedNoPayment extends Mailable implements ShouldQueue
         return new Envelope(
             from: new Address(
                 config('mail.from.address', 'noreply@example.com'),
-                config('mail.from.name', 'Envios Comerciales')
+                config('mail.from.name', 'Boxly')
             ),
             replyTo: [
-                new Address('envioscomercialestj@gmail.com', 'Envios Comerciales Support'),
+                new Address('contact@boxly.mx', 'Boxly Support'),
             ],
             subject: $subject,
             // Move metadata here if using metadata for email service providers
