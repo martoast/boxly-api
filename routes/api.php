@@ -18,24 +18,14 @@ use App\Http\Controllers\PaymentMethodController;
 use App\Http\Controllers\TrackingController;
 use App\Http\Controllers\FunnelCaptureController;
 
-/*
-|--------------------------------------------------------------------------
-| API Routes
-|--------------------------------------------------------------------------
-*/
-
-// Stripe webhooks (no auth needed)
 Route::post('/webhooks/stripe', [StripeWebhookController::class, 'handle']);
 
-// Public routes
 Route::get('/', function () {
     return response()->json(['status' => 'ok']);
 });
 
-// Products endpoint (public for pricing page)
 Route::get('/products', [ProductController::class, 'index']);
 
-// User types endpoint (public for registration)
 Route::get('/user-types', function () {
     return response()->json([
         'success' => true,
@@ -62,7 +52,6 @@ Route::get('/user-types', function () {
     ]);
 });
 
-// Public tracking endpoints
 Route::post('/track', [TrackingController::class, 'track']);
 Route::get('/track', [TrackingController::class, 'form']);
 
@@ -75,9 +64,7 @@ Route::middleware(['web'])->group(function () {
         ->whereIn('provider', ['google', 'facebook']);
 });
 
-// Protected routes
 Route::middleware('auth:sanctum')->group(function () {
-    // User info
     Route::get('/user', function (Request $request) {
         $user = $request->user();
         return [
@@ -93,14 +80,12 @@ Route::middleware('auth:sanctum')->group(function () {
         ];
     });
     
-    // Profile routes
     Route::prefix('profile')->group(function () {
         Route::get('/', [ProfileController::class, 'show']);
         Route::put('/', [ProfileController::class, 'update']);
         Route::get('/dashboard', [ProfileController::class, 'dashboard']);
     });
 
-    // Payment Methods
     Route::prefix('payment-methods')->group(function () {
         Route::get('/', [PaymentMethodController::class, 'index']);
         Route::post('/setup-session', [PaymentMethodController::class, 'createSetupSession']);
@@ -110,9 +95,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/{paymentMethodId}/default', [PaymentMethodController::class, 'setDefault']);
     });
     
-    // Orders - All consolidated in OrderController
     Route::prefix('orders')->group(function () {
-        // Order Management
         Route::get('/', [OrderController::class, 'index']);
         Route::post('/', [OrderController::class, 'create']);
         Route::get('/unpaid', [OrderController::class, 'unpaidWithQuotes']);
@@ -123,66 +106,65 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/{order}/complete', [OrderController::class, 'complete']);
         Route::put('/{order}/reopen', [OrderController::class, 'reopen']);
         
-        // Order Status & Tracking
         Route::get('/{order}/tracking', [OrderController::class, 'tracking']);
         Route::get('/{order}/quote', [OrderController::class, 'viewQuote']);
         Route::post('/{order}/pay-quote', [OrderController::class, 'payQuote']);
         
-        // Order Items Management
         Route::post('/{order}/items', [OrderItemController::class, 'store']);
         Route::put('/{order}/items/{item}', [OrderItemController::class, 'update']);
         Route::delete('/{order}/items/{item}', [OrderItemController::class, 'destroy']);
         Route::get('/{order}/items/{item}/proof', [OrderItemController::class, 'viewProof']);
     });
     
-    // Admin routes
     Route::middleware('admin')->prefix('admin')->group(function () {
         
-        // Dashboard
         Route::get('/dashboard', [AdminOrderController::class, 'dashboard']);
         
-        // NEW: Admin Order Management (Full Control)
         Route::prefix('management')->group(function () {
-            // Order CRUD with full control
             Route::post('/orders', [AdminOrderManagementController::class, 'createOrder']);
             Route::put('/orders/{order}', [AdminOrderManagementController::class, 'updateOrder']);
             Route::delete('/orders/{order}', [AdminOrderManagementController::class, 'deleteOrder']);
             
-            // Item management with override
             Route::post('/orders/{order}/items', [AdminOrderManagementController::class, 'addItem']);
             Route::put('/orders/{order}/items/{item}', [AdminOrderManagementController::class, 'updateItem']);
             Route::delete('/orders/{order}/items/{item}', [AdminOrderManagementController::class, 'deleteItem']);
         });
         
-        // Admin Order Management (existing routes)
         Route::prefix('orders')->group(function () {
-            // Order Listing & Filtering
             Route::get('/', [AdminOrderController::class, 'index']);
             Route::get('/ready-to-process', [AdminOrderController::class, 'readyToProcess']);
-            Route::get('/awaiting-payment', [AdminOrderController::class, 'awaitingPayment']);
+            Route::get('/ready-to-ship', [AdminOrderController::class, 'readyToShip']);
             Route::get('/ready-for-quote', [AdminQuoteController::class, 'ordersReadyForQuote']);
             
-            // Order Details & Status
             Route::get('/{order}', [AdminOrderController::class, 'show']);
             Route::put('/{order}/status', [AdminOrderController::class, 'updateStatus']);
             Route::delete('/{order}', [AdminOrderController::class, 'destroy']);
             
-            // Quote Management
             Route::put('/{order}/process', [AdminQuoteController::class, 'markAsProcessing']);
             Route::post('/{order}/prepare-quote', [AdminQuoteController::class, 'prepareQuote']);
-            Route::post('/{order}/send-quote', [AdminQuoteController::class, 'sendQuote']);
-            Route::post('/{order}/resend-quote', [AdminQuoteController::class, 'resendQuote']);
-            Route::post('/{order}/cancel-quote', [AdminQuoteController::class, 'cancelQuote']);
+            
+            // Primary route for sending invoice
+            Route::post('/{order}/send-invoice', [AdminQuoteController::class, 'sendInvoice']);
+            
+            // Alias route for backward compatibility (frontend still calls send-quote)
+            Route::post('/{order}/send-quote', [AdminQuoteController::class, 'sendInvoice']);
+            
+            Route::post('/{order}/resend-invoice', [AdminQuoteController::class, 'resendInvoice']);
+            
+            // Alias for backward compatibility
+            Route::post('/{order}/resend-quote', [AdminQuoteController::class, 'resendInvoice']);
+            
+            Route::post('/{order}/cancel-invoice', [AdminQuoteController::class, 'cancelInvoice']);
+            
+            // Alias for backward compatibility
+            Route::post('/{order}/cancel-quote', [AdminQuoteController::class, 'cancelInvoice']);
 
-            // Shipping Management
             Route::post('/{order}/ship', [AdminOrderController::class, 'shipOrder']);
             Route::get('/{order}/gia', [AdminOrderController::class, 'viewGia']);
             
-            // Package Management
             Route::put('/{order}/items/{item}/arrived', [AdminOrderItemController::class, 'markArrived']);
         });
         
-        // Package/Item Management
         Route::prefix('packages')->group(function () {
             Route::get('/', [AdminOrderItemController::class, 'index']);
             Route::get('/pending', [AdminOrderItemController::class, 'pending']);
@@ -192,7 +174,6 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/{item}/proof', [AdminOrderItemController::class, 'viewProof']);
         });
         
-        // Customer Management
         Route::prefix('customers')->group(function () {
             Route::get('/', [AdminCustomerController::class, 'index']);
             Route::get('/{customer}', [AdminCustomerController::class, 'show']);
@@ -201,7 +182,6 @@ Route::middleware('auth:sanctum')->group(function () {
     });
 });
 
-// Fallback route
 Route::fallback(function () {
     return response()->json([
         'success' => false,

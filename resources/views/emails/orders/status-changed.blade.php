@@ -6,34 +6,33 @@ $locale = $order->user->preferred_language ?? 'es';
 app()->setLocale($locale);
 @endphp
 
-{{-- Header with status-specific title --}}
 <h1 style="color: #333; font-size: 24px; margin-bottom: 20px;">
     @switch($order->status)
-    @case(\App\Models\Order::STATUS_COLLECTING)
+    @case('collecting')
     {{ $locale === 'es' ? '📦 Tu orden está lista para recibir productos' : '📦 Your order is ready for products' }}
     @break
-    @case(\App\Models\Order::STATUS_AWAITING_PACKAGES)
+    @case('awaiting_packages')
     {{ $locale === 'es' ? '⏳ Esperando tus paquetes' : '⏳ Awaiting your packages' }}
     @break
-    @case(\App\Models\Order::STATUS_PACKAGES_COMPLETE)
+    @case('packages_complete')
     {{ $locale === 'es' ? '✅ Hemos recibido todos tus paquetes' : '✅ We have received all your packages' }}
     @break
-    @case(\App\Models\Order::STATUS_PROCESSING)
+    @case('processing')
     {{ $locale === 'es' ? '⚙️ Procesando tu orden' : '⚙️ Processing your order' }}
     @break
-    @case(\App\Models\Order::STATUS_QUOTE_SENT)
-    {{ $locale === 'es' ? '💰 Tu cotización está lista' : '💰 Your quote is ready' }}
+    @case('awaiting_payment')
+    {{ $locale === 'es' ? '🧾 Tu factura está lista' : '🧾 Your invoice is ready' }}
     @break
-    @case(\App\Models\Order::STATUS_PAID)
+    @case('paid')
     {{ $locale === 'es' ? '✅ Pago recibido' : '✅ Payment received' }}
     @break
-    @case(\App\Models\Order::STATUS_SHIPPED)
+    @case('shipped')
     {{ $locale === 'es' ? '🛫 Tu paquete está en camino' : '🛫 Your package is on the way' }}
     @break
-    @case(\App\Models\Order::STATUS_DELIVERED)
+    @case('delivered')
     {{ $locale === 'es' ? '🎉 Tu paquete ha sido entregado' : '🎉 Your package has been delivered' }}
     @break
-    @case(\App\Models\Order::STATUS_CANCELLED)
+    @case('cancelled')
     {{ $locale === 'es' ? '❌ Orden cancelada' : '❌ Order cancelled' }}
     @break
     @endswitch
@@ -41,9 +40,8 @@ app()->setLocale($locale);
 
 <p>{{ $locale === 'es' ? 'Hola' : 'Hello' }} {{ $order->user->name }},</p>
 
-{{-- Status-specific message --}}
 @switch($order->status)
-@case(\App\Models\Order::STATUS_COLLECTING)
+@case('collecting')
 @if($locale === 'es')
 <p>Tu orden <strong>{{ $order->tracking_number }}</strong> ha sido reabierta y está lista para agregar más productos.</p>
 <p>Puedes continuar agregando los artículos que compraste antes de enviar la orden nuevamente.</p>
@@ -53,317 +51,113 @@ app()->setLocale($locale);
 @endif
 @break
 
-@case(\App\Models\Order::STATUS_AWAITING_PACKAGES)
+@case('awaiting_packages')
 @if($locale === 'es')
 <p>Tu orden <strong>{{ $order->tracking_number }}</strong> ha sido creada exitosamente.</p>
 <p>Estamos esperando que lleguen tus paquete(s) a nuestro almacén en USA.</p>
-
-
 @else
 <p>Your order <strong>{{ $order->tracking_number }}</strong> has been created successfully.</p>
 <p>We're waiting for your package(s) to arrive at our USA warehouse.</p>
-
-
 @endif
 @break
 
-@case(\App\Models\Order::STATUS_PACKAGES_COMPLETE)
+@case('packages_complete')
 @if($locale === 'es')
 <p><strong>¡Excelentes noticias!</strong> Hemos recibido todos los paquetes de tu orden <strong>{{ $order->tracking_number }}</strong> en nuestro almacén.</p>
-
-{{-- Items List --}}
-<div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 20px 0;">
-    <h3 style="margin: 0 0 10px 0; font-size: 16px;">Productos recibidos:</h3>
-    <ul style="margin: 0; padding-left: 20px;">
-        @foreach($order->items as $item)
-        <li style="margin: 5px 0;">
-            {{ $item->product_name }}
-            @if($item->quantity > 1)
-            (Cantidad: {{ $item->quantity }})
-            @endif
-        </li>
-        @endforeach
-    </ul>
-    <p style="margin: 10px 0 0 0; padding-top: 10px; border-top: 1px solid #dee2e6;">
-        <strong>Total de artículos:</strong> {{ $order->items->sum('quantity') }}<br>
-        @if($order->total_weight)
-        <strong>Peso total:</strong> {{ number_format($order->total_weight, 2) }} kg
-        @endif
-    </p>
-</div>
-
-<p>Ahora nuestro equipo comenzará a procesar tu orden.</p>
+<p>Ahora nuestro equipo comenzará a procesar tu orden para enviarla a México.</p>
 @else
 <p><strong>Great news!</strong> We have received all packages for your order <strong>{{ $order->tracking_number }}</strong> at our warehouse.</p>
-
-{{-- Items List --}}
-<div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 20px 0;">
-    <h3 style="margin: 0 0 10px 0; font-size: 16px;">Items received:</h3>
-    <ul style="margin: 0; padding-left: 20px;">
-        @foreach($order->items as $item)
-        <li style="margin: 5px 0;">
-            {{ $item->product_name }}
-            @if($item->quantity > 1)
-            (Quantity: {{ $item->quantity }})
-            @endif
-        </li>
-        @endforeach
-    </ul>
-    <p style="margin: 10px 0 0 0; padding-top: 10px; border-top: 1px solid #dee2e6;">
-        <strong>Total items:</strong> {{ $order->items->sum('quantity') }}<br>
-        @if($order->total_weight)
-        <strong>Total weight:</strong> {{ number_format($order->total_weight, 2) }} kg
-        @endif
-    </p>
-</div>
-
-<p>Our team will now begin processing your order.</p>
+<p>Our team will now begin processing your order to ship it to Mexico.</p>
 @endif
 @break
 
-@case(\App\Models\Order::STATUS_PROCESSING)
-    @if($locale === 'es')
-    <p>Tu orden <strong>{{ $order->tracking_number }}</strong> está siendo procesada por nuestro equipo.</p>
+@case('processing')
+@if($locale === 'es')
+<p>Tu orden <strong>{{ $order->tracking_number }}</strong> está siendo procesada por nuestro equipo.</p>
+<p>Estamos consolidando tus artículos y preparando todo para el envío. Te notificaremos tan pronto como tu paquete esté en camino.</p>
+@else
+<p>Your order <strong>{{ $order->tracking_number }}</strong> is being processed by our team.</p>
+<p>We are consolidating your items and preparing everything for shipment. We will notify you as soon as your package is on its way.</p>
+@endif
+@break
 
-    {{-- Items Being Processed --}}
-    <div style="background: #e7f5ff; padding: 15px; border-radius: 8px; margin: 20px 0;">
-        <h3 style="margin: 0 0 10px 0; font-size: 16px; color: #0c5460;">📦 Productos en tu envío:</h3>
-        <ul style="margin: 0; padding-left: 20px;">
-            @foreach($order->items as $item)
-            <li style="margin: 5px 0;">
-                {{ $item->product_name }}
-                @if($item->quantity > 1)
-                (Cantidad: {{ $item->quantity }})
-                @endif
-            </li>
-            @endforeach
-        </ul>
-        <p style="margin: 10px 0 0 0; padding-top: 10px; border-top: 1px solid #bee5eb;">
-            <strong>Total de artículos:</strong> {{ $order->items->sum('quantity') }}<br>
-            @if($order->total_weight)
-            <strong>Peso total:</strong> {{ number_format($order->total_weight, 2) }} kg
-            @endif
-        </p>
-    </div>
+@case('awaiting_payment')
+@if($locale === 'es')
+<p>Tu paquete ha sido entregado exitosamente. Hemos preparado la factura para tu orden <strong>{{ $order->tracking_number }}</strong>.</p>
+<p><strong>Total a pagar: ${{ number_format($order->quoted_amount, 2) }} MXN</strong></p>
+@if($order->quote_expires_at)
+<p>⏰ Por favor, realiza el pago antes del {{ $order->quote_expires_at->format('d/m/Y') }}.</p>
+@endif
+@else
+<p>Your package has been successfully delivered. We have prepared the invoice for your order <strong>{{ $order->tracking_number }}</strong>.</p>
+<p><strong>Total to pay: ${{ number_format($order->quoted_amount, 2) }} MXN</strong></p>
+@if($order->quote_expires_at)
+<p>⏰ Please make the payment before {{ $order->quote_expires_at->format('m/d/Y') }}.</p>
+@endif
+@endif
 
-    <div style="background: #fff3cd; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #ffc107;">
-        <p style="margin: 0; font-weight: bold; color: #856404;">
-            💰 ¿Qué sigue?
-        </p>
-        <p style="margin: 10px 0 0 0; color: #856404;">
-            Estamos calculando el mejor tamaño de caja y preparando tu cotización final.
-            <strong>Pronto recibirás un correo con tu cotización y las instrucciones de pago.</strong>
-        </p>
-    </div>
+@if($order->payment_link)
+<div style="text-align: center; margin: 30px 0;">
+    <a href="{{ $order->payment_link }}" style="background: #007bff; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;">
+        {{ $locale === 'es' ? 'Pagar Factura' : 'Pay Invoice' }}
+    </a>
+</div>
+@endif
+@break
 
-    <p>El proceso de cotización normalmente toma entre 24-48 horas hábiles.</p>
-    @else
-    <p>Your order <strong>{{ $order->tracking_number }}</strong> is being processed by our team.</p>
-
-    {{-- Items Being Processed --}}
-    <div style="background: #e7f5ff; padding: 15px; border-radius: 8px; margin: 20px 0;">
-        <h3 style="margin: 0 0 10px 0; font-size: 16px; color: #0c5460;">📦 Items in your shipment:</h3>
-        <ul style="margin: 0; padding-left: 20px;">
-            @foreach($order->items as $item)
-            <li style="margin: 5px 0;">
-                {{ $item->product_name }}
-                @if($item->quantity > 1)
-                (Quantity: {{ $item->quantity }})
-                @endif
-            </li>
-            @endforeach
-        </ul>
-        <p style="margin: 10px 0 0 0; padding-top: 10px; border-top: 1px solid #bee5eb;">
-            <strong>Total items:</strong> {{ $order->items->sum('quantity') }}<br>
-            @if($order->total_weight)
-            <strong>Total weight:</strong> {{ number_format($order->total_weight, 2) }} kg
-            @endif
-        </p>
-    </div>
-
-    <div style="background: #fff3cd; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #ffc107;">
-        <p style="margin: 0; font-weight: bold; color: #856404;">
-            💰 What's next?
-        </p>
-        <p style="margin: 10px 0 0 0; color: #856404;">
-            We are calculating the best box size and preparing your final quote.
-            <strong>You'll soon receive an email with your quote and payment instructions.</strong>
-        </p>
-    </div>
-
-    <p>The quote process normally takes 24-48 business hours.</p>
-    @endif
-    @break
-
-
-@case(\App\Models\Order::STATUS_QUOTE_SENT)
-    @if($locale === 'es')
-    <p>Hemos preparado la cotización para tu orden <strong>{{ $order->tracking_number }}</strong>.</p>
-
-    {{-- Items List --}}
-    <p><strong>Productos en tu envío:</strong></p>
-    <ul>
-        @foreach($order->items as $item)
-        <li>
-            {{ $item->product_name }}
-            @if($item->quantity > 1)
-            (Cantidad: {{ $item->quantity }})
-            @endif
-        </li>
-        @endforeach
-    </ul>
-
-    <p>
-        <strong>Total de artículos:</strong> {{ $order->items->sum('quantity') }}<br>
-        @if($order->total_weight)
-        <strong>Peso total:</strong> {{ number_format($order->total_weight, 2) }} kg<br>
-        @endif
-        <strong>Total a pagar: ${{ number_format($order->quoted_amount, 2) }} MXN</strong>
-    </p>
-
-    @if($order->quote_expires_at)
-    <p>⏰ Esta cotización expira el {{ $order->quote_expires_at->format('d/m/Y') }}</p>
-    @endif
-    @else
-    <p>We have prepared the quote for your order <strong>{{ $order->tracking_number }}</strong>.</p>
-
-    {{-- Items List --}}
-    <p><strong>Items in your shipment:</strong></p>
-    <ul>
-        @foreach($order->items as $item)
-        <li>
-            {{ $item->product_name }}
-            @if($item->quantity > 1)
-            (Quantity: {{ $item->quantity }})
-            @endif
-        </li>
-        @endforeach
-    </ul>
-
-    <p>
-        <strong>Total items:</strong> {{ $order->items->sum('quantity') }}<br>
-        @if($order->total_weight)
-        <strong>Total weight:</strong> {{ number_format($order->total_weight, 2) }} kg<br>
-        @endif
-        <strong>Total to pay: ${{ number_format($order->quoted_amount, 2) }} MXN</strong>
-    </p>
-
-    @if($order->quote_expires_at)
-    <p>⏰ This quote expires on {{ $order->quote_expires_at->format('m/d/Y') }}</p>
-    @endif
-    @endif
-
-    {{-- Payment CTA Button --}}
-    @if($order->payment_link)
-    <div style="text-align: center; margin: 30px 0;">
-        <a href="{{ $order->payment_link }}" style="background: #007bff; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;">
-            {{ $locale === 'es' ? 'Pagar Ahora' : 'Pay Now' }}
-        </a>
-    </div>
-    @endif
-    @break
-
-@case(\App\Models\Order::STATUS_PAID)
+@case('paid')
 @if($locale === 'es')
 <p><strong>¡Gracias por tu pago!</strong></p>
 <p>Hemos recibido tu pago de <strong>${{ number_format($order->amount_paid, 2) }} MXN</strong> para la orden <strong>{{ $order->tracking_number }}</strong>.</p>
-<p>Ahora procederemos a:</p>
-<ul>
-    <li>Consolidar todos tus artículos en una sola caja</li>
-    <li>Preparar la documentación de envío</li>
-    <li>Programar el envío a México</li>
-</ul>
-<p>Te notificaremos cuando tu paquete sea enviado.</p>
+<p>Agradecemos tu confianza en Boxly. ¡Esperamos verte pronto!</p>
 @else
 <p><strong>Thank you for your payment!</strong></p>
 <p>We've received your payment of <strong>${{ number_format($order->amount_paid, 2) }} MXN</strong> for order <strong>{{ $order->tracking_number }}</strong>.</p>
-<p>We will now proceed to:</p>
-<ul>
-    <li>Consolidate all your items into one box</li>
-    <li>Prepare shipping documentation</li>
-    <li>Schedule shipment to Mexico</li>
-</ul>
-<p>We'll notify you when your package is shipped with the tracking number.</p>
+<p>We appreciate you trusting Boxly. We hope to see you again soon!</p>
 @endif
 @break
 
-@case(\App\Models\Order::STATUS_SHIPPED)
+@case('shipped')
 @if($locale === 'es')
 <p>Tu orden <strong>{{ $order->tracking_number }}</strong> ha sido enviada.</p>
-
+@if($order->dhl_waybill_number)
 <p>Información de envío:</p>
 <p style="margin-left: 20px;">
-    Número de guía DHL: {{ $order->dhl_waybill_number }}<br>
-    Fecha estimada de entrega: {{ $order->estimated_delivery_date->format('d/m/Y') }}<br>
-    <br>
-    Dirección de entrega:<br>
-    {{ $order->delivery_address['street'] }} {{ $order->delivery_address['exterior_number'] }}<br>
-    {{ $order->delivery_address['colonia'] }}, {{ $order->delivery_address['municipio'] }}<br>
-    {{ $order->delivery_address['estado'] }}, C.P. {{ $order->delivery_address['postal_code'] }}
+    Número de guía: <strong>{{ $order->dhl_waybill_number }}</strong><br>
+    @if($order->estimated_delivery_date)
+    Fecha estimada de entrega: {{ $order->estimated_delivery_date->format('d/m/Y') }}
+    @endif
 </p>
-
-@if($order->gia_url)
-<p>Tu documento GIA (Guía de Importación Aduanal) está disponible. Este documento es importante para el proceso aduanal.</p>
-<p><a href="{{ $order->gia_full_url }}" style="color: #0066cc; text-decoration: none;">Descargar documento GIA</a></p>
 @endif
-
-@if($order->dhl_waybill_number)
-<p>Puedes rastrear tu paquete con DHL Express:</p>
-<p><a href="{{ $order->dhl_tracking_url }}" style="color: #0066cc; text-decoration: none;">Rastrear paquete con DHL</a></p>
-@endif
-
+<p>Una vez que tu paquete sea entregado, te enviaremos la factura para el pago.</p>
 @else
 <p>Your order <strong>{{ $order->tracking_number }}</strong> has been shipped.</p>
-
+@if($order->dhl_waybill_number)
 <p>Shipping information:</p>
 <p style="margin-left: 20px;">
-    DHL waybill number: {{ $order->dhl_waybill_number }}<br>
-    Estimated delivery date: {{ $order->estimated_delivery_date->format('m/d/Y') }}<br>
-    <br>
-    Delivery address:<br>
-    {{ $order->delivery_address['street'] }} {{ $order->delivery_address['exterior_number'] }}<br>
-    {{ $order->delivery_address['colonia'] }}, {{ $order->delivery_address['municipio'] }}<br>
-    {{ $order->delivery_address['estado'] }}, C.P. {{ $order->delivery_address['postal_code'] }}
+    Waybill number: <strong>{{ $order->dhl_waybill_number }}</strong><br>
+    @if($order->estimated_delivery_date)
+    Estimated delivery date: {{ $order->estimated_delivery_date->format('m/d/Y') }}
+    @endif
 </p>
-
-@if($order->gia_url)
-<p>Your GIA document (Customs Import Guide) is available. This document is important for the customs process.</p>
-<p><a href="{{ $order->gia_full_url }}" style="color: #0066cc; text-decoration: none;">Download GIA document</a></p>
 @endif
-
-@if($order->dhl_waybill_number)
-<p>You can track your package with DHL Express:</p>
-<p><a href="{{ $order->dhl_tracking_url }}" style="color: #0066cc; text-decoration: none;">Track package with DHL</a></p>
-@endif
-
+<p>Once your package is delivered, we will send you the invoice for payment.</p>
 @endif
 @break
 
-@case(\App\Models\Order::STATUS_DELIVERED)
+@case('delivered')
 @if($locale === 'es')
 <p><strong>¡Tu paquete ha sido entregado exitosamente!</strong> 🎉</p>
 <p>Tu orden <strong>{{ $order->tracking_number }}</strong> ha sido entregada en la dirección registrada.</p>
-
-@if($order->delivered_at)
-<p><strong>Fecha de entrega:</strong> {{ $order->delivered_at->format('d/m/Y') }}</p>
-@endif
-
-<p>Gracias por confiar en nosotros para tus envíos a México. ¡Esperamos verte pronto!</p>
-
+<p>En breve, recibirás un correo electrónico con la factura final y el enlace para realizar tu pago.</p>
 @else
 <p><strong>Your package has been successfully delivered!</strong> 🎉</p>
 <p>Your order <strong>{{ $order->tracking_number }}</strong> has been delivered to the registered address.</p>
-
-@if($order->delivered_at)
-<p><strong>Delivery date:</strong> {{ $order->delivered_at->format('m/d/Y') }}</p>
-@endif
-
-<p>Thank you for trusting us with your shipments to Mexico. We hope to see you again soon!</p>
-
+<p>Shortly, you will receive an email with the final invoice and a link to make your payment.</p>
 @endif
 @break
 
-@case(\App\Models\Order::STATUS_CANCELLED)
+@case('cancelled')
 @if($locale === 'es')
 <p>Tu orden <strong>{{ $order->tracking_number }}</strong> ha sido cancelada.</p>
 @if($order->notes)
@@ -380,8 +174,7 @@ app()->setLocale($locale);
 @break
 @endswitch
 
-{{-- Call to action button (except for quote_sent which has its own payment button) --}}
-@if($order->status !== \App\Models\Order::STATUS_QUOTE_SENT)
+@if($order->status !== 'awaiting_payment')
 <div style="text-align: center; margin: 30px 0;">
     <a href="{{ config('app.frontend_url') }}/app/orders/{{ $order->id }}" style="background: #007bff; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;">
         {{ $locale === 'es' ? 'Ver Detalles de la Orden' : 'View Order Details' }}
@@ -389,7 +182,6 @@ app()->setLocale($locale);
 </div>
 @endif
 
-{{-- Footer message --}}
 @if($locale === 'es')
 <p style="color: #666; font-size: 14px; margin-top: 30px;">
     Si tienes alguna pregunta contáctanos en WhatsApp: +1 619 559-1920

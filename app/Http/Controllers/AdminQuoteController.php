@@ -12,12 +12,8 @@ use Laravel\Cashier\Cashier;
 
 class AdminQuoteController extends Controller
 {
-    /**
-     * Mark order as processing (when all packages have arrived)
-     */
     public function markAsProcessing(Request $request, Order $order)
     {
-        // Validate order status
         if ($order->status !== Order::STATUS_PACKAGES_COMPLETE) {
             return response()->json([
                 'success' => false,
@@ -25,7 +21,6 @@ class AdminQuoteController extends Controller
             ], 400);
         }
 
-        // Validate all items have arrived and been weighed
         if (!$order->allItemsArrived()) {
             return response()->json([
                 'success' => false,
@@ -68,16 +63,16 @@ class AdminQuoteController extends Controller
     }
 
     /**
-     * Calculate and prepare quote for an order
-     * Admin provides complete custom quote
+     * Prepare quote for a delivered order
+     * This allows admin to prepare the invoice breakdown before sending it to customer
      */
     public function prepareQuote(Request $request, Order $order)
     {
-        // Validate order status
-        if (!in_array($order->status, [Order::STATUS_PROCESSING, Order::STATUS_PACKAGES_COMPLETE])) {
+        // Quote can only be prepared after order is delivered
+        if ($order->status !== Order::STATUS_DELIVERED) {
             return response()->json([
                 'success' => false,
-                'message' => 'Order must be in processing or packages complete status to prepare quote'
+                'message' => 'Order must be delivered before preparing invoice'
             ], 400);
         }
 
@@ -92,14 +87,8 @@ class AdminQuoteController extends Controller
         DB::beginTransaction();
 
         try {
-            // If not in processing, mark it as processing first
-            if ($order->status === Order::STATUS_PACKAGES_COMPLETE) {
-                $order->markAsProcessing();
-            }
-
             $quoteBreakdown = [];
 
-            // Build quote breakdown from provided items
             foreach ($request->quote_items as $item) {
                 $quoteBreakdown[] = [
                     'item' => $item['item'],
@@ -110,10 +99,10 @@ class AdminQuoteController extends Controller
                 ];
             }
 
-            // Calculate total
             $totalAmount = array_sum(array_column($quoteBreakdown, 'amount'));
 
-            // Update order with quote details
+            // Just save the quote breakdown, don't change status
+            // Status changes to awaiting_payment when invoice is actually sent
             $order->update([
                 'quote_breakdown' => $quoteBreakdown,
                 'quoted_amount' => $totalAmount,
@@ -121,7 +110,7 @@ class AdminQuoteController extends Controller
 
             DB::commit();
 
-            Log::info('Quote prepared for order', [
+            Log::info('Quote prepared for delivered order', [
                 'order_id' => $order->id,
                 'order_number' => $order->order_number,
                 'total_amount' => $totalAmount,
@@ -158,31 +147,30 @@ class AdminQuoteController extends Controller
     }
 
     /**
-     * Send quote to customer with payment link using Stripe Invoice
+     * Send invoice to customer after delivery
+     * This is now called "sendInvoice" but frontend may still call it "send-quote"
      */
-    public function sendQuote(Request $request, Order $order)
+    public function sendInvoice(Request $request, Order $order)
     {
         $request->validate([
             'send_copy_to_admin' => 'boolean',
         ]);
 
-        // Validate order status
-        if (!in_array($order->status, [Order::STATUS_PROCESSING, Order::STATUS_QUOTE_SENT])) {
+        if ($order->status !== Order::STATUS_DELIVERED) {
             return response()->json([
                 'success' => false,
-                'message' => 'Order must be in processing status to send quote'
+                'message' => 'Order must be delivered to send the final invoice'
             ], 400);
         }
 
-        // Validate quote is prepared
         if (!$order->quote_breakdown || !$order->quoted_amount) {
             return response()->json([
                 'success' => false,
-                'message' => 'Quote must be prepared before sending'
+                'message' => 'Quote must be prepared before sending invoice'
             ], 400);
         }
 
-        Log::info('Preparing to send quote with invoice', [
+        Log::info('Preparing to send invoice post-delivery', [
             'order_id' => $order->id,
             'quote_breakdown' => $order->quote_breakdown,
             'quoted_amount' => $order->quoted_amount,
@@ -192,13 +180,10 @@ class AdminQuoteController extends Controller
 
         try {
             $user = $order->user;
-            $stripe = Cashier::stripe(); // This gets the Stripe client from Cashier
+            $stripe = Cashier::stripe();
 
-            // Calculate total from quote breakdown
             $total = collect($order->quote_breakdown)->sum('amount');
 
-            // Create invoice directly with Stripe API
-            // We use 'exclude' to avoid any pending items from other orders
             $stripeInvoice = $stripe->invoices->create([
                 'customer' => $user->stripe_id,
                 'collection_method' => 'send_invoice',
@@ -208,19 +193,17 @@ class AdminQuoteController extends Controller
                     'order_id' => (string)$order->id,
                     'order_number' => $order->order_number,
                     'tracking_number' => $order->tracking_number,
-                    'type' => 'order_quote',
+                    'type' => 'order_invoice',
                     'admin_id' => (string)$request->user()->id,
                 ],
-                'pending_invoice_items_behavior' => 'exclude', // This ensures no pending items are included
-                'auto_advance' => false, // We'll manually finalize it
+                'pending_invoice_items_behavior' => 'exclude',
+                'auto_advance' => false,
             ]);
 
-            // Add the invoice item specifically for this order
-            // By specifying the invoice ID, it goes directly to this invoice
             $stripe->invoiceItems->create([
                 'customer' => $user->stripe_id,
-                'invoice' => $stripeInvoice->id, // This attaches it directly to our invoice
-                'amount' => intval($total * 100), // Convert to cents
+                'invoice' => $stripeInvoice->id,
+                'amount' => intval($total * 100),
                 'currency' => 'mxn',
                 'description' => 'Orden ' . $order->order_number . ' - Servicio de Consolidación y Envío',
                 'metadata' => [
@@ -229,25 +212,21 @@ class AdminQuoteController extends Controller
                 ]
             ]);
 
-            // Finalize the invoice (makes it ready to be sent)
             $stripeInvoice = $stripe->invoices->finalizeInvoice($stripeInvoice->id);
 
-            // Send the invoice email to the customer
             $stripeInvoice = $stripe->invoices->sendInvoice($stripeInvoice->id);
 
-            // Get the payment link
             $paymentLink = $stripeInvoice->hosted_invoice_url;
 
-            Log::info('Invoice created and sent', [
+            Log::info('Invoice created and sent post-delivery', [
                 'invoice_id' => $stripeInvoice->id,
                 'status' => $stripeInvoice->status,
                 'payment_link' => $paymentLink,
                 'total' => $stripeInvoice->total,
             ]);
 
-            // Update order with invoice details
             $order->update([
-                'status' => Order::STATUS_QUOTE_SENT,
+                'status' => Order::STATUS_AWAITING_PAYMENT,
                 'stripe_invoice_id' => $stripeInvoice->id,
                 'payment_link' => $paymentLink,
                 'quote_sent_at' => now(),
@@ -256,7 +235,7 @@ class AdminQuoteController extends Controller
 
             DB::commit();
 
-            Log::info('Quote sent successfully', [
+            Log::info('Invoice sent successfully post-delivery', [
                 'order_id' => $order->id,
                 'order_number' => $order->order_number,
                 'invoice_id' => $stripeInvoice->id,
@@ -266,7 +245,7 @@ class AdminQuoteController extends Controller
 
             return response()->json([
                 'success' => true,
-                'message' => 'Quote sent to customer successfully',
+                'message' => 'Invoice sent to customer successfully',
                 'data' => [
                     'order' => $order->fresh()->load(['user', 'items']),
                     'payment_link' => $paymentLink,
@@ -277,7 +256,7 @@ class AdminQuoteController extends Controller
         } catch (\Stripe\Exception\ApiErrorException $e) {
             DB::rollBack();
 
-            Log::error('Stripe API error when sending quote', [
+            Log::error('Stripe API error when sending invoice', [
                 'order_id' => $order->id,
                 'error' => $e->getMessage(),
                 'stripe_error' => $e->getStripeCode(),
@@ -291,7 +270,7 @@ class AdminQuoteController extends Controller
         } catch (\Exception $e) {
             DB::rollBack();
 
-            Log::error('Failed to send quote', [
+            Log::error('Failed to send invoice', [
                 'order_id' => $order->id,
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
@@ -299,21 +278,18 @@ class AdminQuoteController extends Controller
 
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to send quote: ' . $e->getMessage(),
+                'message' => 'Failed to send invoice: ' . $e->getMessage(),
                 'error' => config('app.debug') ? $e->getMessage() : null
             ], 500);
         }
     }
 
-    /**
-     * Resend quote email to customer
-     */
-    public function resendQuote(Request $request, Order $order)
+    public function resendInvoice(Request $request, Order $order)
     {
-        if ($order->status !== Order::STATUS_QUOTE_SENT) {
+        if ($order->status !== Order::STATUS_AWAITING_PAYMENT) {
             return response()->json([
                 'success' => false,
-                'message' => 'Order must have a quote sent to resend'
+                'message' => 'Order must have an invoice sent to resend'
             ], 400);
         }
 
@@ -327,28 +303,24 @@ class AdminQuoteController extends Controller
         try {
             $stripe = Cashier::stripe();
 
-            // Check if quote has expired and extend if needed
             if ($order->isQuoteExpired()) {
-                // Update the invoice due date
                 $stripe->invoices->update($order->stripe_invoice_id, [
                     'due_date' => now()->addDays(7)->timestamp,
                 ]);
 
-                // Update order expiration
                 $order->update([
                     'quote_expires_at' => now()->addDays(7),
                 ]);
 
-                Log::info('Quote expiration extended', [
+                Log::info('Invoice expiration extended', [
                     'order_id' => $order->id,
                     'new_expiration' => $order->quote_expires_at,
                 ]);
             }
 
-            // Resend the invoice email
             $stripe->invoices->sendInvoice($order->stripe_invoice_id);
 
-            Log::info('Quote resent successfully', [
+            Log::info('Invoice resent successfully', [
                 'order_id' => $order->id,
                 'user_email' => $order->user->email,
                 'admin_id' => $request->user()->id,
@@ -356,7 +328,7 @@ class AdminQuoteController extends Controller
 
             return response()->json([
                 'success' => true,
-                'message' => 'Quote email resent successfully',
+                'message' => 'Invoice email resent successfully',
                 'data' => [
                     'payment_link' => $order->payment_link,
                     'expires_at' => $order->quote_expires_at->format('Y-m-d H:i:s'),
@@ -364,39 +336,35 @@ class AdminQuoteController extends Controller
                 ]
             ]);
         } catch (\Exception $e) {
-            Log::error('Failed to resend quote', [
+            Log::error('Failed to resend invoice', [
                 'order_id' => $order->id,
                 'error' => $e->getMessage(),
             ]);
 
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to resend quote',
+                'message' => 'Failed to resend invoice',
                 'error' => config('app.debug') ? $e->getMessage() : null
             ], 500);
         }
     }
 
-    /**
-     * Cancel a quote and void the invoice
-     */
-    public function cancelQuote(Request $request, Order $order)
+    public function cancelInvoice(Request $request, Order $order)
     {
         $request->validate([
             'reason' => 'nullable|string|max:500',
         ]);
 
-        if (!in_array($order->status, [Order::STATUS_QUOTE_SENT])) {
+        if ($order->status !== Order::STATUS_AWAITING_PAYMENT) {
             return response()->json([
                 'success' => false,
-                'message' => 'Can only cancel quotes that have been sent'
+                'message' => 'Can only cancel invoices that have been sent'
             ], 400);
         }
 
         DB::beginTransaction();
 
         try {
-            // Void the Stripe invoice if it exists
             if ($order->stripe_invoice_id) {
                 $stripe = Cashier::stripe();
                 $stripe->invoices->voidInvoice($order->stripe_invoice_id);
@@ -407,9 +375,9 @@ class AdminQuoteController extends Controller
                 ]);
             }
 
-            // Reset order to processing status
+            // Return to delivered status when invoice is cancelled
             $order->update([
-                'status' => Order::STATUS_PROCESSING,
+                'status' => Order::STATUS_DELIVERED,
                 'stripe_invoice_id' => null,
                 'payment_link' => null,
                 'quote_sent_at' => null,
@@ -418,7 +386,7 @@ class AdminQuoteController extends Controller
 
             DB::commit();
 
-            Log::info('Quote cancelled successfully', [
+            Log::info('Invoice cancelled successfully', [
                 'order_id' => $order->id,
                 'order_number' => $order->order_number,
                 'reason' => $request->reason,
@@ -427,35 +395,34 @@ class AdminQuoteController extends Controller
 
             return response()->json([
                 'success' => true,
-                'message' => 'Quote cancelled successfully',
+                'message' => 'Invoice cancelled successfully',
                 'data' => $order->fresh()->load(['user', 'items'])
             ]);
         } catch (\Exception $e) {
             DB::rollBack();
 
-            Log::error('Failed to cancel quote', [
+            Log::error('Failed to cancel invoice', [
                 'order_id' => $order->id,
                 'error' => $e->getMessage(),
             ]);
 
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to cancel quote',
+                'message' => 'Failed to cancel invoice',
                 'error' => config('app.debug') ? $e->getMessage() : null
             ], 500);
         }
     }
 
     /**
-     * Get orders ready for quote preparation
+     * Get orders ready for invoice (delivered orders without invoice sent)
      */
     public function ordersReadyForQuote(Request $request)
     {
         $query = Order::with(['user', 'items'])
-            ->whereIn('status', [Order::STATUS_PACKAGES_COMPLETE, Order::STATUS_PROCESSING])
+            ->where('status', Order::STATUS_DELIVERED)
             ->whereNull('quote_sent_at');
 
-        // Filter by search
         if ($request->has('search')) {
             $search = $request->search;
             $query->where(function ($q) use ($search) {
@@ -468,7 +435,7 @@ class AdminQuoteController extends Controller
             });
         }
 
-        $orders = $query->oldest('completed_at')->paginate(20);
+        $orders = $query->latest('delivered_at')->paginate(20);
 
         return response()->json([
             'success' => true,

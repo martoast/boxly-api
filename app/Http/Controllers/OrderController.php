@@ -18,28 +18,23 @@ use Illuminate\Support\Facades\Notification;
 
 class OrderController extends Controller
 {
-    /**
-     * Display a listing of the user's orders.
-     */
     public function index(Request $request)
     {
         $query = Order::with(['items'])
             ->forUser($request->user()->id);
-        
-        // Add search functionality
+
         if ($request->has('search') && $request->search) {
             $searchTerm = $request->search;
-            $query->where(function($q) use ($searchTerm) {
+            $query->where(function ($q) use ($searchTerm) {
                 $q->where('order_number', 'like', '%' . $searchTerm . '%')
-                  ->orWhere('tracking_number', 'like', '%' . $searchTerm . '%');
+                    ->orWhere('tracking_number', 'like', '%' . $searchTerm . '%');
             });
         }
-        
-        // Add status filter
+
         if ($request->has('status') && $request->status) {
             $query->where('status', $request->status);
         }
-        
+
         $orders = $query->latest()->paginate(10);
 
         return response()->json([
@@ -48,10 +43,6 @@ class OrderController extends Controller
         ]);
     }
 
-    /**
-     * Create a new order without payment
-     * User no longer selects box size - admin will determine this when preparing quote
-     */
     public function create(Request $request)
     {
         $request->validate([
@@ -66,7 +57,7 @@ class OrderController extends Controller
             'delivery_address.referencias' => 'nullable|string|max:500',
             'is_rural' => 'boolean',
             'notes' => 'nullable|string|max:1000',
-            'declared_value' => 'nullable|numeric|min:0|max:999999.99', // For customs/IVA calculation
+            'declared_value' => 'nullable|numeric|min:0|max:999999.99',
         ]);
 
         $user = $request->user();
@@ -74,40 +65,33 @@ class OrderController extends Controller
         DB::beginTransaction();
         
         try {
-            // Create the order without payment or box size
             $order = Order::create([
                 'user_id' => $user->id,
                 'order_number' => Order::generateOrderNumber(),
                 'tracking_number' => Order::generateTrackingNumber(),
                 'status' => Order::STATUS_COLLECTING,
-                'box_size' => null, // Will be determined by admin when preparing quote
+                'box_size' => null,
                 'is_rural' => $request->is_rural ?? false,
                 'delivery_address' => $request->delivery_address,
                 'currency' => 'mxn',
-                // Customs/IVA related fields
-                'declared_value' => $request->declared_value ?? null, // Used for IVA calculation
-                'iva_amount' => null, // Will be calculated when admin prepares quote
-                // Payment fields will be null until quote is paid
+                'declared_value' => $request->declared_value ?? null,
+                'iva_amount' => null,
                 'amount_paid' => null,
                 'paid_at' => null,
                 'stripe_checkout_session_id' => null,
                 'stripe_payment_intent_id' => null,
                 'stripe_invoice_id' => null,
-                // Box price will be set by admin when preparing quote
                 'box_price' => null,
                 'notes' => $request->notes,
             ]);
 
             DB::commit();
 
-            // Send confirmation email to customer
-            // Mail::to($user)->send(new OrderCreatedNoPayment($order));
-
-            // Notify admins about new order
-            $admins = User::where('role', 'admin')->get();
-            if ($admins->count() > 0) {
-                Notification::send($admins, new NewOrderNotification($order));
-            }
+            // Notify admins about new order (optional - uncomment when ready)
+            // $admins = User::where('role', 'admin')->get();
+            // if ($admins->count() > 0) {
+            //     Notification::send($admins, new NewOrderNotification($order));
+            // }
 
             Log::info('Order created without payment', [
                 'order_id' => $order->id,
@@ -147,12 +131,8 @@ class OrderController extends Controller
         }
     }
 
-    /**
-     * Display the specified order.
-     */
     public function show(Request $request, Order $order)
     {
-        // Check if user owns this order
         if ($order->user_id !== $request->user()->id) {
             return response()->json([
                 'success' => false,
@@ -168,10 +148,8 @@ class OrderController extends Controller
         ]);
     }
 
-    // Update the update method in OrderController:
     public function update(Request $request, Order $order)
     {
-        // Check if user owns this order
         if ($order->user_id !== $request->user()->id) {
             return response()->json([
                 'success' => false,
@@ -179,7 +157,6 @@ class OrderController extends Controller
             ], 403);
         }
 
-        // Only allow updates if order is still collecting or awaiting packages
         if (!in_array($order->status, [Order::STATUS_COLLECTING, Order::STATUS_AWAITING_PACKAGES])) {
             return response()->json([
                 'success' => false,
@@ -211,11 +188,8 @@ class OrderController extends Controller
         ]);
     }
 
-    // Update the destroy method in OrderController:
-
     public function destroy(Request $request, Order $order)
     {
-        // Check if user owns this order
         if ($order->user_id !== $request->user()->id) {
             return response()->json([
                 'success' => false,
@@ -223,7 +197,6 @@ class OrderController extends Controller
             ], 403);
         }
 
-        // Only allow deletion if order is still collecting or awaiting packages (but no packages arrived)
         if (!in_array($order->status, [Order::STATUS_COLLECTING, Order::STATUS_AWAITING_PACKAGES])) {
             return response()->json([
                 'success' => false,
@@ -231,7 +204,6 @@ class OrderController extends Controller
             ], 400);
         }
 
-        // Don't allow deletion if any packages have arrived
         if ($order->arrivedItems()->count() > 0) {
             return response()->json([
                 'success' => false,
@@ -255,9 +227,6 @@ class OrderController extends Controller
         }
     }
 
-    /**
-     * Mark order as complete (ready for consolidation)
-     */
     public function complete(CompleteOrderRequest $request, Order $order)
     {
         try {
@@ -275,12 +244,8 @@ class OrderController extends Controller
         }
     }
 
-    /**
-     * Reopen order for modifications (return to collecting status)
-     */
     public function reopen(Request $request, Order $order)
     {
-        // Check if user owns this order
         if ($order->user_id !== $request->user()->id) {
             return response()->json([
                 'success' => false,
@@ -289,9 +254,8 @@ class OrderController extends Controller
         }
 
         try {
-            // Use the model's method which already has the business logic
             $order->reopenForEditing();
-            
+
             return response()->json([
                 'success' => true,
                 'message' => 'Order reopened for modifications. You can now add or remove products.',
@@ -300,14 +264,11 @@ class OrderController extends Controller
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => $e->getMessage() // This will show the specific error from the model
+                'message' => $e->getMessage()
             ], 400);
         }
     }
 
-    /**
-     * Get orders with unpaid quotes
-     */
     public function unpaidWithQuotes(Request $request)
     {
         $orders = Order::with(['items'])
@@ -322,12 +283,8 @@ class OrderController extends Controller
         ]);
     }
 
-    /**
-     * View quote details for an order
-     */
     public function viewQuote(Request $request, Order $order)
     {
-        // Check if user owns this order
         if ($order->user_id !== $request->user()->id) {
             return response()->json([
                 'success' => false,
@@ -335,7 +292,6 @@ class OrderController extends Controller
             ], 403);
         }
 
-        // Check if quote has been sent
         if (!$order->quote_breakdown || !$order->quoted_amount) {
             return response()->json([
                 'success' => false,
@@ -359,12 +315,8 @@ class OrderController extends Controller
         ]);
     }
 
-    /**
-     * Redirect to payment link for quote
-     */
     public function payQuote(Request $request, Order $order)
     {
-        // Check if user owns this order
         if ($order->user_id !== $request->user()->id) {
             return response()->json([
                 'success' => false,
@@ -372,7 +324,6 @@ class OrderController extends Controller
             ], 403);
         }
 
-        // Check if order has a payment link
         if (!$order->payment_link) {
             return response()->json([
                 'success' => false,
@@ -380,7 +331,6 @@ class OrderController extends Controller
             ], 404);
         }
 
-        // Check if already paid
         if ($order->isPaid()) {
             return response()->json([
                 'success' => false,
@@ -398,12 +348,8 @@ class OrderController extends Controller
         ]);
     }
 
-    /**
-     * Get order tracking info
-     */
     public function tracking(Request $request, Order $order)
     {
-        // Check if user owns this order
         if ($order->user_id !== $request->user()->id) {
             return response()->json([
                 'success' => false,
@@ -439,9 +385,6 @@ class OrderController extends Controller
         ]);
     }
 
-    /**
-     * Get warehouse address for shipping
-     */
     private function getWarehouseAddress(Order $order)
     {
         return [
@@ -453,14 +396,11 @@ class OrderController extends Controller
             'zip' => '91915',
             'country' => 'United States',
             'phone' => '+1 (619) 559-1920',
-            'important_note' => 'MUST include user_id: ' . $order->user->id,
-            'user_id' => $order->user->id,
+            'important_note' => 'MUST include tracking number: ' . $order->tracking_number,
+            'tracking_number' => $order->tracking_number,
         ];
     }
 
-    /**
-     * Get next steps instructions
-     */
     private function getNextSteps($locale = 'es')
     {
         if ($locale === 'es') {
@@ -474,7 +414,7 @@ class OrderController extends Controller
                 'Realiza el pago y enviaremos tu paquete consolidado a México',
             ];
         }
-        
+
         return [
             'Add the products you plan to buy to your order',
             'Shop from your favorite US online stores',
@@ -486,9 +426,6 @@ class OrderController extends Controller
         ];
     }
 
-    /**
-     * Get important notes for the user
-     */
     private function getImportantNotes($locale = 'es')
     {
         if ($locale === 'es') {
@@ -496,16 +433,16 @@ class OrderController extends Controller
                 'no_box_selection' => 'No necesitas seleccionar un tamaño de caja. Nuestro equipo determinará el tamaño óptimo cuando lleguen todos tus paquetes.',
                 'add_items_first' => 'Agrega los productos que planeas comprar antes de hacer tus compras en línea.',
                 'declared_value_info' => 'El valor declarado es importante para el cálculo del IVA (16% para valores superiores a $50 USD).',
-                'tracking_critical' => 'Es CRÍTICO incluir tu número de rastreo (' . 'tracking_number' . ') en TODOS los envíos.',
+                'tracking_critical' => 'Es CRÍTICO incluir tu número de rastreo en TODOS los envíos.',
                 'consolidation_benefit' => 'Consolidamos múltiples paquetes en uno solo para ahorrarte en costos de envío internacional.',
             ];
         }
-        
+
         return [
             'no_box_selection' => 'You don\'t need to select a box size. Our team will determine the optimal size when all your packages arrive.',
             'add_items_first' => 'Add the products you plan to buy before making your online purchases.',
             'declared_value_info' => 'Declared value is important for IVA calculation (16% for values over $50 USD).',
-            'tracking_critical' => 'It\'s CRITICAL to include your tracking number (' . 'tracking_number' . ') in ALL shipments.',
+            'tracking_critical' => 'It\'s CRITICAL to include your tracking number in ALL shipments.',
             'consolidation_benefit' => 'We consolidate multiple packages into one to save you on international shipping costs.',
         ];
     }
