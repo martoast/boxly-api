@@ -58,9 +58,6 @@ class OrderController extends Controller
             'is_rural' => 'boolean',
             'notes' => 'nullable|string|max:1000',
             'declared_value' => 'nullable|numeric|min:0|max:999999.99',
-            'box_stripe_product_id' => 'required|string',
-            'box_size' => 'required|in:extra-small,small,medium,large,extra-large',
-            'box_price' => 'required|numeric|min:0',
         ]);
 
         $user = $request->user();
@@ -73,9 +70,7 @@ class OrderController extends Controller
                 'order_number' => Order::generateOrderNumber(),
                 'tracking_number' => Order::generateTrackingNumber(),
                 'status' => Order::STATUS_COLLECTING,
-                'box_size' => $request->box_size,
-                'box_price' => $request->box_price,
-                'stripe_product_id' => $request->box_stripe_product_id,
+                'box_size' => null,
                 'is_rural' => $request->is_rural ?? false,
                 'delivery_address' => $request->delivery_address,
                 'currency' => 'mxn',
@@ -86,6 +81,7 @@ class OrderController extends Controller
                 'stripe_checkout_session_id' => null,
                 'stripe_payment_intent_id' => null,
                 'stripe_invoice_id' => null,
+                'box_price' => null,
                 'notes' => $request->notes,
             ]);
 
@@ -97,15 +93,12 @@ class OrderController extends Controller
             //     Notification::send($admins, new NewOrderNotification($order));
             // }
 
-            Log::info('Order created with box selection', [
+            Log::info('Order created without payment', [
                 'order_id' => $order->id,
                 'order_number' => $order->order_number,
                 'tracking_number' => $order->tracking_number,
                 'user_id' => $user->id,
                 'user_email' => $user->email,
-                'box_size' => $order->box_size,
-                'box_price' => $order->box_price,
-                'stripe_product_id' => $order->stripe_product_id,
                 'is_rural' => $order->is_rural,
                 'declared_value' => $request->declared_value,
             ]);
@@ -184,8 +177,6 @@ class OrderController extends Controller
             'is_rural' => 'sometimes|boolean',
             'declared_value' => 'sometimes|numeric|min:0|max:999999.99',
             'notes' => 'nullable|string|max:1000',
-            'box_size' => 'sometimes|in:extra-small,small,medium,large,extra-large',
-            'box_price' => 'sometimes|numeric|min:0',
         ]);
 
         $order->update($request->validated());
@@ -439,7 +430,7 @@ class OrderController extends Controller
     {
         if ($locale === 'es') {
             return [
-                'box_selected' => 'Has seleccionado el tamaño de caja ' . strtoupper($this->box_size ?? 'N/A') . '. Nuestro equipo puede ajustarlo si es necesario cuando lleguen tus paquetes.',
+                'no_box_selection' => 'No necesitas seleccionar un tamaño de caja. Nuestro equipo determinará el tamaño óptimo cuando lleguen todos tus paquetes.',
                 'add_items_first' => 'Agrega los productos que planeas comprar antes de hacer tus compras en línea.',
                 'declared_value_info' => 'El valor declarado es importante para el cálculo del IVA (16% para valores superiores a $50 USD).',
                 'tracking_critical' => 'Es CRÍTICO incluir tu número de rastreo en TODOS los envíos.',
@@ -448,7 +439,7 @@ class OrderController extends Controller
         }
 
         return [
-            'box_selected' => 'You selected ' . strtoupper($this->box_size ?? 'N/A') . ' box size. Our team can adjust if needed when your packages arrive.',
+            'no_box_selection' => 'You don\'t need to select a box size. Our team will determine the optimal size when all your packages arrive.',
             'add_items_first' => 'Add the products you plan to buy before making your online purchases.',
             'declared_value_info' => 'Declared value is important for IVA calculation (16% for values over $50 USD).',
             'tracking_critical' => 'It\'s CRITICAL to include your tracking number in ALL shipments.',
