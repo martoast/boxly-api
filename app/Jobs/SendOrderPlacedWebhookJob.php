@@ -43,11 +43,13 @@ class SendOrderPlacedWebhookJob implements ShouldQueue
                 'tracking_number' => $this->order->tracking_number,
                 'order_id' => $this->order->id,
                 'order_created_at' => $this->order->created_at->toIso8601String(),
+                'box_size' => $this->order->box_size,
+                'box_price' => $this->order->box_price,
                 'source' => 'boxly_api',
                 'opportunity_title' => 'Boxly Order - ' . $this->order->order_number,
                 'opportunity_status' => 'open',
                 'pipeline_stage' => 'New Order Created',
-                'monetary_value' => 0,
+                'monetary_value' => $this->order->box_price ?? 0,
             ];
 
             Log::info('Sending "Order Placed" webhook to GoHighLevel', [

@@ -7,22 +7,14 @@ use Illuminate\Foundation\Http\FormRequest;
 
 class UpdateOrderRequest extends FormRequest
 {
-    /**
-     * Determine if the user is authorized to make this request.
-     */
     public function authorize(): bool
     {
         $order = $this->route('order');
         
-        // Check if user owns the order and it's still in collecting status
-        // Orders can only be updated while still collecting items
         return $order->user_id === $this->user()->id && 
-               $order->status === Order::STATUS_COLLECTING;
+               in_array($order->status, [Order::STATUS_COLLECTING, Order::STATUS_AWAITING_PACKAGES]);
     }
 
-    /**
-     * Get the validation rules that apply to the request.
-     */
     public function rules(): array
     {
         return [
@@ -35,12 +27,13 @@ class UpdateOrderRequest extends FormRequest
             'delivery_address.postal_code' => 'sometimes|required|string|regex:/^\d{5}$/',
             'delivery_address.referencias' => 'nullable|string|max:500',
             'is_rural' => 'sometimes|boolean',
+            'declared_value' => 'sometimes|numeric|min:0|max:999999.99',
+            'notes' => 'nullable|string|max:1000',
+            'box_size' => 'sometimes|in:extra-small,small,medium,large,extra-large',
+            'box_price' => 'sometimes|numeric|min:0',
         ];
     }
 
-    /**
-     * Get custom error messages
-     */
     public function messages(): array
     {
         return [
@@ -49,7 +42,8 @@ class UpdateOrderRequest extends FormRequest
             'delivery_address.colonia.required' => 'Colonia is required',
             'delivery_address.municipio.required' => 'Municipio is required',
             'delivery_address.estado.required' => 'Estado is required',
-            'authorize' => 'You can only update orders that are still collecting items',
+            'box_size.in' => 'Invalid box size selected',
+            'authorize' => 'You can only update orders that are still collecting items or awaiting packages',
         ];
     }
 }
