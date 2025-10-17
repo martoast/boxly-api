@@ -19,17 +19,11 @@ use Illuminate\Support\Facades\Log;
 
 class FortifyServiceProvider extends ServiceProvider
 {
-    /**
-     * Register any application services.
-     */
     public function register(): void
     {
         //
     }
 
-    /**
-     * Bootstrap any application services.
-     */
     public function boot(): void
     {
         Fortify::createUsersUsing(CreateNewUser::class);
@@ -40,7 +34,6 @@ class FortifyServiceProvider extends ServiceProvider
 
         RateLimiter::for('login', function (Request $request) {
             $throttleKey = Str::transliterate(Str::lower($request->input(Fortify::username())).'|'.$request->ip());
-
             return Limit::perMinute(5)->by($throttleKey);
         });
 
@@ -48,8 +41,8 @@ class FortifyServiceProvider extends ServiceProvider
             return Limit::perMinute(5)->by($request->session()->get('login.id'));
         });
 
-        // Create Stripe customer after user registration
         User::created(function (User $user) {
+            // Create Stripe customer
             try {
                 $user->createAsStripeCustomer([
                     'name' => $user->name,
@@ -64,24 +57,35 @@ class FortifyServiceProvider extends ServiceProvider
                 Log::error('Failed to create Stripe customer for user ' . $user->id . ': ' . $e->getMessage());
             }
 
-            try {
-                // Send to CRM with user type and registration source
-                SendFunnelCaptureWebhookJob::dispatch(
-                    $user->name,
-                    $user->email,
-                    $user->phone ?? '',
-                    $user->user_type,
-                    $user->registration_source
-                );
-                
-                Log::info('Dispatched GoHighLevel webhook job for new user registration', [
+            // ✅ FIXED: Only send webhook if profile is COMPLETE
+            // For OAuth users, webhook will be sent AFTER profile completion
+            if ($user->phone && $user->user_type) {
+                try {
+                    SendFunnelCaptureWebhookJob::dispatch(
+                        name: $user->name,
+                        email: $user->email,
+                        phone: $user->phone,
+                        userType: $user->user_type,
+                        registrationSource: $user->registration_source
+                    );
+                    
+                    Log::info('✅ Dispatched webhook for complete profile', [
+                        'user_id' => $user->id,
+                        'email' => $user->email,
+                        'user_type' => $user->user_type,
+                        'trigger' => 'User::created',
+                    ]);
+                } catch (\Exception $e) {
+                    Log::error('Failed to dispatch webhook: ' . $e->getMessage());
+                }
+            } else {
+                Log::info('⏸️ Skipped webhook - incomplete profile', [
                     'user_id' => $user->id,
                     'email' => $user->email,
-                    'user_type' => $user->user_type,
-                    'registration_source' => $user->registration_source,
+                    'has_phone' => !empty($user->phone),
+                    'has_user_type' => !empty($user->user_type),
+                    'note' => 'Webhook will be sent after profile completion'
                 ]);
-            } catch (\Exception $e) {
-                Log::error('Failed to dispatch GoHighLevel webhook job for user ' . $user->id . ': ' . $e->getMessage());
             }
         });
     }
