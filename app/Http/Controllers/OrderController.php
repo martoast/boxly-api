@@ -142,12 +142,24 @@ class OrderController extends Controller
 
         $order->load('items');
 
+        // Add metadata about what the user can do with this order
+        $orderData = $order->toArray();
+        $orderData['can_be_reopened'] = $order->canBeReopened();
+        $orderData['can_add_items'] = in_array($order->status, [
+            Order::STATUS_COLLECTING,
+            Order::STATUS_AWAITING_PACKAGES,
+            Order::STATUS_PACKAGES_COMPLETE
+        ]);
+
         return response()->json([
             'success' => true,
-            'data' => $order
+            'data' => $orderData
         ]);
     }
 
+    /**
+     * UPDATED: Allow updates only in pre-processing statuses
+     */
     public function update(Request $request, Order $order)
     {
         if ($order->user_id !== $request->user()->id) {
@@ -157,10 +169,15 @@ class OrderController extends Controller
             ], 403);
         }
 
-        if (!in_array($order->status, [Order::STATUS_COLLECTING, Order::STATUS_AWAITING_PACKAGES])) {
+        // STRICT: Only allow updates before processing starts
+        if (!in_array($order->status, [
+            Order::STATUS_COLLECTING,
+            Order::STATUS_AWAITING_PACKAGES,
+            Order::STATUS_PACKAGES_COMPLETE
+        ])) {
             return response()->json([
                 'success' => false,
-                'message' => 'Cannot update order in current status'
+                'message' => 'Cannot update order - it is already being processed or has been completed. Please contact support if you need to make changes.'
             ], 400);
         }
 
@@ -197,17 +214,18 @@ class OrderController extends Controller
             ], 403);
         }
 
+        // Only allow deletion before processing
         if (!in_array($order->status, [Order::STATUS_COLLECTING, Order::STATUS_AWAITING_PACKAGES])) {
             return response()->json([
                 'success' => false,
-                'message' => 'Cannot delete order that is being processed'
+                'message' => 'Cannot delete order that is being processed or has been completed'
             ], 400);
         }
 
         if ($order->arrivedItems()->count() > 0) {
             return response()->json([
                 'success' => false,
-                'message' => 'Cannot delete order with packages that have already arrived'
+                'message' => 'Cannot delete order with packages that have already arrived. Please contact support for assistance.'
             ], 400);
         }
 
@@ -244,6 +262,9 @@ class OrderController extends Controller
         }
     }
 
+    /**
+     * UPDATED: Strict reopening - only allowed from awaiting_packages or packages_complete
+     */
     public function reopen(Request $request, Order $order)
     {
         if ($order->user_id !== $request->user()->id) {
@@ -256,10 +277,24 @@ class OrderController extends Controller
         try {
             $order->reopenForEditing();
 
+            $arrivedCount = $order->arrivedItems()->count();
+            $pendingCount = $order->pendingItems()->count();
+
+            $message = 'Order reopened for modifications. You can now add new items or modify items that haven\'t arrived yet.';
+            
+            if ($arrivedCount > 0) {
+                $message .= " Note: {$arrivedCount} item(s) have already arrived at our warehouse and cannot be removed or modified.";
+            }
+
             return response()->json([
                 'success' => true,
-                'message' => 'Order reopened for modifications. You can now add or remove products.',
-                'data' => $order->fresh()->load('items')
+                'message' => $message,
+                'data' => [
+                    'order' => $order->fresh()->load('items'),
+                    'arrived_items_count' => $arrivedCount,
+                    'pending_items_count' => $pendingCount,
+                    'can_modify_arrived' => false,
+                ]
             ]);
         } catch (\Exception $e) {
             return response()->json([

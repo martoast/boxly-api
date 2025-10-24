@@ -123,18 +123,45 @@ class OrderItemController extends Controller
     }
 
     /**
-     * Remove an item from the order
+     * UPDATED: Remove an item from the order
+     * Strict checks: only before processing and not for arrived items
      */
     public function destroy(Request $request, Order $order, OrderItem $item)
     {
         // Check authorization
-        if ($order->user_id !== $request->user()->id || 
-            $order->status !== Order::STATUS_COLLECTING ||
-            $item->order_id !== $order->id) {
+        if ($order->user_id !== $request->user()->id) {
             return response()->json([
                 'success' => false,
                 'message' => 'Unauthorized'
             ], 403);
+        }
+
+        // STRICT: Only allow deletion before processing starts
+        if (!in_array($order->status, [
+            Order::STATUS_COLLECTING,
+            Order::STATUS_AWAITING_PACKAGES,
+            Order::STATUS_PACKAGES_COMPLETE
+        ])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cannot remove items - order is already being processed or has been completed. Please contact support for assistance.'
+            ], 403);
+        }
+
+        // Verify item belongs to this order
+        if ($item->order_id !== $order->id) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Item does not belong to this order'
+            ], 404);
+        }
+
+        // STRICT: Prevent deletion of items that have already arrived
+        if ($item->arrived) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cannot delete items that have already arrived at the warehouse. Please contact support if you need to make changes to arrived items.'
+            ], 400);
         }
 
         // Delete the item (this will also delete the file via model event)

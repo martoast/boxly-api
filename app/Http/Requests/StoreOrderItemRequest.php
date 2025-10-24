@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests;
 
+use App\Models\Order;
 use Illuminate\Foundation\Http\FormRequest;
 
 class StoreOrderItemRequest extends FormRequest
@@ -11,49 +12,48 @@ class StoreOrderItemRequest extends FormRequest
      */
     public function authorize(): bool
     {
-        // Check if user owns the order
         $order = $this->route('order');
-        return $order && $order->user_id === $this->user()->id;
+        
+        // STRICT: Only allow adding items before processing starts
+        return $order->user_id === $this->user()->id && 
+               in_array($order->status, [
+                   Order::STATUS_COLLECTING,
+                   Order::STATUS_AWAITING_PACKAGES,
+                   Order::STATUS_PACKAGES_COMPLETE
+               ]);
     }
 
     /**
      * Get the validation rules that apply to the request.
-     *
-     * @return array<string, \Illuminate\Contracts\Validation\ValidationRule|array<mixed>|string>
      */
     public function rules(): array
     {
         return [
-            'product_name' => 'required|string|max:255',
             'product_url' => 'nullable|url|max:500',
-            'quantity' => 'required|integer|min:1|max:99999',
-            'declared_value' => 'nullable|numeric|min:0|max:999999.99',
-            'tracking_number' => 'nullable|string|max:255',
+            'product_name' => 'required|string|max:255',
+            'quantity' => 'required|integer|min:1|max:100',
+            'declared_value' => 'required|numeric|min:0.01|max:99999.99',
+            'tracking_number' => 'nullable|string|max:100',
             'tracking_url' => 'nullable|url|max:500',
-            'carrier' => 'nullable|string|in:ups,fedex,usps,amazon,dhl,ontrac,lasership,other,unknown',
-            'proof_of_purchase' => 'nullable|file|mimes:pdf,jpg,jpeg,png|max:10240', // 10MB max
+            'carrier' => 'nullable|string|max:50',
+            'proof_of_purchase' => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:10240', // 10MB max
         ];
     }
 
     /**
-     * Get custom messages for validator errors.
-     *
-     * @return array
+     * Get custom error messages
      */
     public function messages(): array
     {
         return [
+            'authorize' => 'Cannot add items - order is already being processed or has been completed.',
             'product_name.required' => 'Product name is required.',
-            'product_name.max' => 'Product name cannot exceed 255 characters.',
-            'product_url.url' => 'Please provide a valid URL.',
             'quantity.required' => 'Quantity is required.',
             'quantity.min' => 'Quantity must be at least 1.',
-            'quantity.max' => 'Quantity cannot exceed 99,999.',
-            'declared_value.numeric' => 'Declared value must be a number.',
-            'declared_value.max' => 'Declared value cannot exceed $999,999.99.',
-            'proof_of_purchase.file' => 'Proof of purchase must be a file.',
-            'proof_of_purchase.mimes' => 'Proof of purchase must be a PDF, JPG, JPEG, or PNG file.',
-            'proof_of_purchase.max' => 'Proof of purchase file cannot exceed 10MB.',
+            'declared_value.required' => 'Declared value is required.',
+            'declared_value.min' => 'Declared value must be at least $0.01.',
+            'proof_of_purchase.mimes' => 'Proof of purchase must be a JPG, PNG, or PDF file.',
+            'proof_of_purchase.max' => 'Proof of purchase file size cannot exceed 10MB.',
         ];
     }
 }

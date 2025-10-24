@@ -265,19 +265,60 @@ class Order extends Model
         ]);
     }
 
+    /**
+     * UPDATED: Reopen order for editing
+     * Can only reopen from awaiting_packages or packages_complete
+     * Cannot reopen once processing has started
+     */
     public function reopenForEditing(): void
     {
-        if ($this->status !== self::STATUS_AWAITING_PACKAGES) {
-            throw new \Exception('Order can only be reopened from awaiting packages status');
-        }
-
-        if ($this->arrivedItems()->count() > 0) {
-            throw new \Exception('Cannot reopen order - some packages have already arrived');
+        // STRICT CHECK: Only allow reopening from these two specific statuses
+        if (!in_array($this->status, [self::STATUS_AWAITING_PACKAGES, self::STATUS_PACKAGES_COMPLETE])) {
+            // Provide helpful error messages based on current status
+            if ($this->status === self::STATUS_PROCESSING) {
+                throw new \Exception('Cannot reopen order - it is currently being processed by our team. Please contact support if you need to make changes.');
+            }
+            
+            if ($this->status === self::STATUS_SHIPPED) {
+                throw new \Exception('Cannot reopen order - it has already been shipped. Please contact support for assistance.');
+            }
+            
+            if ($this->status === self::STATUS_DELIVERED) {
+                throw new \Exception('Cannot reopen order - it has already been delivered. Please contact support if you have any issues.');
+            }
+            
+            if (in_array($this->status, [self::STATUS_AWAITING_PAYMENT, self::STATUS_PAID])) {
+                throw new \Exception('Cannot reopen order - invoice has already been sent or payment has been received. Please contact support for assistance.');
+            }
+            
+            if ($this->status === self::STATUS_COLLECTING) {
+                throw new \Exception('Order is already open for editing.');
+            }
+            
+            throw new \Exception('Order cannot be reopened in current status');
         }
 
         $this->update([
             'status' => self::STATUS_COLLECTING,
             'completed_at' => null,
+        ]);
+
+        Log::info('Order reopened for editing', [
+            'order_id' => $this->id,
+            'order_number' => $this->order_number,
+            'arrived_items_count' => $this->arrivedItems()->count(),
+            'pending_items_count' => $this->pendingItems()->count(),
+        ]);
+    }
+
+    /**
+     * Check if order can be reopened (user-facing check)
+     */
+    public function canBeReopened(): bool
+    {
+        return in_array($this->status, [
+            self::STATUS_AWAITING_PACKAGES,
+            self::STATUS_PACKAGES_COMPLETE
         ]);
     }
 

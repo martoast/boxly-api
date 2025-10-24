@@ -2,9 +2,8 @@
 
 namespace App\Http\Requests;
 
-use App\Models\OrderItem;
+use App\Models\Order;
 use Illuminate\Foundation\Http\FormRequest;
-use Illuminate\Validation\Rule;
 
 class UpdateOrderItemRequest extends FormRequest
 {
@@ -13,12 +12,23 @@ class UpdateOrderItemRequest extends FormRequest
      */
     public function authorize(): bool
     {
-        // Check if user owns the order
         $order = $this->route('order');
         $item = $this->route('item');
         
-        return $order->user_id === $this->user()->id && 
-               $item->order_id === $order->id;
+        // STRICT: Only allow updates before processing starts
+        $validStatus = in_array($order->status, [
+            Order::STATUS_COLLECTING,
+            Order::STATUS_AWAITING_PACKAGES,
+            Order::STATUS_PACKAGES_COMPLETE
+        ]);
+        
+        $isOwner = $order->user_id === $this->user()->id;
+        $itemBelongsToOrder = $item->order_id === $order->id;
+        
+        // STRICT: Users cannot modify items that have already arrived
+        $canModify = !$item->arrived;
+        
+        return $isOwner && $itemBelongsToOrder && $validStatus && $canModify;
     }
 
     /**
@@ -27,14 +37,28 @@ class UpdateOrderItemRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'product_url' => 'sometimes|required|url|max:1000',
-            'quantity' => 'sometimes|required|integer|min:1|max:99',
-            'tracking_number' => 'nullable|string|max:255',
-            'tracking_url' => 'nullable|url|max:1000',
-            'carrier' => [
-                'nullable',
-                Rule::in(array_keys(OrderItem::CARRIERS))
-            ],
+            'product_url' => 'sometimes|nullable|url|max:500',
+            'product_name' => 'sometimes|required|string|max:255',
+            'quantity' => 'sometimes|required|integer|min:1|max:100',
+            'declared_value' => 'sometimes|required|numeric|min:0.01|max:99999.99',
+            'tracking_number' => 'sometimes|nullable|string|max:100',
+            'tracking_url' => 'sometimes|nullable|url|max:500',
+            'carrier' => 'sometimes|nullable|string|max:50',
+        ];
+    }
+
+    /**
+     * Get custom error messages
+     */
+    public function messages(): array
+    {
+        return [
+            'authorize' => 'You cannot modify items that have already arrived at the warehouse or orders being processed.',
+            'product_name.required' => 'Product name is required.',
+            'quantity.required' => 'Quantity is required.',
+            'quantity.min' => 'Quantity must be at least 1.',
+            'declared_value.required' => 'Declared value is required.',
+            'declared_value.min' => 'Declared value must be at least $0.01.',
         ];
     }
 }
