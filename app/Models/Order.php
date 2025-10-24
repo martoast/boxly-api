@@ -105,10 +105,6 @@ class Order extends Model
     {
         parent::boot();
 
-        // Webhook removed - was causing timeout
-        // To re-enable: make sure queue worker is running and QUEUE_CONNECTION=database in .env
-        // Then uncomment the code below:
-        
         static::created(function ($order) {
             try {
                 \App\Jobs\SendOrderPlacedWebhookJob::dispatch($order);
@@ -249,6 +245,10 @@ class Order extends Model
         return round(($arrived / $total) * 100);
     }
 
+    /**
+     * UPDATED: Mark order as complete
+     * Now includes check to see if all items have already arrived
+     */
     public function markAsComplete(): void
     {
         if ($this->status !== self::STATUS_COLLECTING) {
@@ -259,10 +259,37 @@ class Order extends Model
             throw new \Exception('Order must have at least one item');
         }
 
+        // First, mark as awaiting packages
         $this->update([
             'status' => self::STATUS_AWAITING_PACKAGES,
             'completed_at' => now(),
         ]);
+
+        Log::info('Order marked as complete', [
+            'order_id' => $this->id,
+            'order_number' => $this->order_number,
+            'total_items' => $this->items()->count(),
+            'arrived_items' => $this->arrivedItems()->count(),
+        ]);
+
+        // CRITICAL FIX: Immediately check if all items have already arrived
+        // This handles the case where user reopened order, removed items that hadn't arrived,
+        // and now all remaining items are already at the warehouse
+        if ($this->allItemsArrived()) {
+            Log::info('All items already arrived upon completion, auto-advancing to packages_complete', [
+                'order_id' => $this->id,
+                'order_number' => $this->order_number,
+            ]);
+            
+            // Calculate total weight from arrived items
+            $totalWeight = $this->calculateTotalWeight();
+            
+            // Auto-advance to packages_complete status
+            $this->update([
+                'status' => self::STATUS_PACKAGES_COMPLETE,
+                'total_weight' => $totalWeight,
+            ]);
+        }
     }
 
     /**
@@ -334,13 +361,22 @@ class Order extends Model
         ]);
     }
 
+    /**
+     * Check and update package arrival status
+     * This is called when individual items are marked as arrived
+     */
     public function checkAndUpdatePackageStatus(): void
     {
         if ($this->status === self::STATUS_AWAITING_PACKAGES && $this->allItemsArrived()) {
             $this->update([
                 'status' => self::STATUS_PACKAGES_COMPLETE,
                 'total_weight' => $this->calculateTotalWeight(),
-                'completed_at' => now(),
+            ]);
+            
+            Log::info('Order auto-advanced to packages_complete', [
+                'order_id' => $this->id,
+                'order_number' => $this->order_number,
+                'total_weight' => $this->total_weight,
             ]);
         }
     }
