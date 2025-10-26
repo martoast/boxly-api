@@ -30,6 +30,7 @@ class OrderItemController extends Controller
                 'tracking_number' => $request->tracking_number,
                 'tracking_url' => $request->tracking_url,
                 'carrier' => $request->carrier,
+                'estimated_delivery_date' => $request->estimated_delivery_date, // NEW
             ]);
 
             // Auto-detect retailer if URL is provided
@@ -123,8 +124,7 @@ class OrderItemController extends Controller
     }
 
     /**
-     * UPDATED: Remove an item from the order
-     * Strict checks: only before processing and not for arrived items
+     * Remove an item from the order
      */
     public function destroy(Request $request, Order $order, OrderItem $item)
     {

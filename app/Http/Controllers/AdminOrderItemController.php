@@ -32,6 +32,31 @@ class AdminOrderItemController extends Controller
             $query->where('arrived', true)->whereNull('weight');
         }
 
+        // NEW: Filter by estimated delivery date
+        if ($request->has('estimated_date')) {
+            $query->whereDate('estimated_delivery_date', $request->estimated_date);
+        }
+
+        // NEW: Filter by estimated delivery date range
+        if ($request->has('estimated_from') && $request->has('estimated_to')) {
+            $query->expectedBetween($request->estimated_from, $request->estimated_to);
+        } elseif ($request->has('estimated_from')) {
+            $query->whereDate('estimated_delivery_date', '>=', $request->estimated_from);
+        } elseif ($request->has('estimated_to')) {
+            $query->whereDate('estimated_delivery_date', '<=', $request->estimated_to);
+        }
+
+        // NEW: Filter overdue items
+        if ($request->has('overdue') && $request->overdue) {
+            $query->overdue();
+        }
+
+        // NEW: Filter arriving soon
+        if ($request->has('arriving_soon')) {
+            $days = $request->arriving_soon_days ?? 3;
+            $query->arrivingSoon($days);
+        }
+
         // Filter by search term
         if ($request->has('search')) {
             $search = $request->search;
@@ -57,14 +82,19 @@ class AdminOrderItemController extends Controller
             $query->whereDate('created_at', '<=', $request->to_date);
         }
 
-        // Sort by latest or by arrived_at if filtering by arrived
-        if ($request->has('status') && $request->status === 'arrived') {
-            $query->latest('arrived_at');
+        // Sort options
+        $sortBy = $request->get('sort_by', 'created_at');
+        $sortOrder = $request->get('sort_order', 'desc');
+
+        if ($sortBy === 'estimated_delivery_date') {
+            $query->orderBy('estimated_delivery_date', $sortOrder);
+        } elseif ($sortBy === 'arrived_at') {
+            $query->orderBy('arrived_at', $sortOrder);
         } else {
-            $query->latest();
+            $query->orderBy('created_at', $sortOrder);
         }
 
-        $packages = $query->paginate(20);
+        $packages = $query->paginate($request->get('per_page', 20));
 
         return response()->json([
             'success' => true,
@@ -138,12 +168,35 @@ class AdminOrderItemController extends Controller
             $query->where('tracking_number', 'like', "%{$request->tracking}%");
         }
 
+        // NEW: Filter by estimated delivery date
+        if ($request->has('estimated_date')) {
+            $query->whereDate('estimated_delivery_date', $request->estimated_date);
+        }
+
+        // NEW: Filter overdue
+        if ($request->has('overdue') && $request->overdue) {
+            $query->overdue();
+        }
+
+        // NEW: Filter arriving soon
+        if ($request->has('arriving_soon') && $request->arriving_soon) {
+            $days = $request->arriving_soon_days ?? 3;
+            $query->arrivingSoon($days);
+        }
+
         // Filter by date range
         if ($request->has('from_date')) {
             $query->whereDate('created_at', '>=', $request->from_date);
         }
 
-        $items = $query->oldest()->paginate(50);
+        // Sort by estimated delivery date if available, otherwise created_at
+        if ($request->has('sort_by_delivery')) {
+            $query->orderByRaw('estimated_delivery_date IS NULL, estimated_delivery_date ASC');
+        } else {
+            $query->oldest();
+        }
+
+        $items = $query->paginate(50);
 
         return response()->json([
             'success' => true,
@@ -230,6 +283,7 @@ class AdminOrderItemController extends Controller
             ]
         ]);
     }
+
     /**
      * Get items missing weight measurements
      */
@@ -239,6 +293,57 @@ class AdminOrderItemController extends Controller
             ->where('arrived', true)
             ->whereNull('weight')
             ->oldest('arrived_at')
+            ->paginate(50);
+
+        return response()->json([
+            'success' => true,
+            'data' => $items
+        ]);
+    }
+
+    /**
+     * NEW: Get items expected to arrive today
+     */
+    public function expectedToday()
+    {
+        $items = OrderItem::with(['order.user'])
+            ->where('arrived', false)
+            ->whereDate('estimated_delivery_date', today())
+            ->orderBy('estimated_delivery_date', 'asc')
+            ->paginate(50);
+
+        return response()->json([
+            'success' => true,
+            'data' => $items
+        ]);
+    }
+
+    /**
+     * NEW: Get overdue items
+     */
+    public function overdue()
+    {
+        $items = OrderItem::with(['order.user'])
+            ->overdue()
+            ->orderBy('estimated_delivery_date', 'asc')
+            ->paginate(50);
+
+        return response()->json([
+            'success' => true,
+            'data' => $items
+        ]);
+    }
+
+    /**
+     * NEW: Get items arriving soon
+     */
+    public function arrivingSoon(Request $request)
+    {
+        $days = $request->get('days', 3);
+
+        $items = OrderItem::with(['order.user'])
+            ->arrivingSoon($days)
+            ->orderBy('estimated_delivery_date', 'asc')
             ->paginate(50);
 
         return response()->json([

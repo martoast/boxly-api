@@ -24,11 +24,12 @@ class OrderItem extends Model
         'tracking_number',
         'tracking_url',
         'carrier',
+        'estimated_delivery_date', // NEW
         'arrived',
         'arrived_at',
         'weight',
         'dimensions',
-        // New proof of purchase fields
+        // Proof of purchase fields
         'proof_of_purchase_path',
         'proof_of_purchase_filename',
         'proof_of_purchase_mime_type',
@@ -41,6 +42,7 @@ class OrderItem extends Model
         'declared_value' => 'decimal:2',
         'arrived' => 'boolean',
         'arrived_at' => 'datetime',
+        'estimated_delivery_date' => 'date', // NEW
         'weight' => 'decimal:2',
         'dimensions' => 'array',
         'proof_of_purchase_size' => 'integer',
@@ -51,7 +53,7 @@ class OrderItem extends Model
      *
      * @var array
      */
-    protected $appends = ['proof_of_purchase_full_url'];
+    protected $appends = ['proof_of_purchase_full_url', 'is_overdue']; // Added is_overdue
 
     /**
      * Carrier constants
@@ -74,6 +76,34 @@ class OrderItem extends Model
     public function order(): BelongsTo
     {
         return $this->belongsTo(Order::class);
+    }
+
+    /**
+     * Check if item is overdue (estimated delivery date has passed but not arrived)
+     */
+    public function getIsOverdueAttribute(): bool
+    {
+        if (!$this->estimated_delivery_date || $this->arrived) {
+            return false;
+        }
+
+        return $this->estimated_delivery_date->isPast();
+    }
+
+    /**
+     * Get days until estimated delivery
+     */
+    public function getDaysUntilDeliveryAttribute(): ?int
+    {
+        if (!$this->estimated_delivery_date) {
+            return null;
+        }
+
+        if ($this->arrived) {
+            return null;
+        }
+
+        return now()->diffInDays($this->estimated_delivery_date, false);
     }
 
     /**
@@ -309,6 +339,54 @@ class OrderItem extends Model
     public function scopeMissingMeasurements($query)
     {
         return $query->whereNull('weight');
+    }
+
+    /**
+     * Scope for items with estimated delivery date
+     */
+    public function scopeWithEstimatedDelivery($query)
+    {
+        return $query->whereNotNull('estimated_delivery_date');
+    }
+
+    /**
+     * Scope for items expected to arrive by a certain date
+     */
+    public function scopeExpectedBy($query, $date)
+    {
+        return $query->whereNotNull('estimated_delivery_date')
+            ->whereDate('estimated_delivery_date', '<=', $date);
+    }
+
+    /**
+     * Scope for items expected to arrive between dates
+     */
+    public function scopeExpectedBetween($query, $startDate, $endDate)
+    {
+        return $query->whereNotNull('estimated_delivery_date')
+            ->whereDate('estimated_delivery_date', '>=', $startDate)
+            ->whereDate('estimated_delivery_date', '<=', $endDate);
+    }
+
+    /**
+     * Scope for overdue items (estimated delivery passed but not arrived)
+     */
+    public function scopeOverdue($query)
+    {
+        return $query->where('arrived', false)
+            ->whereNotNull('estimated_delivery_date')
+            ->whereDate('estimated_delivery_date', '<', now());
+    }
+
+    /**
+     * Scope for arriving soon (within X days)
+     */
+    public function scopeArrivingSoon($query, $days = 3)
+    {
+        return $query->where('arrived', false)
+            ->whereNotNull('estimated_delivery_date')
+            ->whereDate('estimated_delivery_date', '>=', now())
+            ->whereDate('estimated_delivery_date', '<=', now()->addDays($days));
     }
 
     /**

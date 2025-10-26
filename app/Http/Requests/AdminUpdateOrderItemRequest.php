@@ -34,6 +34,7 @@ class AdminUpdateOrderItemRequest extends FormRequest
                 'nullable',
                 Rule::in(array_keys(OrderItem::CARRIERS))
             ],
+            'estimated_delivery_date' => 'nullable|date', // NEW - Admin can set past dates
             'arrived' => 'sometimes|boolean',
             'arrived_at' => 'nullable|date',
             'weight' => 'nullable|numeric|min:0.01|max:999.99',
@@ -59,6 +60,7 @@ class AdminUpdateOrderItemRequest extends FormRequest
             'weight.max' => 'Weight cannot exceed 999.99 kg.',
             'quantity.min' => 'Quantity must be at least 1.',
             'quantity.max' => 'Quantity cannot exceed 999.',
+            'estimated_delivery_date.date' => 'Please provide a valid delivery date.',
         ];
     }
 }

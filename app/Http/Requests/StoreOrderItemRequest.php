@@ -36,6 +36,7 @@ class StoreOrderItemRequest extends FormRequest
             'tracking_number' => 'nullable|string|max:100',
             'tracking_url' => 'nullable|url|max:500',
             'carrier' => 'nullable|string|max:50',
+            'estimated_delivery_date' => 'nullable|date|after_or_equal:today', // NEW
             'proof_of_purchase' => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:10240', // 10MB max
         ];
     }
@@ -52,6 +53,8 @@ class StoreOrderItemRequest extends FormRequest
             'quantity.min' => 'Quantity must be at least 1.',
             'declared_value.required' => 'Declared value is required.',
             'declared_value.min' => 'Declared value must be at least $0.01.',
+            'estimated_delivery_date.date' => 'Please provide a valid delivery date.',
+            'estimated_delivery_date.after_or_equal' => 'Estimated delivery date cannot be in the past.',
             'proof_of_purchase.mimes' => 'Proof of purchase must be a JPG, PNG, or PDF file.',
             'proof_of_purchase.max' => 'Proof of purchase file size cannot exceed 10MB.',
         ];
