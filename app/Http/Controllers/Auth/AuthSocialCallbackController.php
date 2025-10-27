@@ -19,10 +19,8 @@ final class AuthSocialCallbackController extends Controller
     public function __invoke(SocialProviderEnum $provider, Request $request)
     {
         try {
-            // Get user data from OAuth provider
             $socialUser = Socialite::driver($provider->value)->stateless()->user();
             
-            // Decode the state parameter to get tracking data
             $trackingData = null;
             $redirectPath = '/app';
             
@@ -39,26 +37,21 @@ final class AuthSocialCallbackController extends Controller
                 }
             }
 
-            // Check if user already exists by email
             $user = User::where('email', $socialUser->email)->first();
 
             if ($user) {
-                // User exists - update provider if needed
                 if (!$user->provider) {
                     $user->update(['provider' => $provider->value]);
                 }
                 
-                // If user doesn't have registration source and we have tracking data, update it
                 if (!$user->registration_source && $trackingData) {
                     $user->update(['registration_source' => $trackingData]);
                 }
 
-                // Log the user in
                 Auth::login($user);
 
-                // Check if they need to complete profile
-                if (!$user->phone || !$user->user_type) {
-                    // Pass tracking data to complete-profile page
+                // Only check phone requirement for profile completion
+                if (!$user->phone) {
                     $completeProfileUrl = config('app.frontend_url').'/app/account/complete-profile';
                     if ($trackingData) {
                         $completeProfileUrl .= '?tracking=' . urlencode($trackingData);
@@ -70,11 +63,10 @@ final class AuthSocialCallbackController extends Controller
                     return redirect()->to($completeProfileUrl);
                 }
 
-                // Redirect to intended path
                 return redirect()->to(config('app.frontend_url').$redirectPath);
             }
 
-            // For new social sign-ups, create the user with tracking data
+            // Create new user without user_type requirement
             $newUser = User::create([
                 'name' => $socialUser->name ?? $socialUser->nickname ?? 'User',
                 'email' => $socialUser->email,
@@ -82,10 +74,10 @@ final class AuthSocialCallbackController extends Controller
                 'password' => Hash::make(Str::random(32)),
                 'provider' => $provider->value,
                 'preferred_language' => 'es',
-                'registration_source' => $trackingData, // Store tracking data immediately
+                'registration_source' => $trackingData,
+                'user_type' => null, // No longer required
             ]);
 
-            // Create Stripe customer if using Cashier
             if (method_exists($newUser, 'createAsStripeCustomer')) {
                 try {
                     $newUser->createAsStripeCustomer([
@@ -104,10 +96,8 @@ final class AuthSocialCallbackController extends Controller
                 'has_tracking' => !empty($trackingData),
             ]);
 
-            // Log the new user in
             Auth::login($newUser);
 
-            // Redirect to complete profile page with tracking preserved
             $completeProfileUrl = config('app.frontend_url').'/app/account/complete-profile';
             if ($redirectPath && $redirectPath !== '/app') {
                 $completeProfileUrl .= '?redirect=' . urlencode($redirectPath);

@@ -31,7 +31,7 @@ class ProfileController extends Controller
                 'preferred_language' => $user->preferred_language,
                 'address' => $user->address,
                 'has_complete_address' => $user->hasCompleteAddress(),
-                'registration_source' => $user->getRegistrationSourceData(), // Returns parsed array
+                'registration_source' => $user->getRegistrationSourceData(),
                 'created_at' => $user->created_at,
                 // Stats
                 'total_orders' => $user->orders()->count(),
@@ -55,10 +55,9 @@ class ProfileController extends Controller
     {
         $user = $request->user();
         
-        // Track if this is the first time setting critical fields
+        // Track if this is the first time setting phone
         $isFirstTimeSettingPhone = !$user->phone && $request->has('phone');
-        $isFirstTimeSettingUserType = !$user->user_type && $request->has('user_type');
-        $wasProfileIncomplete = !$user->phone || !$user->user_type;
+        $wasProfileIncomplete = !$user->phone;
         
         $validated = $request->validate([
             'name' => 'sometimes|required|string|max:255',
@@ -80,18 +79,17 @@ class ProfileController extends Controller
             'estado' => 'nullable|string|max:100',
             'postal_code' => 'nullable|string|regex:/^\d{5}$/',
             'user_type' => [
-                'sometimes',
+                'nullable',
                 Rule::in(['expat', 'business', 'shopper']),
-                Rule::requiredIf(!$user->user_type),
             ],
-            'registration_source' => 'nullable|json', // Now expects JSON
+            'registration_source' => 'nullable|json',
         ], [
             'email.unique' => 'This email is already in use.',
             'postal_code.regex' => 'Postal code must be 5 digits.',
             'registration_source.json' => 'Invalid tracking data format.',
         ]);
         
-        // Prevent changing user type if already set
+        // Prevent changing user type if already set (optional business logic)
         if ($user->user_type && isset($validated['user_type']) && $validated['user_type'] !== $user->user_type) {
             return response()->json([
                 'success' => false,
@@ -105,7 +103,6 @@ class ProfileController extends Controller
         // Handle registration_source JSON encoding
         if (isset($validated['registration_source'])) {
             if (is_string($validated['registration_source'])) {
-                // It's already a JSON string, validate and keep it
                 $decoded = json_decode($validated['registration_source'], true);
                 if (json_last_error() !== JSON_ERROR_NONE) {
                     return response()->json([
@@ -117,30 +114,28 @@ class ProfileController extends Controller
                     ], 422);
                 }
             } elseif (is_array($validated['registration_source'])) {
-                // Convert array to JSON string for storage
                 $validated['registration_source'] = json_encode($validated['registration_source']);
             }
         }
         
         // Update language preference based on user type if setting for first time
-        if ($isFirstTimeSettingUserType && isset($validated['user_type'])) {
+        if (isset($validated['user_type']) && !$user->user_type) {
             $validated['preferred_language'] = $validated['user_type'] === 'expat' ? 'en' : 'es';
         }
         
         $user->update($validated);
         
-        // If profile was incomplete and is now complete, send to CRM
-        if ($wasProfileIncomplete && $user->phone && $user->user_type) {
+        // If profile was incomplete and phone is now set, send to CRM
+        if ($wasProfileIncomplete && $user->phone) {
             try {
-                // Get registration source data for CRM
                 $sourceData = $user->getRegistrationSourceData();
                 
                 SendFunnelCaptureWebhookJob::dispatch(
                     $user->name,
                     $user->email,
                     $user->phone,
-                    $user->user_type,
-                    $sourceData // Send the full tracking data array
+                    $user->user_type, // Can be null
+                    $sourceData
                 );
                 
                 Log::info('Sent completed profile to GoHighLevel', [

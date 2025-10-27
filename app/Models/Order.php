@@ -105,18 +105,6 @@ class Order extends Model
     {
         parent::boot();
 
-        static::created(function ($order) {
-            try {
-                \App\Jobs\SendOrderPlacedWebhookJob::dispatch($order);
-                Log::info('Dispatched SendOrderPlacedWebhookJob for new order', ['order_id' => $order->id]);
-            } catch (\Exception $e) {
-                Log::error('Failed to dispatch SendOrderPlacedWebhookJob for new order', [
-                    'order_id' => $order->id,
-                    'error' => $e->getMessage(),
-                ]);
-            }
-        });
-
         static::updating(function ($order) {
             if ($order->isDirty('status')) {
                 $order->previousStatus = $order->getOriginal('status');

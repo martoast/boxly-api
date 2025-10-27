@@ -57,22 +57,21 @@ class FortifyServiceProvider extends ServiceProvider
                 Log::error('Failed to create Stripe customer for user ' . $user->id . ': ' . $e->getMessage());
             }
 
-            // ✅ FIXED: Only send webhook if profile is COMPLETE
-            // For OAuth users, webhook will be sent AFTER profile completion
-            if ($user->phone && $user->user_type) {
+            // Send webhook only if phone is set (profile is complete enough)
+            if ($user->phone) {
                 try {
                     SendFunnelCaptureWebhookJob::dispatch(
                         name: $user->name,
                         email: $user->email,
                         phone: $user->phone,
-                        userType: $user->user_type,
+                        userType: $user->user_type, // Can be null
                         registrationSource: $user->registration_source
                     );
                     
                     Log::info('✅ Dispatched webhook for complete profile', [
                         'user_id' => $user->id,
                         'email' => $user->email,
-                        'user_type' => $user->user_type,
+                        'user_type' => $user->user_type ?? 'not set',
                         'trigger' => 'User::created',
                     ]);
                 } catch (\Exception $e) {
@@ -83,7 +82,6 @@ class FortifyServiceProvider extends ServiceProvider
                     'user_id' => $user->id,
                     'email' => $user->email,
                     'has_phone' => !empty($user->phone),
-                    'has_user_type' => !empty($user->user_type),
                     'note' => 'Webhook will be sent after profile completion'
                 ]);
             }

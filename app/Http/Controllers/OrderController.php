@@ -249,6 +249,10 @@ class OrderController extends Controller
     {
         try {
             $order->markAsComplete();
+            
+            // Send webhook with full order and items
+            \App\Jobs\SendOrderPlacedWebhookJob::dispatch($order->fresh()->load('user', 'items'));
+            
             return response()->json([
                 'success' => true,
                 'message' => 'Order marked as complete. We\'ll notify you when your packages arrive.',
