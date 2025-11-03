@@ -17,6 +17,8 @@ use App\Http\Controllers\Auth\AuthSocialCallbackController;
 use App\Http\Controllers\PaymentMethodController;
 use App\Http\Controllers\TrackingController;
 use App\Http\Controllers\FunnelCaptureController;
+use App\Http\Controllers\AdminBusinessExpenseController;
+use App\Http\Controllers\UnifiedAdminDashboardController;
 
 Route::post('/webhooks/stripe', [StripeWebhookController::class, 'handle']);
 
@@ -118,7 +120,8 @@ Route::middleware('auth:sanctum')->group(function () {
     
     Route::middleware('admin')->prefix('admin')->group(function () {
         
-        Route::get('/dashboard', [AdminOrderController::class, 'dashboard']);
+        Route::get('/dashboard', [UnifiedAdminDashboardController::class, 'index']);
+        Route::put('/dashboard/manual-metrics', [UnifiedAdminDashboardController::class, 'updateManualMetrics']);
         
         Route::prefix('management')->group(function () {
             Route::post('/orders', [AdminOrderManagementController::class, 'createOrder']);
@@ -185,6 +188,19 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/{customer}', [AdminCustomerController::class, 'show']);
             Route::get('/{customer}/orders', [AdminCustomerController::class, 'orders']);
         });
+
+        // Business Expenses
+        Route::prefix('expenses')->group(function () {
+            Route::get('/', [AdminBusinessExpenseController::class, 'index']);
+            Route::post('/', [AdminBusinessExpenseController::class, 'store']);
+            Route::get('/categories', [AdminBusinessExpenseController::class, 'categories']);
+            Route::post('/bulk-import', [AdminBusinessExpenseController::class, 'bulkImport']);
+            Route::get('/{expense}', [AdminBusinessExpenseController::class, 'show']);
+            Route::put('/{expense}', [AdminBusinessExpenseController::class, 'update']);
+            Route::delete('/{expense}', [AdminBusinessExpenseController::class, 'destroy']);
+        });
+
+        
     });
 });
 

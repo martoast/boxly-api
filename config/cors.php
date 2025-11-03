@@ -30,6 +30,10 @@ return [
         'payment-methods/*',
         'track',
         'funnel-capture',
+        'expenses',
+        'expenses/*',
+        'financial-dashboard',
+        'financial-dashboard/*',
         'user-types'
     ],
 
