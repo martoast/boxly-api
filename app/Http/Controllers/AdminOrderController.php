@@ -266,20 +266,6 @@ class AdminOrderController extends Controller
 
     public function destroy(Request $request, Order $order)
     {
-        if ($order->status !== Order::STATUS_COLLECTING) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Cannot delete order that has been completed. Only orders still adding products can be deleted.'
-            ], 400);
-        }
-
-        if ($order->arrivedItems()->count() > 0) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Cannot delete order with packages that have already arrived at the warehouse.'
-            ], 400);
-        }
-
         DB::beginTransaction();
 
         try {
@@ -288,13 +274,28 @@ class AdminOrderController extends Controller
             $userId = $order->user_id;
             $userEmail = $order->user->email;
 
+            // Delete all items first (this will trigger model events to delete files)
             $order->items()->each(function ($item) {
                 $item->delete();
             });
 
+            // Delete GIA file if exists
+            if ($order->gia_path) {
+                $order->deleteGia();
+            }
+
+            // Delete the order
             $order->delete();
 
             DB::commit();
+
+            Log::info('Admin deleted order', [
+                'order_number' => $orderNumber,
+                'tracking_number' => $trackingNumber,
+                'user_id' => $userId,
+                'user_email' => $userEmail,
+                'admin_id' => $request->user()->id,
+            ]);
 
             return response()->json([
                 'success' => true,
@@ -302,6 +303,14 @@ class AdminOrderController extends Controller
             ]);
         } catch (\Exception $e) {
             DB::rollBack();
+
+            Log::error('Admin failed to delete order', [
+                'order_id' => $order->id,
+                'order_number' => $order->order_number ?? null,
+                'admin_id' => $request->user()->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
 
             return response()->json([
                 'success' => false,

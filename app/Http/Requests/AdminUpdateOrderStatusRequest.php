@@ -5,7 +5,6 @@ namespace App\Http\Requests;
 use App\Models\Order;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
-use Illuminate\Validation\ValidationException;
 
 class AdminUpdateOrderStatusRequest extends FormRequest
 {
@@ -25,7 +24,7 @@ class AdminUpdateOrderStatusRequest extends FormRequest
                 'required_if:status,' . Order::STATUS_SHIPPED,
                 'nullable',
                 'date',
-                'after:today'
+                // Removed 'after:today' to allow admins to set any date
             ],
             'notes' => [
                 'nullable',
@@ -35,36 +34,40 @@ class AdminUpdateOrderStatusRequest extends FormRequest
         ];
     }
 
+    /**
+     * REMOVED: No status transition validation for admins
+     * Admins have full control to move orders to any status they need
+     */
     protected function passedValidation(): void
     {
+        // Admin override: No restrictions on status transitions
+        // Admins can manually fix any order state as needed
+        
+        // Optional: Log significant status changes for audit trail
         $order = $this->route('order');
         $newStatus = $this->status;
         $currentStatus = $order->status;
-
-        $validTransitions = [
-            Order::STATUS_COLLECTING => [Order::STATUS_AWAITING_PACKAGES, Order::STATUS_CANCELLED],
-            Order::STATUS_AWAITING_PACKAGES => [Order::STATUS_PACKAGES_COMPLETE, Order::STATUS_COLLECTING, Order::STATUS_CANCELLED],
-            Order::STATUS_PACKAGES_COMPLETE => [Order::STATUS_PROCESSING, Order::STATUS_CANCELLED],
-            Order::STATUS_PROCESSING => [Order::STATUS_SHIPPED, Order::STATUS_CANCELLED],
-            Order::STATUS_SHIPPED => [Order::STATUS_DELIVERED, Order::STATUS_CANCELLED],
-            Order::STATUS_DELIVERED => [Order::STATUS_AWAITING_PAYMENT, Order::STATUS_CANCELLED],
-            Order::STATUS_AWAITING_PAYMENT => [Order::STATUS_PAID, Order::STATUS_CANCELLED],
-            Order::STATUS_PAID => [],
-            Order::STATUS_CANCELLED => [],
-        ];
-
-        if ($newStatus !== $currentStatus && !in_array($newStatus, $validTransitions[$currentStatus] ?? [])) {
-            throw ValidationException::withMessages([
-                'status' => ["Cannot transition from '{$currentStatus}' to '{$newStatus}'. Invalid status progression."]
+        
+        if ($newStatus !== $currentStatus) {
+            \Illuminate\Support\Facades\Log::info('Admin manual status change', [
+                'admin_id' => $this->user()->id,
+                'order_id' => $order->id,
+                'order_number' => $order->order_number,
+                'from_status' => $currentStatus,
+                'to_status' => $newStatus,
+                'notes' => $this->notes,
             ]);
         }
-
-        if ($newStatus === Order::STATUS_PACKAGES_COMPLETE) {
-            if (!$order->allItemsArrived()) {
-                throw ValidationException::withMessages([
-                    'status' => ['Cannot mark as packages complete. Not all items have arrived.']
-                ]);
-            }
-        }
+    }
+    
+    public function messages(): array
+    {
+        return [
+            'status.required' => 'Status is required.',
+            'status.in' => 'Invalid status selected.',
+            'estimated_delivery_date.required_if' => 'Estimated delivery date is required when marking as shipped.',
+            'estimated_delivery_date.date' => 'Please provide a valid date.',
+            'notes.max' => 'Notes cannot exceed 500 characters.',
+        ];
     }
 }
