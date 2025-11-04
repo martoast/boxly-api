@@ -18,19 +18,18 @@ class AdminOrderController extends Controller
     public function index(Request $request)
     {
         $query = Order::with(['user', 'items']);
-
         if ($request->has('status')) {
             $query->status($request->status);
         }
 
-        // NEW: Filter by orders with items expected to arrive by date
+        // Filter by orders with items expected to arrive by date
         if ($request->has('items_expected_by')) {
             $query->whereHas('items', function ($q) use ($request) {
                 $q->expectedBy($request->items_expected_by);
             });
         }
 
-        // NEW: Filter by orders with overdue items
+        // Filter by orders with overdue items
         if ($request->has('has_overdue_items') && $request->has_overdue_items) {
             $query->whereHas('items', function ($q) {
                 $q->overdue();
@@ -112,30 +111,25 @@ class AdminOrderController extends Controller
             case Order::STATUS_PROCESSING:
                 $data['processing_started_at'] = now();
                 break;
-
             case Order::STATUS_AWAITING_PAYMENT:
                 if (!$order->quote_sent_at) {
                     $data['quote_sent_at'] = now();
                     $data['quote_expires_at'] = now()->addDays(7);
                 }
                 break;
-
             case Order::STATUS_PAID:
                 if (!$order->paid_at) {
                     $data['paid_at'] = now();
                 }
                 break;
-
             case Order::STATUS_SHIPPED:
                 $data['estimated_delivery_date'] = $request->estimated_delivery_date;
                 $data['shipped_at'] = now();
                 break;
-
             case Order::STATUS_DELIVERED:
                 $data['actual_delivery_date'] = now();
                 $data['delivered_at'] = now();
                 break;
-
             case Order::STATUS_CANCELLED:
                 if ($request->has('notes')) {
                     $data['notes'] = $order->notes . "\nCancelled: " . $request->notes;
@@ -166,11 +160,9 @@ class AdminOrderController extends Controller
         try {
             if ($request->hasFile('gia_file')) {
                 $file = $request->file('gia_file');
-
                 $user = $order->user;
                 $userName = Str::slug($user->name);
                 $storagePath = "users/{$userName}-{$user->id}/orders/{$order->order_number}/shipping";
-
                 $filename = "gia-" . time() . ".pdf";
 
                 $path = Storage::disk('spaces')->putFileAs(
@@ -225,7 +217,6 @@ class AdminOrderController extends Controller
             ]);
         } catch (\Exception $e) {
             DB::rollBack();
-
             if (isset($path)) {
                 Storage::disk('spaces')->delete($path);
             }
@@ -267,14 +258,13 @@ class AdminOrderController extends Controller
     public function destroy(Request $request, Order $order)
     {
         DB::beginTransaction();
-
         try {
             $orderNumber = $order->order_number;
             $trackingNumber = $order->tracking_number;
             $userId = $order->user_id;
             $userEmail = $order->user->email;
 
-            // Delete all items first (this will trigger model events to delete files)
+            // Delete items first
             $order->items()->each(function ($item) {
                 $item->delete();
             });
@@ -284,9 +274,7 @@ class AdminOrderController extends Controller
                 $order->deleteGia();
             }
 
-            // Delete the order
             $order->delete();
-
             DB::commit();
 
             Log::info('Admin deleted order', [
@@ -315,6 +303,110 @@ class AdminOrderController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to delete order. Please try again.',
+                'error' => config('app.debug') ? $e->getMessage() : null
+            ], 500);
+        }
+    }
+
+    /**
+     * Bulk delete orders
+     */
+    public function bulkDestroy(Request $request)
+    {
+        $request->validate([
+            'order_ids' => 'required|array|min:1|max:100',
+            'order_ids.*' => 'required|integer|exists:orders,id',
+        ]);
+
+        DB::beginTransaction();
+        try {
+            $orderIds = $request->order_ids;
+            $orders = Order::with(['user', 'items'])->whereIn('id', $orderIds)->get();
+
+            if ($orders->isEmpty()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No orders found for deletion.'
+                ], 404);
+            }
+
+            $deletedOrders = [];
+            $failedOrders = [];
+
+            foreach ($orders as $order) {
+                try {
+                    $orderData = [
+                        'id' => $order->id,
+                        'order_number' => $order->order_number,
+                        'tracking_number' => $order->tracking_number,
+                        'user_id' => $order->user_id,
+                        'user_email' => $order->user->email,
+                        'status' => $order->status,
+                    ];
+
+                    $order->items()->each(fn($item) => $item->delete());
+
+                    if ($order->gia_path) {
+                        $order->deleteGia();
+                    }
+
+                    $order->delete();
+                    $deletedOrders[] = $orderData;
+                } catch (\Exception $e) {
+                    $failedOrders[] = [
+                        'id' => $order->id,
+                        'order_number' => $order->order_number,
+                        'error' => $e->getMessage(),
+                    ];
+
+                    Log::error('Failed to delete order in bulk', [
+                        'order_id' => $order->id,
+                        'order_number' => $order->order_number,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+
+            DB::commit();
+
+            Log::info('Bulk order deletion completed', [
+                'admin_id' => $request->user()->id,
+                'requested_count' => count($orderIds),
+                'deleted_count' => count($deletedOrders),
+                'failed_count' => count($failedOrders),
+            ]);
+
+            $message = count($deletedOrders) . ' order(s) deleted successfully.';
+            if (count($failedOrders) > 0) {
+                $message .= ' ' . count($failedOrders) . ' order(s) failed to delete.';
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => $message,
+                'data' => [
+                    'deleted' => $deletedOrders,
+                    'failed' => $failedOrders,
+                    'summary' => [
+                        'total_requested' => count($orderIds),
+                        'deleted_count' => count($deletedOrders),
+                        'failed_count' => count($failedOrders),
+                    ]
+                ]
+            ]);
+        } catch (\Exception $e) {
+            DB::rollBack();
+
+            Log::error('Bulk order deletion failed', [
+                'admin_id' => $request->user()->id,
+                'order_ids' => $orderIds ?? [],
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Bulk deletion failed. No orders were deleted.',
                 'error' => config('app.debug') ? $e->getMessage() : null
             ], 500);
         }

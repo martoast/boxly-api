@@ -138,6 +138,8 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/ready-to-process', [AdminOrderController::class, 'readyToProcess']);
             Route::get('/ready-to-ship', [AdminOrderController::class, 'readyToShip']);
             Route::get('/ready-for-quote', [AdminQuoteController::class, 'ordersReadyForQuote']);
+
+            Route::delete('/bulk', [AdminOrderController::class, 'bulkDestroy']);
             
             Route::get('/{order}', [AdminOrderController::class, 'show']);
             Route::put('/{order}/status', [AdminOrderController::class, 'updateStatus']);
