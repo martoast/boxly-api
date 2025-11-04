@@ -7,11 +7,17 @@ use Illuminate\Http\Request;
 
 class AdminCustomerController extends Controller
 {
-    /**
-     * Display a listing of customers.
-     */
+    
     public function index(Request $request)
     {
+    // Validate per_page parameter
+    $request->validate([
+    'per_page' => 'nullable|integer|min:1|max:500',
+    'limit' => 'nullable|integer|min:1|max:500', // Accept both per_page and limit
+    ]);
+        // Use per_page or limit, default to 20
+        $perPage = $request->input('per_page') ?? $request->input('limit') ?? 20;
+
         $query = User::withCount(['orders', 'activeOrders'])
             ->where('role', 'customer');
 
@@ -20,8 +26,8 @@ class AdminCustomerController extends Controller
             $search = $request->search;
             $query->where(function ($q) use ($search) {
                 $q->where('name', 'like', "%{$search}%")
-                  ->orWhere('email', 'like', "%{$search}%")
-                  ->orWhere('phone', 'like', "%{$search}%");
+                ->orWhere('email', 'like', "%{$search}%")
+                ->orWhere('phone', 'like', "%{$search}%");
             });
         }
 
@@ -30,7 +36,7 @@ class AdminCustomerController extends Controller
             $query->has('activeOrders');
         }
 
-        $customers = $query->latest()->paginate(20);
+        $customers = $query->latest()->paginate($perPage);
 
         return response()->json([
             'success' => true,

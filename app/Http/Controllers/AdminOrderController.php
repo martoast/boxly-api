@@ -17,7 +17,17 @@ class AdminOrderController extends Controller
 {
     public function index(Request $request)
     {
+        // Validate per_page parameter
+        $request->validate([
+            'per_page' => 'nullable|integer|min:1|max:500',
+            'limit' => 'nullable|integer|min:1|max:500',
+        ]);
+
+        // Use per_page or limit, default to 20
+        $perPage = $request->input('per_page') ?? $request->input('limit') ?? 20;
+
         $query = Order::with(['user', 'items']);
+
         if ($request->has('status')) {
             $query->status($request->status);
         }
@@ -48,7 +58,7 @@ class AdminOrderController extends Controller
             });
         }
 
-        $orders = $query->latest()->paginate(20);
+        $orders = $query->latest()->paginate($perPage);
 
         return response()->json([
             'success' => true,
@@ -64,12 +74,19 @@ class AdminOrderController extends Controller
         ]);
     }
 
-    public function readyToShip()
+    public function readyToShip(Request $request)
     {
+        $request->validate([
+            'per_page' => 'nullable|integer|min:1|max:500',
+            'limit' => 'nullable|integer|min:1|max:500',
+        ]);
+
+        $perPage = $request->input('per_page') ?? $request->input('limit') ?? 20;
+
         $orders = Order::with(['user', 'items'])
             ->status(Order::STATUS_PROCESSING)
             ->oldest('processing_started_at')
-            ->paginate(20);
+            ->paginate($perPage);
 
         return response()->json([
             'success' => true,
@@ -77,12 +94,19 @@ class AdminOrderController extends Controller
         ]);
     }
 
-    public function readyToProcess()
+    public function readyToProcess(Request $request)
     {
+        $request->validate([
+            'per_page' => 'nullable|integer|min:1|max:500',
+            'limit' => 'nullable|integer|min:1|max:500',
+        ]);
+
+        $perPage = $request->input('per_page') ?? $request->input('limit') ?? 20;
+
         $orders = Order::with(['user', 'items'])
             ->status(Order::STATUS_PACKAGES_COMPLETE)
             ->oldest('updated_at')
-            ->paginate(20);
+            ->paginate($perPage);
 
         return response()->json([
             'success' => true,
@@ -90,12 +114,19 @@ class AdminOrderController extends Controller
         ]);
     }
 
-    public function needingQuotes()
+    public function needingQuotes(Request $request)
     {
+        $request->validate([
+            'per_page' => 'nullable|integer|min:1|max:500',
+            'limit' => 'nullable|integer|min:1|max:500',
+        ]);
+
+        $perPage = $request->input('per_page') ?? $request->input('limit') ?? 20;
+
         $orders = Order::with(['user', 'items'])
             ->status(Order::STATUS_PROCESSING)
             ->oldest('processing_started_at')
-            ->paginate(20);
+            ->paginate($perPage);
 
         return response()->json([
             'success' => true,
@@ -111,25 +142,30 @@ class AdminOrderController extends Controller
             case Order::STATUS_PROCESSING:
                 $data['processing_started_at'] = now();
                 break;
+
             case Order::STATUS_AWAITING_PAYMENT:
                 if (!$order->quote_sent_at) {
                     $data['quote_sent_at'] = now();
                     $data['quote_expires_at'] = now()->addDays(7);
                 }
                 break;
+
             case Order::STATUS_PAID:
                 if (!$order->paid_at) {
                     $data['paid_at'] = now();
                 }
                 break;
+
             case Order::STATUS_SHIPPED:
                 $data['estimated_delivery_date'] = $request->estimated_delivery_date;
                 $data['shipped_at'] = now();
                 break;
+
             case Order::STATUS_DELIVERED:
                 $data['actual_delivery_date'] = now();
                 $data['delivered_at'] = now();
                 break;
+
             case Order::STATUS_CANCELLED:
                 if ($request->has('notes')) {
                     $data['notes'] = $order->notes . "\nCancelled: " . $request->notes;
@@ -160,9 +196,11 @@ class AdminOrderController extends Controller
         try {
             if ($request->hasFile('gia_file')) {
                 $file = $request->file('gia_file');
+
                 $user = $order->user;
                 $userName = Str::slug($user->name);
                 $storagePath = "users/{$userName}-{$user->id}/orders/{$order->order_number}/shipping";
+
                 $filename = "gia-" . time() . ".pdf";
 
                 $path = Storage::disk('spaces')->putFileAs(
@@ -217,6 +255,7 @@ class AdminOrderController extends Controller
             ]);
         } catch (\Exception $e) {
             DB::rollBack();
+
             if (isset($path)) {
                 Storage::disk('spaces')->delete($path);
             }
@@ -258,13 +297,14 @@ class AdminOrderController extends Controller
     public function destroy(Request $request, Order $order)
     {
         DB::beginTransaction();
+
         try {
             $orderNumber = $order->order_number;
             $trackingNumber = $order->tracking_number;
             $userId = $order->user_id;
             $userEmail = $order->user->email;
 
-            // Delete items first
+            // Delete all items first (this will trigger model events to delete files)
             $order->items()->each(function ($item) {
                 $item->delete();
             });
@@ -274,7 +314,9 @@ class AdminOrderController extends Controller
                 $order->deleteGia();
             }
 
+            // Delete the order
             $order->delete();
+
             DB::commit();
 
             Log::info('Admin deleted order', [
@@ -316,9 +358,16 @@ class AdminOrderController extends Controller
         $request->validate([
             'order_ids' => 'required|array|min:1|max:100',
             'order_ids.*' => 'required|integer|exists:orders,id',
+        ], [
+            'order_ids.required' => 'No orders selected for deletion.',
+            'order_ids.array' => 'Invalid order selection format.',
+            'order_ids.min' => 'At least one order must be selected.',
+            'order_ids.max' => 'Cannot delete more than 100 orders at once.',
+            'order_ids.*.exists' => 'One or more selected orders do not exist.',
         ]);
 
         DB::beginTransaction();
+
         try {
             $orderIds = $request->order_ids;
             $orders = Order::with(['user', 'items'])->whereIn('id', $orderIds)->get();
@@ -344,14 +393,21 @@ class AdminOrderController extends Controller
                         'status' => $order->status,
                     ];
 
-                    $order->items()->each(fn($item) => $item->delete());
+                    // Delete all items first (this will trigger model events to delete files)
+                    $order->items()->each(function ($item) {
+                        $item->delete();
+                    });
 
+                    // Delete GIA file if exists
                     if ($order->gia_path) {
                         $order->deleteGia();
                     }
 
+                    // Delete the order
                     $order->delete();
+
                     $deletedOrders[] = $orderData;
+
                 } catch (\Exception $e) {
                     $failedOrders[] = [
                         'id' => $order->id,
@@ -359,7 +415,7 @@ class AdminOrderController extends Controller
                         'error' => $e->getMessage(),
                     ];
 
-                    Log::error('Failed to delete order in bulk', [
+                    Log::error('Failed to delete order in bulk operation', [
                         'order_id' => $order->id,
                         'order_number' => $order->order_number,
                         'error' => $e->getMessage(),
@@ -374,6 +430,8 @@ class AdminOrderController extends Controller
                 'requested_count' => count($orderIds),
                 'deleted_count' => count($deletedOrders),
                 'failed_count' => count($failedOrders),
+                'deleted_orders' => array_column($deletedOrders, 'order_number'),
+                'failed_orders' => array_column($failedOrders, 'order_number'),
             ]);
 
             $message = count($deletedOrders) . ' order(s) deleted successfully.';
@@ -394,6 +452,7 @@ class AdminOrderController extends Controller
                     ]
                 ]
             ]);
+
         } catch (\Exception $e) {
             DB::rollBack();
 
@@ -412,8 +471,15 @@ class AdminOrderController extends Controller
         }
     }
 
-    public function byStatus($status)
+    public function byStatus(Request $request, $status)
     {
+        $request->validate([
+            'per_page' => 'nullable|integer|min:1|max:500',
+            'limit' => 'nullable|integer|min:1|max:500',
+        ]);
+
+        $perPage = $request->input('per_page') ?? $request->input('limit') ?? 20;
+
         $validStatuses = [
             Order::STATUS_COLLECTING,
             Order::STATUS_AWAITING_PACKAGES,
@@ -465,7 +531,7 @@ class AdminOrderController extends Controller
                 break;
         }
 
-        $orders = $query->paginate(20);
+        $orders = $query->paginate($perPage);
 
         return response()->json([
             'success' => true,

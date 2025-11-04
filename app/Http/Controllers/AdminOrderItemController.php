@@ -10,12 +10,18 @@ use Illuminate\Http\Request;
 
 class AdminOrderItemController extends Controller
 {
-
     /**
      * Display a listing of all packages (items).
      */
     public function index(Request $request)
     {
+        $request->validate([
+            'per_page' => 'nullable|integer|min:1|max:500',
+            'limit' => 'nullable|integer|min:1|max:500',
+        ]);
+
+        $perPage = $request->input('per_page') ?? $request->input('limit') ?? 20;
+
         $query = OrderItem::with(['order.user']);
 
         // Filter by status (arrived/pending)
@@ -32,12 +38,12 @@ class AdminOrderItemController extends Controller
             $query->where('arrived', true)->whereNull('weight');
         }
 
-        // NEW: Filter by estimated delivery date
+        // Filter by estimated delivery date
         if ($request->has('estimated_date')) {
             $query->whereDate('estimated_delivery_date', $request->estimated_date);
         }
 
-        // NEW: Filter by estimated delivery date range
+        // Filter by estimated delivery date range
         if ($request->has('estimated_from') && $request->has('estimated_to')) {
             $query->expectedBetween($request->estimated_from, $request->estimated_to);
         } elseif ($request->has('estimated_from')) {
@@ -46,12 +52,12 @@ class AdminOrderItemController extends Controller
             $query->whereDate('estimated_delivery_date', '<=', $request->estimated_to);
         }
 
-        // NEW: Filter overdue items
+        // Filter overdue items
         if ($request->has('overdue') && $request->overdue) {
             $query->overdue();
         }
 
-        // NEW: Filter arriving soon
+        // Filter arriving soon
         if ($request->has('arriving_soon')) {
             $days = $request->arriving_soon_days ?? 3;
             $query->arrivingSoon($days);
@@ -94,7 +100,7 @@ class AdminOrderItemController extends Controller
             $query->orderBy('created_at', $sortOrder);
         }
 
-        $packages = $query->paginate($request->get('per_page', 20));
+        $packages = $query->paginate($perPage);
 
         return response()->json([
             'success' => true,
@@ -160,6 +166,13 @@ class AdminOrderItemController extends Controller
      */
     public function pending(Request $request)
     {
+        $request->validate([
+            'per_page' => 'nullable|integer|min:1|max:500',
+            'limit' => 'nullable|integer|min:1|max:500',
+        ]);
+
+        $perPage = $request->input('per_page') ?? $request->input('limit') ?? 50;
+
         $query = OrderItem::with(['order.user'])
             ->where('arrived', false);
 
@@ -168,17 +181,17 @@ class AdminOrderItemController extends Controller
             $query->where('tracking_number', 'like', "%{$request->tracking}%");
         }
 
-        // NEW: Filter by estimated delivery date
+        // Filter by estimated delivery date
         if ($request->has('estimated_date')) {
             $query->whereDate('estimated_delivery_date', $request->estimated_date);
         }
 
-        // NEW: Filter overdue
+        // Filter overdue
         if ($request->has('overdue') && $request->overdue) {
             $query->overdue();
         }
 
-        // NEW: Filter arriving soon
+        // Filter arriving soon
         if ($request->has('arriving_soon') && $request->arriving_soon) {
             $days = $request->arriving_soon_days ?? 3;
             $query->arrivingSoon($days);
@@ -196,7 +209,7 @@ class AdminOrderItemController extends Controller
             $query->oldest();
         }
 
-        $items = $query->paginate(50);
+        $items = $query->paginate($perPage);
 
         return response()->json([
             'success' => true,
@@ -287,13 +300,20 @@ class AdminOrderItemController extends Controller
     /**
      * Get items missing weight measurements
      */
-    public function missingWeight()
+    public function missingWeight(Request $request)
     {
+        $request->validate([
+            'per_page' => 'nullable|integer|min:1|max:500',
+            'limit' => 'nullable|integer|min:1|max:500',
+        ]);
+
+        $perPage = $request->input('per_page') ?? $request->input('limit') ?? 50;
+
         $items = OrderItem::with(['order.user'])
             ->where('arrived', true)
             ->whereNull('weight')
             ->oldest('arrived_at')
-            ->paginate(50);
+            ->paginate($perPage);
 
         return response()->json([
             'success' => true,
@@ -302,15 +322,22 @@ class AdminOrderItemController extends Controller
     }
 
     /**
-     * NEW: Get items expected to arrive today
+     * Get items expected to arrive today
      */
-    public function expectedToday()
+    public function expectedToday(Request $request)
     {
+        $request->validate([
+            'per_page' => 'nullable|integer|min:1|max:500',
+            'limit' => 'nullable|integer|min:1|max:500',
+        ]);
+
+        $perPage = $request->input('per_page') ?? $request->input('limit') ?? 50;
+
         $items = OrderItem::with(['order.user'])
             ->where('arrived', false)
             ->whereDate('estimated_delivery_date', today())
             ->orderBy('estimated_delivery_date', 'asc')
-            ->paginate(50);
+            ->paginate($perPage);
 
         return response()->json([
             'success' => true,
@@ -319,14 +346,21 @@ class AdminOrderItemController extends Controller
     }
 
     /**
-     * NEW: Get overdue items
+     * Get overdue items
      */
-    public function overdue()
+    public function overdue(Request $request)
     {
+        $request->validate([
+            'per_page' => 'nullable|integer|min:1|max:500',
+            'limit' => 'nullable|integer|min:1|max:500',
+        ]);
+
+        $perPage = $request->input('per_page') ?? $request->input('limit') ?? 50;
+
         $items = OrderItem::with(['order.user'])
             ->overdue()
             ->orderBy('estimated_delivery_date', 'asc')
-            ->paginate(50);
+            ->paginate($perPage);
 
         return response()->json([
             'success' => true,
@@ -335,16 +369,22 @@ class AdminOrderItemController extends Controller
     }
 
     /**
-     * NEW: Get items arriving soon
+     * Get items arriving soon
      */
     public function arrivingSoon(Request $request)
     {
+        $request->validate([
+            'per_page' => 'nullable|integer|min:1|max:500',
+            'limit' => 'nullable|integer|min:1|max:500',
+        ]);
+
+        $perPage = $request->input('per_page') ?? $request->input('limit') ?? 50;
         $days = $request->get('days', 3);
 
         $items = OrderItem::with(['order.user'])
             ->arrivingSoon($days)
             ->orderBy('estimated_delivery_date', 'asc')
-            ->paginate(50);
+            ->paginate($perPage);
 
         return response()->json([
             'success' => true,
