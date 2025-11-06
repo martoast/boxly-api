@@ -58,7 +58,7 @@ class UnifiedAdminDashboardController extends Controller
             'orders' => $this->getOrdersData($dateRanges),
             'packages' => $this->getPackagesData($dateRanges),
             'financial' => $this->getFinancialData($dateRanges, $year, $month),
-            'box_distribution' => $this->getBoxDistribution($dateRanges),
+            'box_distribution' => $this->getBoxDistribution($dateRanges, $year, $month, $period),
             'activity' => [
                 'today' => $this->getTodayActivity(),
                 'this_week' => $this->getWeekActivity(),
@@ -82,6 +82,15 @@ class UnifiedAdminDashboardController extends Controller
         $validated = $request->validate([
             'year' => 'required|integer|min:2020|max:2100',
             'month' => 'required|integer|min:1|max:12',
+            'total_revenue' => 'required|numeric|min:0',
+            'total_expenses' => 'required|numeric|min:0',
+            'total_profit' => 'required|numeric',
+            'total_orders' => 'required|integer|min:0',
+            'boxes_extra_small' => 'required|integer|min:0',
+            'boxes_small' => 'required|integer|min:0',
+            'boxes_medium' => 'required|integer|min:0',
+            'boxes_large' => 'required|integer|min:0',
+            'boxes_extra_large' => 'required|integer|min:0',
             'total_conversations' => 'required|integer|min:0',
             'notes' => 'nullable|string|max:2000',
         ]);
@@ -92,14 +101,32 @@ class UnifiedAdminDashboardController extends Controller
             $request->user()->id
         );
 
-        $metric->update([
-            'total_conversations' => $validated['total_conversations'],
-            'notes' => $validated['notes'] ?? null,
-        ]);
+        $metric->update($validated);
 
         return response()->json([
             'success' => true,
             'message' => 'Manual metrics updated successfully',
+            'data' => $metric
+        ]);
+    }
+
+    /**
+     * Get manual metrics for a specific month
+     */
+    public function getManualMetrics(Request $request)
+    {
+        $request->validate([
+            'year' => 'required|integer|min:2020|max:2100',
+            'month' => 'required|integer|min:1|max:12',
+        ]);
+
+        $metric = MonthlyManualMetric::where('year', $request->year)
+            ->where('month', $request->month)
+            ->with('creator')
+            ->first();
+
+        return response()->json([
+            'success' => true,
             'data' => $metric
         ]);
     }
@@ -136,15 +163,21 @@ class UnifiedAdminDashboardController extends Controller
     }
 
     /**
-     * Get business overview metrics
+     * Get business overview metrics filtered by date range
      */
     private function getOverview(array $dateRanges): array
     {
+        $start = $dateRanges['start'];
+        $end = $dateRanges['end'];
+
         return [
-            'total_customers' => User::where('role', 'customer')->count(),
+            'total_customers' => User::where('role', 'customer')
+                ->whereBetween('created_at', [$start, $end])
+                ->count(),
             'active_customers' => User::where('role', 'customer')
-                ->whereHas('orders', function ($q) {
-                    $q->whereIn('status', [
+                ->whereHas('orders', function ($q) use ($start, $end) {
+                    $q->whereBetween('created_at', [$start, $end])
+                      ->whereIn('status', [
                         Order::STATUS_COLLECTING,
                         Order::STATUS_AWAITING_PACKAGES,
                         Order::STATUS_PACKAGES_COMPLETE,
@@ -157,41 +190,58 @@ class UnifiedAdminDashboardController extends Controller
                 ->whereMonth('created_at', now()->month)
                 ->whereYear('created_at', now()->year)
                 ->count(),
-            'total_orders' => Order::count(),
-            'active_orders' => Order::whereIn('status', [
-                Order::STATUS_COLLECTING,
-                Order::STATUS_AWAITING_PACKAGES,
-                Order::STATUS_PACKAGES_COMPLETE,
-                Order::STATUS_PROCESSING,
-                Order::STATUS_SHIPPED
-            ])->count(),
+            'total_orders' => Order::whereBetween('created_at', [$start, $end])->count(),
+            'active_orders' => Order::whereBetween('created_at', [$start, $end])
+                ->whereIn('status', [
+                    Order::STATUS_COLLECTING,
+                    Order::STATUS_AWAITING_PACKAGES,
+                    Order::STATUS_PACKAGES_COMPLETE,
+                    Order::STATUS_PROCESSING,
+                    Order::STATUS_SHIPPED
+                ])->count(),
         ];
     }
 
     /**
-     * Get orders data breakdown
+     * Get orders data breakdown filtered by date range
      */
     private function getOrdersData(array $dateRanges): array
     {
+        $start = $dateRanges['start'];
+        $end = $dateRanges['end'];
+
         return [
             'by_status' => [
-                'collecting' => Order::status(Order::STATUS_COLLECTING)->count(),
-                'awaiting_packages' => Order::status(Order::STATUS_AWAITING_PACKAGES)->count(),
-                'packages_complete' => Order::status(Order::STATUS_PACKAGES_COMPLETE)->count(),
-                'processing' => Order::status(Order::STATUS_PROCESSING)->count(),
-                'shipped' => Order::status(Order::STATUS_SHIPPED)->count(),
-                'delivered' => Order::status(Order::STATUS_DELIVERED)->count(),
-                'awaiting_payment' => Order::status(Order::STATUS_AWAITING_PAYMENT)->count(),
-                'paid' => Order::status(Order::STATUS_PAID)->count(),
-                'cancelled' => Order::status(Order::STATUS_CANCELLED)->count(),
+                'collecting' => Order::whereBetween('created_at', [$start, $end])
+                    ->status(Order::STATUS_COLLECTING)->count(),
+                'awaiting_packages' => Order::whereBetween('created_at', [$start, $end])
+                    ->status(Order::STATUS_AWAITING_PACKAGES)->count(),
+                'packages_complete' => Order::whereBetween('created_at', [$start, $end])
+                    ->status(Order::STATUS_PACKAGES_COMPLETE)->count(),
+                'processing' => Order::whereBetween('created_at', [$start, $end])
+                    ->status(Order::STATUS_PROCESSING)->count(),
+                'shipped' => Order::whereBetween('created_at', [$start, $end])
+                    ->status(Order::STATUS_SHIPPED)->count(),
+                'delivered' => Order::whereBetween('created_at', [$start, $end])
+                    ->status(Order::STATUS_DELIVERED)->count(),
+                'awaiting_payment' => Order::whereBetween('created_at', [$start, $end])
+                    ->status(Order::STATUS_AWAITING_PAYMENT)->count(),
+                'paid' => Order::whereBetween('created_at', [$start, $end])
+                    ->status(Order::STATUS_PAID)->count(),
+                'cancelled' => Order::whereBetween('created_at', [$start, $end])
+                    ->status(Order::STATUS_CANCELLED)->count(),
             ],
             'ready_for_action' => [
-                'ready_to_process' => Order::status(Order::STATUS_PACKAGES_COMPLETE)->count(),
-                'ready_for_invoice' => Order::status(Order::STATUS_DELIVERED)
+                'ready_to_process' => Order::whereBetween('created_at', [$start, $end])
+                    ->status(Order::STATUS_PACKAGES_COMPLETE)->count(),
+                'ready_for_invoice' => Order::whereBetween('created_at', [$start, $end])
+                    ->status(Order::STATUS_DELIVERED)
                     ->whereNull('quote_sent_at')
                     ->count(),
-                'awaiting_payment' => Order::status(Order::STATUS_AWAITING_PAYMENT)->count(),
-                'expired_quotes' => Order::status(Order::STATUS_AWAITING_PAYMENT)
+                'awaiting_payment' => Order::whereBetween('created_at', [$start, $end])
+                    ->status(Order::STATUS_AWAITING_PAYMENT)->count(),
+                'expired_quotes' => Order::whereBetween('created_at', [$start, $end])
+                    ->status(Order::STATUS_AWAITING_PAYMENT)
                     ->where('quote_expires_at', '<', now())
                     ->count(),
             ],
@@ -199,13 +249,17 @@ class UnifiedAdminDashboardController extends Controller
     }
 
     /**
-     * Get packages/items data
+     * Get packages/items data filtered by date range
      */
     private function getPackagesData(array $dateRanges): array
     {
+        $start = $dateRanges['start'];
+        $end = $dateRanges['end'];
+
         return [
-            'total_items' => OrderItem::count(),
-            'awaiting_arrival' => OrderItem::where('arrived', false)
+            'total_items' => OrderItem::whereBetween('created_at', [$start, $end])->count(),
+            'awaiting_arrival' => OrderItem::whereBetween('created_at', [$start, $end])
+                ->where('arrived', false)
                 ->whereHas('order', function ($q) {
                     $q->whereIn('status', [
                         Order::STATUS_AWAITING_PACKAGES,
@@ -218,21 +272,29 @@ class UnifiedAdminDashboardController extends Controller
                 now()->startOfWeek(),
                 now()->endOfWeek()
             ])->count(),
-            'missing_weight' => OrderItem::where('arrived', true)->whereNull('weight')->count(),
-            'expected_today' => OrderItem::where('arrived', false)
+            'missing_weight' => OrderItem::whereBetween('created_at', [$start, $end])
+                ->where('arrived', true)
+                ->whereNull('weight')
+                ->count(),
+            'expected_today' => OrderItem::whereBetween('created_at', [$start, $end])
+                ->where('arrived', false)
                 ->whereDate('estimated_delivery_date', today())
                 ->count(),
-            'expected_this_week' => OrderItem::where('arrived', false)
+            'expected_this_week' => OrderItem::whereBetween('created_at', [$start, $end])
+                ->where('arrived', false)
                 ->whereDate('estimated_delivery_date', '>=', today())
                 ->whereDate('estimated_delivery_date', '<=', now()->endOfWeek())
                 ->count(),
-            'overdue' => OrderItem::overdue()->count(),
-            'arriving_soon' => OrderItem::arrivingSoon(3)->count(),
+            'overdue' => OrderItem::whereBetween('created_at', [$start, $end])
+                ->overdue()->count(),
+            'arriving_soon' => OrderItem::whereBetween('created_at', [$start, $end])
+                ->arrivingSoon(3)->count(),
         ];
     }
 
     /**
-     * Get comprehensive financial data
+     * Get comprehensive financial data with manual metrics support
+     * Always calculates new_customers and expenses from database
      */
     private function getFinancialData(array $dateRanges, int $year, int $month): array
     {
@@ -240,7 +302,66 @@ class UnifiedAdminDashboardController extends Controller
         $end = $dateRanges['end'];
         $period = $dateRanges['period'];
 
-        // Get revenue data
+        // ALWAYS calculate new customers from database (using created_at)
+        $newCustomers = User::where('role', 'customer')
+            ->whereBetween('created_at', [$start, $end])
+            ->count();
+
+        // ALWAYS calculate expenses from database
+        $expensesQuery = BusinessExpense::whereBetween('expense_date', [$start, $end]);
+        
+        $expensesByCategory = [
+            'shipping' => round($expensesQuery->clone()->where('category', 'shipping')->sum('amount'), 2),
+            'ads' => round($expensesQuery->clone()->where('category', 'ads')->sum('amount'), 2),
+            'software' => round($expensesQuery->clone()->where('category', 'software')->sum('amount'), 2),
+            'office' => round($expensesQuery->clone()->where('category', 'office')->sum('amount'), 2),
+            'po_box' => round($expensesQuery->clone()->where('category', 'po_box')->sum('amount'), 2),
+            'misc' => round($expensesQuery->clone()->where('category', 'misc')->sum('amount'), 2),
+        ];
+
+        $totalExpenses = array_sum($expensesByCategory);
+        $expensesByCategory['total'] = round($totalExpenses, 2);
+
+        // Check if manual metrics exist for this month
+        $manualMetric = null;
+        if ($period === 'month') {
+            $manualMetric = MonthlyManualMetric::where('year', $year)
+                ->where('month', $month)
+                ->first();
+        }
+
+        // If manual metrics exist, use them for revenue/orders but keep calculated expenses
+        if ($manualMetric) {
+            $profit = $manualMetric->total_revenue - $totalExpenses;
+            $profitMargin = $manualMetric->total_revenue > 0 
+                ? ($profit / $manualMetric->total_revenue) * 100 
+                : 0;
+
+            return [
+                'source' => 'manual',
+                'revenue' => [
+                    'period_total' => round($manualMetric->total_revenue, 2),
+                    'total_all_time' => round(Order::sum('amount_paid'), 2),
+                ],
+                'expenses' => $expensesByCategory, // Always from database
+                'profit' => [
+                    'amount' => round($profit, 2),
+                    'margin' => round($profitMargin, 2),
+                ],
+                'metrics' => [
+                    'total_orders' => $manualMetric->total_orders,
+                    'new_customers' => $newCustomers, // Always calculated
+                    'total_conversations' => $manualMetric->total_conversations,
+                ],
+                'manual_metrics' => [
+                    'id' => $manualMetric->id,
+                    'notes' => $manualMetric->notes,
+                    'last_updated' => $manualMetric->updated_at,
+                ],
+            ];
+        }
+
+        // Otherwise calculate everything from database
         $revenue = [
             'period_total' => round(Order::whereBetween('paid_at', [$start, $end])->sum('amount_paid'), 2),
             'today' => round(Order::whereDate('paid_at', today())->sum('amount_paid'), 2),
@@ -257,88 +378,69 @@ class UnifiedAdminDashboardController extends Controller
             'average_order_value' => round(Order::whereNotNull('amount_paid')->avg('amount_paid'), 2),
         ];
 
-        // Get expenses by category for the period
-        $expensesQuery = BusinessExpense::whereBetween('expense_date', [$start, $end]);
-        
-        $expensesByCategory = [
-            'shipping' => round($expensesQuery->clone()->where('category', 'shipping')->sum('amount'), 2),
-            'ads' => round($expensesQuery->clone()->where('category', 'ads')->sum('amount'), 2),
-            'software' => round($expensesQuery->clone()->where('category', 'software')->sum('amount'), 2),
-            'office' => round($expensesQuery->clone()->where('category', 'office')->sum('amount'), 2),
-            'po_box' => round($expensesQuery->clone()->where('category', 'po_box')->sum('amount'), 2),
-            'misc' => round($expensesQuery->clone()->where('category', 'misc')->sum('amount'), 2),
-        ];
-
-        $totalExpenses = array_sum($expensesByCategory);
-        $expensesByCategory['total'] = round($totalExpenses, 2);
-
-        // Calculate profit
         $profit = $revenue['period_total'] - $totalExpenses;
         $profitMargin = $revenue['period_total'] > 0 
             ? ($profit / $revenue['period_total']) * 100 
             : 0;
 
-        // Get manual metrics (only for month period)
-        $manualMetrics = null;
-        if ($period === 'month') {
-            $metric = MonthlyManualMetric::where('year', $year)
-                ->where('month', $month)
-                ->first();
-            
-            if ($metric) {
-                $manualMetrics = [
-                    'conversations' => $metric->total_conversations,
-                    'notes' => $metric->notes,
-                ];
-            }
-        }
-
-        // Calculate marketing metrics (only if we have data)
-        $metrics = [];
-        if ($period === 'month' && $manualMetrics) {
-            $ordersInPeriod = Order::whereBetween('created_at', [$start, $end])->count();
-            $newSignups = User::where('role', 'customer')
-                ->whereBetween('created_at', [$start, $end])
-                ->count();
-            $adsExpense = $expensesByCategory['ads'];
-
-            $metrics = [
-                'conversion_rate' => $newSignups > 0 
-                    ? round(($ordersInPeriod / $newSignups) * 100, 2) 
-                    : 0,
-                'cac' => $ordersInPeriod > 0 
-                    ? round($adsExpense / $ordersInPeriod, 2) 
-                    : 0,
-                'roas' => $adsExpense > 0 
-                    ? round($revenue['period_total'] / $adsExpense, 2) 
-                    : 0,
-            ];
-        }
-
         return [
+            'source' => 'calculated',
             'revenue' => $revenue,
-            'expenses' => $expensesByCategory,
+            'expenses' => $expensesByCategory, // Always from database
             'profit' => [
                 'amount' => round($profit, 2),
                 'margin' => round($profitMargin, 2),
             ],
-            'metrics' => $metrics,
-            'manual_metrics' => $manualMetrics,
+            'metrics' => [
+                'new_customers' => $newCustomers, // Always calculated
+            ],
+            'manual_metrics' => null,
         ];
     }
 
     /**
-     * Get box size distribution
+     * Get box size distribution with manual metrics support
      */
-    private function getBoxDistribution(array $dateRanges): array
+    private function getBoxDistribution(array $dateRanges, int $year, int $month, string $period): array
     {
+        $start = $dateRanges['start'];
+        $end = $dateRanges['end'];
+
+        // Check if manual metrics exist for this month
+        if ($period === 'month') {
+            $manualMetric = MonthlyManualMetric::where('year', $year)
+                ->where('month', $month)
+                ->first();
+
+            if ($manualMetric) {
+                return [
+                    'source' => 'manual',
+                    'extra-small' => $manualMetric->boxes_extra_small,
+                    'small' => $manualMetric->boxes_small,
+                    'medium' => $manualMetric->boxes_medium,
+                    'large' => $manualMetric->boxes_large,
+                    'extra-large' => $manualMetric->boxes_extra_large,
+                    'not_selected' => 0,
+                    'total' => $manualMetric->total_boxes,
+                ];
+            }
+        }
+
+        // Calculate from database with date filter
         return [
-            'extra-small' => Order::where('box_size', 'extra-small')->count(),
-            'small' => Order::where('box_size', 'small')->count(),
-            'medium' => Order::where('box_size', 'medium')->count(),
-            'large' => Order::where('box_size', 'large')->count(),
-            'extra-large' => Order::where('box_size', 'extra-large')->count(),
-            'not_selected' => Order::whereNull('box_size')->count(),
+            'source' => 'calculated',
+            'extra-small' => Order::whereBetween('created_at', [$start, $end])
+                ->where('box_size', 'extra-small')->count(),
+            'small' => Order::whereBetween('created_at', [$start, $end])
+                ->where('box_size', 'small')->count(),
+            'medium' => Order::whereBetween('created_at', [$start, $end])
+                ->where('box_size', 'medium')->count(),
+            'large' => Order::whereBetween('created_at', [$start, $end])
+                ->where('box_size', 'large')->count(),
+            'extra-large' => Order::whereBetween('created_at', [$start, $end])
+                ->where('box_size', 'extra-large')->count(),
+            'not_selected' => Order::whereBetween('created_at', [$start, $end])
+                ->whereNull('box_size')->count(),
         ];
     }
 

@@ -121,7 +121,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::middleware('admin')->prefix('admin')->group(function () {
         
         Route::get('/dashboard', [UnifiedAdminDashboardController::class, 'index']);
-        Route::put('/dashboard/manual-metrics', [UnifiedAdminDashboardController::class, 'updateManualMetrics']);
+        Route::post('/dashboard/manual-metrics', [UnifiedAdminDashboardController::class, 'updateManualMetrics']);
+        Route::get('/dashboard/manual-metrics', [UnifiedAdminDashboardController::class, 'getManualMetrics']);
         
         Route::prefix('management')->group(function () {
             Route::post('/orders', [AdminOrderManagementController::class, 'createOrder']);

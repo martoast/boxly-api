@@ -10,12 +10,11 @@ class AdminCustomerController extends Controller
     
     public function index(Request $request)
     {
-    // Validate per_page parameter
-    $request->validate([
-    'per_page' => 'nullable|integer|min:1|max:500',
-    'limit' => 'nullable|integer|min:1|max:500', // Accept both per_page and limit
-    ]);
-        // Use per_page or limit, default to 20
+        $request->validate([
+            'per_page' => 'nullable|integer|min:1|max:500',
+            'limit' => 'nullable|integer|min:1|max:500',
+        ]);
+
         $perPage = $request->input('per_page') ?? $request->input('limit') ?? 20;
 
         $query = User::withCount(['orders', 'activeOrders'])
@@ -36,11 +35,15 @@ class AdminCustomerController extends Controller
             $query->has('activeOrders');
         }
 
+        // Get total BEFORE pagination
+        $total = $query->count();
+
         $customers = $query->latest()->paginate($perPage);
 
         return response()->json([
             'success' => true,
-            'data' => $customers
+            'data' => $customers,
+            'total' => $total,
         ]);
     }
 

@@ -100,11 +100,15 @@ class AdminOrderItemController extends Controller
             $query->orderBy('created_at', $sortOrder);
         }
 
+        // Get total BEFORE pagination
+        $total = $query->count();
+
         $packages = $query->paginate($perPage);
 
         return response()->json([
             'success' => true,
-            'data' => $packages
+            'data' => $packages,
+            'total' => $total,
         ]);
     }
 
@@ -209,11 +213,14 @@ class AdminOrderItemController extends Controller
             $query->oldest();
         }
 
+        $total = $query->count();
+
         $items = $query->paginate($perPage);
 
         return response()->json([
             'success' => true,
-            'data' => $items
+            'data' => $items,
+            'total' => $total,
         ]);
     }
 
@@ -309,15 +316,19 @@ class AdminOrderItemController extends Controller
 
         $perPage = $request->input('per_page') ?? $request->input('limit') ?? 50;
 
-        $items = OrderItem::with(['order.user'])
+        $query = OrderItem::with(['order.user'])
             ->where('arrived', true)
             ->whereNull('weight')
-            ->oldest('arrived_at')
-            ->paginate($perPage);
+            ->oldest('arrived_at');
+
+        $total = $query->count();
+
+        $items = $query->paginate($perPage);
 
         return response()->json([
             'success' => true,
-            'data' => $items
+            'data' => $items,
+            'total' => $total,
         ]);
     }
 
@@ -333,15 +344,19 @@ class AdminOrderItemController extends Controller
 
         $perPage = $request->input('per_page') ?? $request->input('limit') ?? 50;
 
-        $items = OrderItem::with(['order.user'])
+        $query = OrderItem::with(['order.user'])
             ->where('arrived', false)
             ->whereDate('estimated_delivery_date', today())
-            ->orderBy('estimated_delivery_date', 'asc')
-            ->paginate($perPage);
+            ->orderBy('estimated_delivery_date', 'asc');
+
+        $total = $query->count();
+
+        $items = $query->paginate($perPage);
 
         return response()->json([
             'success' => true,
-            'data' => $items
+            'data' => $items,
+            'total' => $total,
         ]);
     }
 
@@ -357,14 +372,18 @@ class AdminOrderItemController extends Controller
 
         $perPage = $request->input('per_page') ?? $request->input('limit') ?? 50;
 
-        $items = OrderItem::with(['order.user'])
+        $query = OrderItem::with(['order.user'])
             ->overdue()
-            ->orderBy('estimated_delivery_date', 'asc')
-            ->paginate($perPage);
+            ->orderBy('estimated_delivery_date', 'asc');
+
+        $total = $query->count();
+
+        $items = $query->paginate($perPage);
 
         return response()->json([
             'success' => true,
-            'data' => $items
+            'data' => $items,
+            'total' => $total,
         ]);
     }
 
@@ -381,14 +400,18 @@ class AdminOrderItemController extends Controller
         $perPage = $request->input('per_page') ?? $request->input('limit') ?? 50;
         $days = $request->get('days', 3);
 
-        $items = OrderItem::with(['order.user'])
+        $query = OrderItem::with(['order.user'])
             ->arrivingSoon($days)
-            ->orderBy('estimated_delivery_date', 'asc')
-            ->paginate($perPage);
+            ->orderBy('estimated_delivery_date', 'asc');
+
+        $total = $query->count();
+
+        $items = $query->paginate($perPage);
 
         return response()->json([
             'success' => true,
-            'data' => $items
+            'data' => $items,
+            'total' => $total,
         ]);
     }
 
