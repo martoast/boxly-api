@@ -343,10 +343,7 @@ class UnifiedAdminDashboardController extends Controller
 
     /**
      * Get comprehensive financial data with manual metrics support
-     * For 'all' period, combines manual + calculated data
-     * For 'month' period, uses manual OR calculated
-     * 
-     * IMPORTANT: Conversations can exist without triggering full manual mode
+     * Calculates CAC, ROAS, and conversion rate when conversations are available
      */
     private function getFinancialData(array $dateRanges, int $year, int $month): array
     {
@@ -373,6 +370,9 @@ class UnifiedAdminDashboardController extends Controller
 
         $totalExpenses = array_sum($expensesByCategory);
         $expensesByCategory['total'] = round($totalExpenses, 2);
+
+        // Get ad spend specifically for marketing calculations
+        $adSpend = $expensesByCategory['ads'];
 
         // === ALL TIME MODE: Combine manual + calculated ===
         if ($period === 'all') {
@@ -409,11 +409,18 @@ class UnifiedAdminDashboardController extends Controller
             $allTotalExpenses = array_sum($allExpensesByCategory);
             $allExpensesByCategory['total'] = round($allTotalExpenses, 2);
 
+            $allAdSpend = $allExpensesByCategory['ads'];
+
             $profit = $totalRevenue - $allTotalExpenses;
             $profitMargin = $totalRevenue > 0 ? ($profit / $totalRevenue) * 100 : 0;
 
             // Get all customers ever
             $allCustomers = User::where('role', 'customer')->count();
+
+            // Calculate marketing metrics
+            $cac = $allCustomers > 0 ? round($allAdSpend / $allCustomers, 2) : 0;
+            $roas = $allAdSpend > 0 ? round($totalRevenue / $allAdSpend, 2) : 0;
+            $conversionRate = $totalConversations > 0 ? round(($totalOrders / $totalConversations) * 100, 2) : 0;
 
             return [
                 'source' => 'combined',
@@ -434,6 +441,10 @@ class UnifiedAdminDashboardController extends Controller
                     'calculated_orders' => $calculatedOrders,
                     'new_customers' => $allCustomers,
                     'total_conversations' => $totalConversations,
+                    'cac' => $cac,
+                    'roas' => $roas,
+                    'conversion_rate' => $conversionRate,
+                    'ad_spend' => $allAdSpend,
                 ],
                 'manual_metrics' => null,
             ];
@@ -460,6 +471,13 @@ class UnifiedAdminDashboardController extends Controller
                 ? ($profit / $manualMetric->total_revenue) * 100
                 : 0;
 
+            // Calculate marketing metrics
+            $cac = $newCustomers > 0 ? round($adSpend / $newCustomers, 2) : 0;
+            $roas = $adSpend > 0 ? round($manualMetric->total_revenue / $adSpend, 2) : 0;
+            $conversionRate = $manualMetric->total_conversations > 0
+                ? round(($manualMetric->total_orders / $manualMetric->total_conversations) * 100, 2)
+                : 0;
+
             return [
                 'source' => 'manual',
                 'revenue' => [
@@ -475,6 +493,10 @@ class UnifiedAdminDashboardController extends Controller
                     'total_orders' => $manualMetric->total_orders,
                     'new_customers' => $newCustomers,
                     'total_conversations' => $manualMetric->total_conversations,
+                    'cac' => $cac,
+                    'roas' => $roas,
+                    'conversion_rate' => $conversionRate,
+                    'ad_spend' => $adSpend,
                 ],
                 'manual_metrics' => [
                     'id' => $manualMetric->id,
@@ -509,6 +531,16 @@ class UnifiedAdminDashboardController extends Controller
         // Get conversations from manual metric if it exists (hybrid mode)
         $conversations = $manualMetric ? $manualMetric->total_conversations : 0;
 
+        // Count orders for this period
+        $ordersCount = Order::whereBetween('created_at', [$start, $end])->count();
+
+        // Calculate marketing metrics (only if conversations exist)
+        $cac = $newCustomers > 0 ? round($adSpend / $newCustomers, 2) : 0;
+        $roas = $adSpend > 0 ? round($revenue['period_total'] / $adSpend, 2) : 0;
+        $conversionRate = $conversations > 0
+            ? round(($ordersCount / $conversations) * 100, 2)
+            : 0;
+
         return [
             'source' => 'calculated',
             'revenue' => $revenue,
@@ -519,11 +551,15 @@ class UnifiedAdminDashboardController extends Controller
             ],
             'metrics' => [
                 'new_customers' => $newCustomers,
-                'total_conversations' => $conversations, // 👈 Can exist in calculated mode!
+                'total_conversations' => $conversations,
+                'cac' => $cac,
+                'roas' => $roas,
+                'conversion_rate' => $conversionRate,
+                'ad_spend' => $adSpend,
             ],
             'manual_metrics' => $manualMetric && $conversations > 0 ? [
                 'id' => $manualMetric->id,
-                'conversations_only' => true, // 👈 Flag that it's just conversations
+                'conversations_only' => true,
                 'notes' => $manualMetric->notes,
                 'last_updated' => $manualMetric->updated_at,
             ] : null,
