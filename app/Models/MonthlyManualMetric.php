@@ -2,14 +2,10 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class MonthlyManualMetric extends Model
 {
-    use HasFactory;
-
     protected $fillable = [
         'year',
         'month',
@@ -23,11 +19,14 @@ class MonthlyManualMetric extends Model
         'boxes_large',
         'boxes_extra_large',
         'total_conversations',
+        'is_manual_mode', // 👈 NEW FLAG
         'notes',
         'created_by',
     ];
 
     protected $casts = [
+        'year' => 'integer',
+        'month' => 'integer',
         'total_revenue' => 'decimal:2',
         'total_expenses' => 'decimal:2',
         'total_profit' => 'decimal:2',
@@ -38,17 +37,17 @@ class MonthlyManualMetric extends Model
         'boxes_large' => 'integer',
         'boxes_extra_large' => 'integer',
         'total_conversations' => 'integer',
+        'is_manual_mode' => 'boolean', // 👈 NEW FLAG
     ];
 
-    public function creator(): BelongsTo
+    protected $appends = ['total_boxes'];
+
+    public function creator()
     {
         return $this->belongsTo(User::class, 'created_by');
     }
 
-    /**
-     * Get total boxes for the month
-     */
-    public function getTotalBoxesAttribute(): int
+    public function getTotalBoxesAttribute()
     {
         return $this->boxes_extra_small + 
                $this->boxes_small + 
@@ -57,14 +56,27 @@ class MonthlyManualMetric extends Model
                $this->boxes_extra_large;
     }
 
-    /**
-     * Get or create metric for a specific month
-     */
-    public static function getOrCreateForMonth(int $year, int $month, int $userId): self
+    public static function getOrCreateForMonth(int $year, int $month, int $userId)
     {
         return self::firstOrCreate(
-            ['year' => $year, 'month' => $month],
-            ['created_by' => $userId]
+            [
+                'year' => $year,
+                'month' => $month,
+            ],
+            [
+                'created_by' => $userId,
+                'total_revenue' => 0,
+                'total_expenses' => 0,
+                'total_profit' => 0,
+                'total_orders' => 0,
+                'boxes_extra_small' => 0,
+                'boxes_small' => 0,
+                'boxes_medium' => 0,
+                'boxes_large' => 0,
+                'boxes_extra_large' => 0,
+                'total_conversations' => 0,
+                'is_manual_mode' => false, // 👈 Default to false
+            ]
         );
     }
 }

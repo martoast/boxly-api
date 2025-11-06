@@ -123,6 +123,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/dashboard', [UnifiedAdminDashboardController::class, 'index']);
         Route::post('/dashboard/manual-metrics', [UnifiedAdminDashboardController::class, 'updateManualMetrics']);
         Route::get('/dashboard/manual-metrics', [UnifiedAdminDashboardController::class, 'getManualMetrics']);
+        Route::delete('/admin/dashboard/manual-metrics', [UnifiedAdminDashboardController::class, 'deleteManualMetrics']);
         
         Route::prefix('management')->group(function () {
             Route::post('/orders', [AdminOrderManagementController::class, 'createOrder']);
