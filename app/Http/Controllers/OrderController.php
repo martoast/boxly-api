@@ -9,12 +9,7 @@ use Illuminate\Http\Request;
 use App\Http\Requests\CompleteOrderRequest;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Mail;
-use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
-use App\Mail\OrderCreatedNoPayment;
-use App\Notifications\NewOrderNotification;
-use Illuminate\Support\Facades\Notification;
+use App\Http\Requests\UpdateOrderRequest;
 
 class OrderController extends Controller
 {
@@ -160,42 +155,9 @@ class OrderController extends Controller
     /**
      * UPDATED: Allow updates only in pre-processing statuses
      */
-    public function update(Request $request, Order $order)
+    public function update(UpdateOrderRequest $request, Order $order)
     {
-        if ($order->user_id !== $request->user()->id) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Unauthorized'
-            ], 403);
-        }
-
-        // STRICT: Only allow updates before processing starts
-        if (!in_array($order->status, [
-            Order::STATUS_COLLECTING,
-            Order::STATUS_AWAITING_PACKAGES,
-            Order::STATUS_PACKAGES_COMPLETE
-        ])) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Cannot update order - it is already being processed or has been completed. Please contact support if you need to make changes.'
-            ], 400);
-        }
-
-        $request->validate([
-            'delivery_address' => 'sometimes|required|array',
-            'delivery_address.street' => 'sometimes|required|string|max:255',
-            'delivery_address.exterior_number' => 'sometimes|required|string|max:20',
-            'delivery_address.interior_number' => 'nullable|string|max:20',
-            'delivery_address.colonia' => 'sometimes|required|string|max:100',
-            'delivery_address.municipio' => 'sometimes|required|string|max:100',
-            'delivery_address.estado' => 'sometimes|required|string|max:100',
-            'delivery_address.postal_code' => 'sometimes|required|regex:/^\d{5}$/',
-            'delivery_address.referencias' => 'nullable|string|max:500',
-            'is_rural' => 'sometimes|boolean',
-            'declared_value' => 'sometimes|numeric|min:0|max:999999.99',
-            'notes' => 'nullable|string|max:1000',
-        ]);
-
+        // Authorization and status validation already handled by UpdateOrderRequest
         $order->update($request->validated());
 
         return response()->json([

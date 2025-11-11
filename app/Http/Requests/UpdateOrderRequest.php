@@ -14,10 +14,13 @@ class UpdateOrderRequest extends FormRequest
     {
         $order = $this->route('order');
         
-        // Check if user owns the order and it's still in collecting status
-        // Orders can only be updated while still collecting items
+        // Check if user owns the order and it's in an editable status
         return $order->user_id === $this->user()->id && 
-               $order->status === Order::STATUS_COLLECTING;
+               in_array($order->status, [
+                   Order::STATUS_COLLECTING,
+                   Order::STATUS_AWAITING_PACKAGES,
+                   Order::STATUS_PACKAGES_COMPLETE
+               ]);
     }
 
     /**
@@ -26,6 +29,7 @@ class UpdateOrderRequest extends FormRequest
     public function rules(): array
     {
         return [
+            'delivery_address' => 'sometimes|required|array',
             'delivery_address.street' => 'sometimes|required|string|max:255',
             'delivery_address.exterior_number' => 'sometimes|required|string|max:20',
             'delivery_address.interior_number' => 'nullable|string|max:20',
@@ -35,6 +39,8 @@ class UpdateOrderRequest extends FormRequest
             'delivery_address.postal_code' => 'sometimes|required|string|regex:/^\d{5}$/',
             'delivery_address.referencias' => 'nullable|string|max:500',
             'is_rural' => 'sometimes|boolean',
+            'declared_value' => 'sometimes|nullable|numeric|min:0|max:999999.99',
+            'notes' => 'nullable|string|max:1000',
         ];
     }
 
@@ -49,7 +55,6 @@ class UpdateOrderRequest extends FormRequest
             'delivery_address.colonia.required' => 'Colonia is required',
             'delivery_address.municipio.required' => 'Municipio is required',
             'delivery_address.estado.required' => 'Estado is required',
-            'authorize' => 'You can only update orders that are still collecting items',
         ];
     }
 }
