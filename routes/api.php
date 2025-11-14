@@ -189,8 +189,11 @@ Route::middleware('auth:sanctum')->group(function () {
         
         Route::prefix('customers')->group(function () {
             Route::get('/', [AdminCustomerController::class, 'index']);
+            Route::post('/', [AdminCustomerController::class, 'store']); // NEW - Create customer
             Route::get('/{customer}', [AdminCustomerController::class, 'show']);
+            Route::put('/{customer}', [AdminCustomerController::class, 'update']); // NEW - Update customer
             Route::get('/{customer}/orders', [AdminCustomerController::class, 'orders']);
+            Route::get('/{customer}/collecting-orders', [AdminCustomerController::class, 'collectingOrders']);
         });
 
         // Business Expenses
