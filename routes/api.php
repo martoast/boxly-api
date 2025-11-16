@@ -19,6 +19,7 @@ use App\Http\Controllers\TrackingController;
 use App\Http\Controllers\FunnelCaptureController;
 use App\Http\Controllers\AdminBusinessExpenseController;
 use App\Http\Controllers\UnifiedAdminDashboardController;
+use App\Http\Controllers\ShipmentTrackingController; // NEW
 
 Route::post('/webhooks/stripe', [StripeWebhookController::class, 'handle']);
 
@@ -54,8 +55,16 @@ Route::get('/user-types', function () {
     ]);
 });
 
+// OLD TRACKING (keep for backward compatibility)
 Route::post('/track', [TrackingController::class, 'track']);
 Route::get('/track', [TrackingController::class, 'form']);
+
+// NEW SHIPMENT TRACKING ROUTES - PUBLIC
+Route::prefix('shipment-tracking')->group(function () {
+    Route::post('/track', [ShipmentTrackingController::class, 'track']);
+    Route::get('/carriers', [ShipmentTrackingController::class, 'carriers']);
+    Route::get('/carriers/search', [ShipmentTrackingController::class, 'searchCarrier']);
+});
 
 Route::post('/funnel-capture', [FunnelCaptureController::class, 'store']);
 
@@ -150,20 +159,11 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::put('/{order}/process', [AdminQuoteController::class, 'markAsProcessing']);
             Route::post('/{order}/prepare-quote', [AdminQuoteController::class, 'prepareQuote']);
             
-            // Primary route for sending invoice
             Route::post('/{order}/send-invoice', [AdminQuoteController::class, 'sendInvoice']);
-            
-            // Alias route for backward compatibility (frontend still calls send-quote)
             Route::post('/{order}/send-quote', [AdminQuoteController::class, 'sendInvoice']);
-            
             Route::post('/{order}/resend-invoice', [AdminQuoteController::class, 'resendInvoice']);
-            
-            // Alias for backward compatibility
             Route::post('/{order}/resend-quote', [AdminQuoteController::class, 'resendInvoice']);
-            
             Route::post('/{order}/cancel-invoice', [AdminQuoteController::class, 'cancelInvoice']);
-            
-            // Alias for backward compatibility
             Route::post('/{order}/cancel-quote', [AdminQuoteController::class, 'cancelInvoice']);
 
             Route::post('/{order}/ship', [AdminOrderController::class, 'shipOrder']);
@@ -176,8 +176,6 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/', [AdminOrderItemController::class, 'index']);
             Route::get('/pending', [AdminOrderItemController::class, 'pending']);
             Route::get('/missing-weight', [AdminOrderItemController::class, 'missingWeight']);
-            
-            // NEW ROUTES
             Route::get('/expected-today', [AdminOrderItemController::class, 'expectedToday']);
             Route::get('/overdue', [AdminOrderItemController::class, 'overdue']);
             Route::get('/arriving-soon', [AdminOrderItemController::class, 'arrivingSoon']);
@@ -189,14 +187,13 @@ Route::middleware('auth:sanctum')->group(function () {
         
         Route::prefix('customers')->group(function () {
             Route::get('/', [AdminCustomerController::class, 'index']);
-            Route::post('/', [AdminCustomerController::class, 'store']); // NEW - Create customer
+            Route::post('/', [AdminCustomerController::class, 'store']);
             Route::get('/{customer}', [AdminCustomerController::class, 'show']);
-            Route::put('/{customer}', [AdminCustomerController::class, 'update']); // NEW - Update customer
+            Route::put('/{customer}', [AdminCustomerController::class, 'update']);
             Route::get('/{customer}/orders', [AdminCustomerController::class, 'orders']);
             Route::get('/{customer}/collecting-orders', [AdminCustomerController::class, 'collectingOrders']);
         });
 
-        // Business Expenses
         Route::prefix('expenses')->group(function () {
             Route::get('/', [AdminBusinessExpenseController::class, 'index']);
             Route::post('/', [AdminBusinessExpenseController::class, 'store']);
@@ -206,8 +203,6 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::put('/{expense}', [AdminBusinessExpenseController::class, 'update']);
             Route::delete('/{expense}', [AdminBusinessExpenseController::class, 'destroy']);
         });
-
-        
     });
 });
 

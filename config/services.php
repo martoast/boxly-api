@@ -6,12 +6,6 @@ return [
     |--------------------------------------------------------------------------
     | Third Party Services
     |--------------------------------------------------------------------------
-    |
-    | This file is for storing the credentials for third party services such
-    | as Mailgun, Postmark, AWS and more. This file provides the de facto
-    | location for this type of information, allowing packages to have
-    | a conventional file to locate the various service credentials.
-    |
     */
 
     'postmark' => [
@@ -44,6 +38,15 @@ return [
     'gohighlevel' => [
         'webhook_url' => env('GOHIGHLEVEL_WEBHOOK_URL', 'https://services.leadconnectorhq.com/hooks/2Pr7Q71krQMxeqK7aWJl/webhook-trigger/cf022b90-d43b-478b-b08e-de4367dd4142'),
         'order_placed_webhook_url' => env('GOHIGHLEVEL_ORDER_PLACED_WEBHOOK_URL'),
+    ],
+
+    'aftership' => [
+        'api_key' => env('AFTERSHIP_API_KEY'),
+        'base_url' => env('AFTERSHIP_BASE_URL', 'https://api.aftership.com/tracking/2025-07'),
+    ],
+
+    'exchange_rate' => [
+        'usd_to_mxn' => env('EXCHANGE_RATE_USD_TO_MXN', 18.00),
     ],
 
 ];
