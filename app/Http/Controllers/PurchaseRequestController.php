@@ -157,4 +157,138 @@ class PurchaseRequestController extends Controller
             'data' => $purchaseRequest->load('items')
         ]);
     }
+
+    /**
+     * Update an existing purchase request
+     */
+    public function update(Request $request, PurchaseRequest $purchaseRequest)
+    {
+        // Authorization: Must belong to user AND be in 'pending_review' status
+        if ($purchaseRequest->user_id !== $request->user()->id) {
+            return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
+        }
+
+        if ($purchaseRequest->status !== PurchaseRequest::STATUS_PENDING_REVIEW) {
+            return response()->json([
+                'success' => false, 
+                'message' => 'Cannot edit request after it has been quoted or processed.'
+            ], 400);
+        }
+
+        // Validation
+        $request->validate([
+            'items' => 'required|array|min:1',
+            'items.*.product_name' => 'required|string|max:255',
+            'items.*.product_url' => 'required|string|max:2000',
+            'items.*.price' => 'required|numeric|min:0',
+            'items.*.quantity' => 'required|integer|min:1',
+            'items.*.options' => 'nullable',
+            'items.*.notes' => 'nullable|string|max:500',
+            // Optional ID for existing items
+            'items.*.id' => 'nullable|integer',
+            // File validation (for new uploads)
+            'items.*.image' => 'nullable|file|mimes:jpg,jpeg,png,webp,pdf|max:10240',
+        ]);
+
+        DB::beginTransaction();
+
+        try {
+            $user = $request->user();
+            $itemsInput = $request->input('items');
+            
+            // Track existing item IDs to handle deletions
+            $updatedItemIds = [];
+
+            foreach ($itemsInput as $index => $itemData) {
+                
+                $options = null;
+                if (isset($itemData['options'])) {
+                    $options = is_string($itemData['options']) 
+                        ? json_decode($itemData['options'], true) 
+                        : $itemData['options'];
+                }
+
+                $item = null;
+
+                // Check if updating existing item
+                if (!empty($itemData['id'])) {
+                    $item = PurchaseRequestItem::where('id', $itemData['id'])
+                        ->where('purchase_request_id', $purchaseRequest->id)
+                        ->first();
+                }
+
+                if ($item) {
+                    // Update existing
+                    $item->update([
+                        'product_name' => $itemData['product_name'],
+                        'product_url' => $itemData['product_url'],
+                        'price' => $itemData['price'],
+                        'quantity' => $itemData['quantity'],
+                        'options' => $options,
+                        'notes' => $itemData['notes'] ?? null,
+                    ]);
+                } else {
+                    // Create new
+                    $item = PurchaseRequestItem::create([
+                        'purchase_request_id' => $purchaseRequest->id,
+                        'product_name' => $itemData['product_name'],
+                        'product_url' => $itemData['product_url'],
+                        'price' => $itemData['price'],
+                        'quantity' => $itemData['quantity'],
+                        'options' => $options,
+                        'notes' => $itemData['notes'] ?? null,
+                    ]);
+                }
+
+                $updatedItemIds[] = $item->id;
+
+                // Handle Image Upload (New or Replacement)
+                if ($request->hasFile("items.{$index}.image")) {
+                    // Delete old image if exists
+                    $item->deleteImage();
+
+                    $file = $request->file("items.{$index}.image");
+                    $userName = Str::slug($user->name);
+                    $storagePath = "users/{$userName}-{$user->id}/requests/{$purchaseRequest->request_number}/items/{$item->id}";
+                    $filename = "image-" . time() . "." . $file->getClientOriginalExtension();
+                    
+                    $path = Storage::disk('spaces')->putFileAs($storagePath, $file, $filename, 'public');
+                    $url = config('filesystems.disks.spaces.url') . '/' . $path;
+                    
+                    $item->update([
+                        'image_path' => $path,
+                        'image_filename' => $file->getClientOriginalName(),
+                        'image_mime_type' => $file->getClientMimeType(),
+                        'image_size' => $file->getSize(),
+                        'image_url' => $url,
+                    ]);
+                }
+                // Handle Image Deletion Flag (if frontend sends a flag to remove image)
+                elseif (!empty($itemData['remove_image']) && $itemData['remove_image'] == 'true') {
+                     $item->deleteImage();
+                }
+            }
+
+            // Delete items that were removed from the list
+            PurchaseRequestItem::where('purchase_request_id', $purchaseRequest->id)
+                ->whereNotIn('id', $updatedItemIds)
+                ->get()
+                ->each(function ($item) {
+                    $item->delete(); // Triggers model event to delete image file
+                });
+
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Request updated successfully.',
+                'data' => $purchaseRequest->load('items')
+            ]);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Purchase Request Update Failed: ' . $e->getMessage());
+            return response()->json(['success' => false, 'message' => 'Failed to update request'], 500);
+        }
+    }
 }

@@ -121,6 +121,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/', [PurchaseRequestController::class, 'index']);
         Route::post('/', [PurchaseRequestController::class, 'store']);
         Route::get('/{purchaseRequest}', [PurchaseRequestController::class, 'show']);
+        Route::put('/{purchaseRequest}', [PurchaseRequestController::class, 'update']);
     });
 
     Route::prefix('orders')->group(function () {
