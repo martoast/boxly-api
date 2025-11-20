@@ -159,6 +159,8 @@ Route::middleware('auth:sanctum')->group(function () {
         
         Route::prefix('purchase-requests')->group(function () {
             Route::get('/', [AdminPurchaseRequestController::class, 'index']);
+            Route::post('/', [AdminPurchaseRequestController::class, 'store']);
+
             Route::delete('/bulk', [AdminPurchaseRequestController::class, 'bulkDestroy']);
             Route::get('/{purchaseRequest}', [AdminPurchaseRequestController::class, 'show']);
             

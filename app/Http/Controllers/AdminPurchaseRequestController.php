@@ -6,12 +6,16 @@ use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\PurchaseRequest;
 use App\Models\PurchaseRequestItem;
+use App\Models\User;
 use App\Mail\PurchaseRequestQuoteSent;
-use App\Mail\PurchaseRequestItemsPurchased; // Import new mailable
+use App\Mail\PurchaseRequestItemsPurchased;
+// Removed PurchaseRequestCreated import to prevent notification on admin create
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Laravel\Cashier\Cashier;
 
 class AdminPurchaseRequestController extends Controller
@@ -47,8 +51,120 @@ class AdminPurchaseRequestController extends Controller
     }
 
     /**
+     * Create a new purchase request (Admin Manual Entry)
+     */
+    public function store(Request $request)
+    {
+        $request->validate([
+            'user_id' => 'required|exists:users,id',
+            'items' => 'required|array|min:1',
+            'items.*.product_name' => 'required|string|max:255',
+            'items.*.product_url' => 'required|string|max:2000',
+            'items.*.price' => 'required|numeric|min:0',
+            'items.*.quantity' => 'required|integer|min:1',
+            'items.*.options' => 'nullable',
+            'items.*.notes' => 'nullable|string|max:500',
+            'items.*.image' => 'nullable|file|mimes:jpg,jpeg,png,webp,pdf|max:10240',
+            'status' => 'nullable|in:pending_review,quoted,paid,purchased',
+            'admin_notes' => 'nullable|string',
+        ]);
+
+        DB::beginTransaction();
+
+        try {
+            $user = User::findOrFail($request->user_id);
+
+            // 1. Create the Request Ticket
+            $pr = PurchaseRequest::create([
+                'user_id' => $user->id,
+                'request_number' => PurchaseRequest::generateRequestNumber(),
+                'status' => $request->status ?? PurchaseRequest::STATUS_PENDING_REVIEW,
+                'currency' => 'usd',
+                'admin_notes' => $request->admin_notes,
+            ]);
+
+            // 2. Process Items
+            $itemsInput = $request->input('items');
+
+            foreach ($itemsInput as $index => $itemData) {
+                
+                // Handle options parsing
+                $options = null;
+                if (isset($itemData['options'])) {
+                    $options = is_string($itemData['options']) 
+                        ? json_decode($itemData['options'], true) 
+                        : $itemData['options'];
+                }
+
+                // Create Item Record
+                $item = PurchaseRequestItem::create([
+                    'purchase_request_id' => $pr->id,
+                    'product_name' => $itemData['product_name'],
+                    'product_url' => $itemData['product_url'],
+                    'price' => $itemData['price'],
+                    'quantity' => $itemData['quantity'],
+                    'options' => $options,
+                    'notes' => $itemData['notes'] ?? null,
+                ]);
+
+                // 3. Handle Image Upload
+                if ($request->hasFile("items.{$index}.image")) {
+                    $file = $request->file("items.{$index}.image");
+                    
+                    $userName = Str::slug($user->name);
+                    $storagePath = "users/{$userName}-{$user->id}/requests/{$pr->request_number}/items/{$item->id}";
+                    
+                    $filename = "image-" . time() . "." . $file->getClientOriginalExtension();
+                    
+                    $path = Storage::disk('spaces')->putFileAs(
+                        $storagePath,
+                        $file,
+                        $filename,
+                        'public'
+                    );
+                    
+                    $url = config('filesystems.disks.spaces.url') . '/' . $path;
+                    
+                    $item->update([
+                        'image_path' => $path,
+                        'image_filename' => $file->getClientOriginalName(),
+                        'image_mime_type' => $file->getClientMimeType(),
+                        'image_size' => $file->getSize(),
+                        'image_url' => $url,
+                    ]);
+                }
+            }
+
+            DB::commit();
+
+            Log::info('Admin created Purchase Request (No email sent)', [
+                'id' => $pr->id, 
+                'admin_id' => $request->user()->id,
+                'customer_id' => $user->id
+            ]);
+
+            // NOTE: Intentionally NOT sending PurchaseRequestCreated email here
+            // to allow admins to backfill data without spamming users.
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Purchase Request created successfully.',
+                'data' => $pr->load('items')
+            ], 201);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Admin Purchase Request Create Failed: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to create request',
+                'error' => config('app.debug') ? $e->getMessage() : null
+            ], 500);
+        }
+    }
+
+    /**
      * Update purchase request details (Admin Manual Override)
-     * NOTE: This does NOT trigger emails or Stripe actions. Pure DB update.
      */
     public function update(Request $request, PurchaseRequest $purchaseRequest)
     {
@@ -63,7 +179,6 @@ class AdminPurchaseRequestController extends Controller
             'payment_link' => 'nullable|url',
         ]);
 
-        // Direct database update - No Mailable invoked here
         $purchaseRequest->update($validated);
 
         Log::info('Admin manually updated purchase request', [
@@ -79,15 +194,11 @@ class AdminPurchaseRequestController extends Controller
         ]);
     }
 
-    /**
-     * Delete a purchase request
-     */
     public function destroy(PurchaseRequest $purchaseRequest)
     {
         DB::beginTransaction();
 
         try {
-            // 1. Void Invoice if it exists and hasn't been paid
             if ($purchaseRequest->stripe_invoice_id && $purchaseRequest->status !== PurchaseRequest::STATUS_PAID) {
                 try {
                     $stripe = Cashier::stripe();
@@ -100,9 +211,7 @@ class AdminPurchaseRequestController extends Controller
                 }
             }
 
-            // 2. Delete the record (Cascade will handle items)
             $purchaseRequest->delete();
-
             DB::commit();
 
             return response()->json([
@@ -117,9 +226,6 @@ class AdminPurchaseRequestController extends Controller
         }
     }
 
-    /**
-     * Bulk delete purchase requests
-     */
     public function bulkDestroy(Request $request)
     {
         $request->validate([
@@ -134,7 +240,6 @@ class AdminPurchaseRequestController extends Controller
             $deletedCount = 0;
 
             foreach ($requests as $pr) {
-                // Void invoice if exists and not paid
                 if ($pr->stripe_invoice_id && $pr->status !== PurchaseRequest::STATUS_PAID) {
                     try {
                         $stripe = Cashier::stripe();
@@ -146,18 +251,15 @@ class AdminPurchaseRequestController extends Controller
                         Log::warning('Could not void invoice during bulk deletion', ['id' => $pr->stripe_invoice_id]);
                     }
                 }
-
                 $pr->delete();
                 $deletedCount++;
             }
 
             DB::commit();
-
             return response()->json([
                 'success' => true,
                 'message' => "{$deletedCount} requests deleted successfully"
             ]);
-
         } catch (\Exception $e) {
             DB::rollBack();
             Log::error('Failed to bulk delete purchase requests', ['error' => $e->getMessage()]);
@@ -216,7 +318,6 @@ class AdminPurchaseRequestController extends Controller
                 'auto_advance' => false,
             ]);
 
-            // Cost of Goods Item
             $stripe->invoiceItems->create([
                 'customer' => $user->stripe_id,
                 'invoice' => $stripeInvoice->id,
@@ -225,7 +326,6 @@ class AdminPurchaseRequestController extends Controller
                 'description' => "Cost of Goods (Products, Shipping & Tax) - \${$subtotalUsd} USD @ {$exchangeRate} MXN/USD",
             ]);
 
-            // Service Fee Item
             $stripe->invoiceItems->create([
                 'customer' => $user->stripe_id,
                 'invoice' => $stripeInvoice->id,
@@ -234,7 +334,6 @@ class AdminPurchaseRequestController extends Controller
                 'description' => "Service Fee (8%) - \${$feeUsd} USD @ {$exchangeRate} MXN/USD",
             ]);
 
-            // Finalize & Send
             $stripe->invoices->finalizeInvoice($stripeInvoice->id);
             $sentInvoice = $stripe->invoices->sendInvoice($stripeInvoice->id);
 
@@ -289,20 +388,18 @@ class AdminPurchaseRequestController extends Controller
         try {
             $user = $purchaseRequest->user;
 
-            // ALWAYS create a new dedicated order for this purchase request
-            // We skip 'collecting' and go straight to 'awaiting_packages'
+            // Create new order
             $order = Order::create([
                 'user_id' => $user->id,
                 'order_number' => Order::generateOrderNumber(),
                 'tracking_number' => Order::generateTrackingNumber(),
                 'status' => Order::STATUS_AWAITING_PACKAGES,
-                'delivery_address' => $user->address, // Use user's default profile address
-                'is_rural' => false, // Admin can adjust later if needed
+                'delivery_address' => $user->address,
+                'is_rural' => false,
                 'currency' => 'mxn',
-                'completed_at' => now(), // Mark as "completed" immediately
+                'completed_at' => now(),
             ]);
 
-            // Convert PurchaseRequest Items to Order Items
             foreach ($purchaseRequest->items as $prItem) {
                 $orderItem = new OrderItem([
                     'order_id' => $order->id,
@@ -310,22 +407,18 @@ class AdminPurchaseRequestController extends Controller
                     'product_url' => $prItem->product_url,
                     'product_image_url' => $prItem->product_image_url,
                     'quantity' => $prItem->quantity,
-                    'declared_value' => $prItem->price, // Use the price paid as declared value
+                    'declared_value' => $prItem->price,
                     'purchase_request_item_id' => $prItem->id,
                     'is_assisted_purchase' => true,
-                    // Note: Tracking number will be null initially. 
-                    // Admin will update this specific order item when the vendor sends tracking.
                 ]);
                 $orderItem->save();
             }
 
-            // Update Request Status
             $purchaseRequest->update([
                 'status' => PurchaseRequest::STATUS_PURCHASED,
                 'purchased_at' => now(),
             ]);
 
-            // Calculate totals for the new order
             $order->update([
                 'declared_value' => $order->calculateTotalDeclaredValue(),
                 'iva_amount' => $order->calculateIVA()
@@ -333,7 +426,6 @@ class AdminPurchaseRequestController extends Controller
 
             DB::commit();
 
-            // Send Notification Email
             try {
                 Mail::to($user)->queue(new PurchaseRequestItemsPurchased($purchaseRequest, $order));
                 Log::info('Items purchased email queued for ' . $user->email);
