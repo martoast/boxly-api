@@ -6,6 +6,8 @@ use App\Models\BusinessExpense;
 use App\Models\MonthlyManualMetric;
 use App\Models\Order;
 use App\Models\OrderItem;
+use App\Models\PurchaseRequest;
+use App\Models\PurchaseRequestItem;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -374,10 +376,7 @@ class UnifiedAdminDashboardController extends Controller
 
     /**
      * Get comprehensive financial data with manual metrics support
-     * Calculates CAC, ROAS, and conversion rate when conversations are available
-     * 
-     * IMPORTANT: For "All Time", expenses are ALWAYS from database only (never manual)
-     * Manual expenses in manual_metrics are IGNORED - we only use database expenses
+     * Now includes Purchase Request metrics & fees
      */
     private function getFinancialData(array $dateRanges, int $year, int $month): array
     {
@@ -385,14 +384,41 @@ class UnifiedAdminDashboardController extends Controller
         $end = $dateRanges['end'];
         $period = $dateRanges['period'];
 
-        // ALWAYS calculate new customers from database (using created_at)
+        // --- PURCHASE REQUEST METRICS ---
+        $purchaseRequestsCount = PurchaseRequest::whereBetween('created_at', [$start, $end])->count();
+        
+        // FIXED: Count purchased items more robustly
+        // If 'purchased_at' is null, use 'updated_at' as a fallback for the date filter
+        $purchasedItemsCount = PurchaseRequestItem::whereHas('purchaseRequest', function($q) use ($start, $end) {
+            $q->where('status', 'purchased')
+              ->where(function($query) use ($start, $end) {
+                  $query->whereBetween('purchased_at', [$start, $end])
+                        ->orWhere(function($sub) use ($start, $end) {
+                            $sub->whereNull('purchased_at')
+                                ->whereBetween('updated_at', [$start, $end]);
+                        });
+              });
+        })->sum('quantity');
+        
+        // Service Fee Revenue
+        $serviceFeeUSD = PurchaseRequest::whereBetween('paid_at', [$start, $end])
+            ->whereIn('status', ['paid', 'purchased'])
+            ->sum('processing_fee');
+        $serviceFeeMXN = round($serviceFeeUSD * 18.00, 2);
+
+
+        // --- SHIPPING METRICS ---
+        $shippingRevenue = Order::whereBetween('paid_at', [$start, $end])->sum('amount_paid');
+        
+        $calculatedTotalRevenue = $shippingRevenue + $serviceFeeMXN;
+
+
+        // --- CUSTOMERS & EXPENSES ---
         $newCustomers = User::where('role', 'customer')
             ->whereBetween('created_at', [$start, $end])
             ->count();
 
-        // ALWAYS calculate expenses from database
         $expensesQuery = BusinessExpense::whereBetween('expense_date', [$start, $end]);
-        
         $expensesByCategory = [
             'shipping' => round($expensesQuery->clone()->where('category', 'shipping')->sum('amount'), 2),
             'ads' => round($expensesQuery->clone()->where('category', 'ads')->sum('amount'), 2),
@@ -401,119 +427,104 @@ class UnifiedAdminDashboardController extends Controller
             'po_box' => round($expensesQuery->clone()->where('category', 'po_box')->sum('amount'), 2),
             'misc' => round($expensesQuery->clone()->where('category', 'misc')->sum('amount'), 2),
         ];
-
         $totalExpenses = array_sum($expensesByCategory);
         $expensesByCategory['total'] = round($totalExpenses, 2);
         $adSpend = $expensesByCategory['ads'];
 
-        // === ALL TIME MODE: Combine manual + calculated ===
+
+        // === ALL TIME MODE ===
         if ($period === 'all') {
-            // Get manual metrics where is_manual_mode = true
             $manualMetrics = MonthlyManualMetric::where('is_manual_mode', true)->get();
-            
-            // Manual revenue from manual metrics
             $manualRevenue = $manualMetrics->sum('total_revenue');
-            
-            // Calculated revenue from all paid orders
-            $calculatedRevenue = Order::whereNotNull('paid_at')->sum('amount_paid');
-            
-            // Total revenue = manual + calculated
-            $totalRevenue = $manualRevenue + $calculatedRevenue;
-            
-            // Manual orders from manual metrics
+
+            $allShippingRevenue = Order::whereNotNull('paid_at')->sum('amount_paid');
+            $allServiceFeeUSD = PurchaseRequest::whereIn('status', ['paid', 'purchased'])->sum('processing_fee');
+            $allServiceFeeMXN = $allServiceFeeUSD * 18.00;
+            $allCalculatedRevenue = $allShippingRevenue + $allServiceFeeMXN;
+
+            $totalRevenue = $manualRevenue + $allCalculatedRevenue;
+
             $manualOrders = $manualMetrics->sum('total_orders');
-            
-            // Calculated orders from database
             $calculatedOrders = Order::count();
-            
-            // Total orders = manual + calculated
             $totalOrders = $manualOrders + $calculatedOrders;
             
-            // Total conversations = sum ALL manual metrics (even if is_manual_mode = false)
             $totalConversations = MonthlyManualMetric::sum('total_conversations');
             
-            // 🔥 EXPENSES FOR ALL TIME - ALWAYS FROM DATABASE ONLY 🔥
             $allExpensesQuery = BusinessExpense::query();
-            $allExpensesByCategory = [
-                'shipping' => round($allExpensesQuery->clone()->where('category', 'shipping')->sum('amount'), 2),
-                'ads' => round($allExpensesQuery->clone()->where('category', 'ads')->sum('amount'), 2),
-                'software' => round($allExpensesQuery->clone()->where('category', 'software')->sum('amount'), 2),
-                'office' => round($allExpensesQuery->clone()->where('category', 'office')->sum('amount'), 2),
-                'po_box' => round($allExpensesQuery->clone()->where('category', 'po_box')->sum('amount'), 2),
-                'misc' => round($allExpensesQuery->clone()->where('category', 'misc')->sum('amount'), 2),
-            ];
-            $allTotalExpenses = array_sum($allExpensesByCategory);
-            $allExpensesByCategory['total'] = round($allTotalExpenses, 2);
-            $allAdSpend = $allExpensesByCategory['ads'];
-            
-            // Profit = Total Revenue - Database Expenses
+            $allTotalExpenses = $allExpensesQuery->sum('amount');
+            $allAdSpend = $allExpensesQuery->where('category', 'ads')->sum('amount');
+
             $profit = $totalRevenue - $allTotalExpenses;
             $profitMargin = $totalRevenue > 0 ? ($profit / $totalRevenue) * 100 : 0;
-
-            // All customers ever
+            
             $allCustomers = User::where('role', 'customer')->count();
-
-            // Marketing metrics
             $cac = $allCustomers > 0 ? round($allAdSpend / $allCustomers, 2) : 0;
             $roas = $allAdSpend > 0 ? round($totalRevenue / $allAdSpend, 2) : 0;
             $conversionRate = $totalConversations > 0 ? round(($totalOrders / $totalConversations) * 100, 2) : 0;
+            
+            $allPurchaseRequestsCount = PurchaseRequest::count();
+            
+            // FIXED: All time purchased items count simply checks status
+            $allPurchasedItemsCount = PurchaseRequestItem::whereHas('purchaseRequest', function($q) {
+                $q->where('status', 'purchased');
+            })->sum('quantity');
 
             return [
                 'source' => 'combined',
                 'revenue' => [
                     'period_total' => round($totalRevenue, 2),
                     'manual_portion' => round($manualRevenue, 2),
-                    'calculated_portion' => round($calculatedRevenue, 2),
+                    'calculated_portion' => round($allCalculatedRevenue, 2),
                     'total_all_time' => round($totalRevenue, 2),
+                    'shipping_revenue' => round($allShippingRevenue, 2),
+                    'service_fee_revenue' => round($allServiceFeeMXN, 2),
                 ],
-                'expenses' => $allExpensesByCategory,
+                'expenses' => $expensesByCategory,
                 'profit' => [
                     'amount' => round($profit, 2),
                     'margin' => round($profitMargin, 2),
                 ],
                 'metrics' => [
                     'total_orders' => $totalOrders,
-                    'manual_orders' => $manualOrders,
-                    'calculated_orders' => $calculatedOrders,
                     'new_customers' => $allCustomers,
                     'total_conversations' => $totalConversations,
                     'cac' => $cac,
                     'roas' => $roas,
                     'conversion_rate' => $conversionRate,
                     'ad_spend' => $allAdSpend,
+                    'purchase_requests_count' => $allPurchaseRequestsCount,
+                    'purchased_items_count' => $allPurchasedItemsCount,
                 ],
                 'manual_metrics' => null,
             ];
         }
 
-        // === SPECIFIC MONTH MODE ===
-        $manualMetric = MonthlyManualMetric::where('year', $year)
-            ->where('month', $month)
-            ->first();
+        // ... (Rest of the function remains the same for Month/Calculated logic)
+        
+        // === SPECIFIC MONTH / PERIOD MODE ===
+        $manualMetric = null;
+        if ($period === 'month') {
+            $manualMetric = MonthlyManualMetric::where('year', $year)
+                ->where('month', $month)
+                ->first();
+        }
 
-        // Check if manual mode is enabled
         $isManualMode = $manualMetric && $manualMetric->is_manual_mode;
 
         if ($isManualMode) {
-            // Use manual data for revenue/orders, but ALWAYS use database for expenses
             $profit = $manualMetric->total_revenue - $totalExpenses;
-            $profitMargin = $manualMetric->total_revenue > 0 
-                ? ($profit / $manualMetric->total_revenue) * 100 
-                : 0;
-
+            $profitMargin = $manualMetric->total_revenue > 0 ? ($profit / $manualMetric->total_revenue) * 100 : 0;
             $cac = $newCustomers > 0 ? round($adSpend / $newCustomers, 2) : 0;
             $roas = $adSpend > 0 ? round($manualMetric->total_revenue / $adSpend, 2) : 0;
-            $conversionRate = $manualMetric->total_conversations > 0 
-                ? round(($manualMetric->total_orders / $manualMetric->total_conversations) * 100, 2) 
-                : 0;
+            $conversionRate = $manualMetric->total_conversations > 0 ? round(($manualMetric->total_orders / $manualMetric->total_conversations) * 100, 2) : 0;
 
             return [
                 'source' => 'manual',
                 'revenue' => [
                     'period_total' => round($manualMetric->total_revenue, 2),
-                    'total_all_time' => round(Order::sum('amount_paid'), 2),
+                    'total_all_time' => round(Order::sum('amount_paid') + (\App\Models\PurchaseRequest::whereIn('status', ['paid', 'purchased'])->sum('processing_fee') * 18), 2),
                 ],
-                'expenses' => $expensesByCategory, // Always from database
+                'expenses' => $expensesByCategory,
                 'profit' => [
                     'amount' => round($profit, 2),
                     'margin' => round($profitMargin, 2),
@@ -526,6 +537,8 @@ class UnifiedAdminDashboardController extends Controller
                     'roas' => $roas,
                     'conversion_rate' => $conversionRate,
                     'ad_spend' => $adSpend,
+                    'purchase_requests_count' => $purchaseRequestsCount,
+                    'purchased_items_count' => $purchasedItemsCount,
                 ],
                 'manual_metrics' => [
                     'id' => $manualMetric->id,
@@ -536,38 +549,47 @@ class UnifiedAdminDashboardController extends Controller
             ];
         }
 
-        // Use calculated data from database
-        $revenue = [
-            'period_total' => round(Order::whereBetween('paid_at', [$start, $end])->sum('amount_paid'), 2),
-            'today' => round(Order::whereDate('paid_at', today())->sum('amount_paid'), 2),
-            'this_week' => round(Order::whereBetween('paid_at', [
-                now()->startOfWeek(),
-                now()->endOfWeek()
-            ])->sum('amount_paid'), 2),
-            'this_month' => round(Order::whereMonth('paid_at', now()->month)
-                ->whereYear('paid_at', now()->year)
-                ->sum('amount_paid'), 2),
-            'total_all_time' => round(Order::sum('amount_paid'), 2),
-            'outstanding' => round(Order::where('status', Order::STATUS_AWAITING_PAYMENT)
-                ->sum('quoted_amount'), 2),
-            'average_order_value' => round(Order::whereNotNull('amount_paid')->avg('amount_paid'), 2),
-        ];
+        // === CALCULATED DATA (Default) ===
+        
+        $profit = $calculatedTotalRevenue - $totalExpenses;
+        $profitMargin = $calculatedTotalRevenue > 0 ? ($profit / $calculatedTotalRevenue) * 100 : 0;
 
-        $profit = $revenue['period_total'] - $totalExpenses;
-        $profitMargin = $revenue['period_total'] > 0 ? ($profit / $revenue['period_total']) * 100 : 0;
-
-        // Get conversations if record exists
         $conversations = $manualMetric ? $manualMetric->total_conversations : 0;
         $ordersCount = Order::whereBetween('created_at', [$start, $end])->count();
-
+        
         $cac = $newCustomers > 0 ? round($adSpend / $newCustomers, 2) : 0;
-        $roas = $adSpend > 0 ? round($revenue['period_total'] / $adSpend, 2) : 0;
+        $roas = $adSpend > 0 ? round($calculatedTotalRevenue / $adSpend, 2) : 0;
         $conversionRate = $conversations > 0 ? round(($ordersCount / $conversations) * 100, 2) : 0;
+
+        // Period Breakdowns
+        $todayShipping = Order::whereDate('paid_at', today())->sum('amount_paid');
+        $todayFees = PurchaseRequest::whereDate('paid_at', today())->whereIn('status', ['paid', 'purchased'])->sum('processing_fee') * 18;
+        $todayRevenue = $todayShipping + $todayFees;
+
+        $weekShipping = Order::whereBetween('paid_at', [now()->startOfWeek(), now()->endOfWeek()])->sum('amount_paid');
+        $weekFees = PurchaseRequest::whereBetween('paid_at', [now()->startOfWeek(), now()->endOfWeek()])->whereIn('status', ['paid', 'purchased'])->sum('processing_fee') * 18;
+        $weekRevenue = $weekShipping + $weekFees;
+
+        $monthShipping = Order::whereMonth('paid_at', now()->month)->whereYear('paid_at', now()->year)->sum('amount_paid');
+        $monthFees = PurchaseRequest::whereMonth('paid_at', now()->month)->whereYear('paid_at', now()->year)->whereIn('status', ['paid', 'purchased'])->sum('processing_fee') * 18;
+        $monthRevenue = $monthShipping + $monthFees;
+        
+        $totalRevenueAllTime = Order::sum('amount_paid') + (PurchaseRequest::whereIn('status', ['paid', 'purchased'])->sum('processing_fee') * 18);
 
         return [
             'source' => 'calculated',
-            'revenue' => $revenue,
-            'expenses' => $expensesByCategory, // Always from database
+            'revenue' => [
+                'period_total' => round($calculatedTotalRevenue, 2),
+                'today' => round($todayRevenue, 2),
+                'this_week' => round($weekRevenue, 2),
+                'this_month' => round($monthRevenue, 2),
+                'total_all_time' => round($totalRevenueAllTime, 2),
+                'breakdown' => [
+                    'shipping' => round($shippingRevenue, 2),
+                    'service_fees' => round($serviceFeeMXN, 2),
+                ]
+            ],
+            'expenses' => $expensesByCategory,
             'profit' => [
                 'amount' => round($profit, 2),
                 'margin' => round($profitMargin, 2),
@@ -579,6 +601,8 @@ class UnifiedAdminDashboardController extends Controller
                 'roas' => $roas,
                 'conversion_rate' => $conversionRate,
                 'ad_spend' => $adSpend,
+                'purchase_requests_count' => $purchaseRequestsCount,
+                'purchased_items_count' => $purchasedItemsCount,
             ],
             'manual_metrics' => $manualMetric ? [
                 'id' => $manualMetric->id,
@@ -598,7 +622,6 @@ class UnifiedAdminDashboardController extends Controller
         $end = $dateRanges['end'];
 
         if ($period === 'all') {
-            // Get manual metrics where is_manual_mode = true
             $manualMetrics = MonthlyManualMetric::where('is_manual_mode', true)->get();
             
             $manualBoxes = [
@@ -637,7 +660,6 @@ class UnifiedAdminDashboardController extends Controller
             ];
         }
 
-        // Specific month
         $manualMetric = MonthlyManualMetric::where('year', $year)
             ->where('month', $month)
             ->first();
@@ -657,7 +679,6 @@ class UnifiedAdminDashboardController extends Controller
             ];
         }
 
-        // Calculated from database
         return [
             'source' => 'calculated',
             'extra-small' => Order::whereBetween('created_at', [$start, $end])->where('box_size', 'extra-small')->count(),

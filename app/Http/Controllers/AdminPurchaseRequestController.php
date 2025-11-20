@@ -388,7 +388,7 @@ class AdminPurchaseRequestController extends Controller
         try {
             $user = $purchaseRequest->user;
 
-            // Create new order
+            // Create new order (awaiting_packages)
             $order = Order::create([
                 'user_id' => $user->id,
                 'order_number' => Order::generateOrderNumber(),
@@ -400,25 +400,43 @@ class AdminPurchaseRequestController extends Controller
                 'completed_at' => now(),
             ]);
 
+            // Convert Items
             foreach ($purchaseRequest->items as $prItem) {
+                
+                // Logic to get the best available image URL
+                $imageUrl = null;
+                if ($prItem->image_url) {
+                    // If we have a file upload URL, use it
+                    $imageUrl = $prItem->image_full_url; 
+                } elseif ($prItem->product_image_url) {
+                    // Fallback to original scraped/provided URL
+                    $imageUrl = $prItem->product_image_url;
+                }
+
                 $orderItem = new OrderItem([
                     'order_id' => $order->id,
                     'product_name' => $prItem->product_name,
                     'product_url' => $prItem->product_url,
-                    'product_image_url' => $prItem->product_image_url,
+                    
+                    // CRITICAL FIX: Map the image URL here
+                    'product_image_url' => $imageUrl,
+                    
                     'quantity' => $prItem->quantity,
                     'declared_value' => $prItem->price,
                     'purchase_request_item_id' => $prItem->id,
                     'is_assisted_purchase' => true,
                 ]);
+                
                 $orderItem->save();
             }
 
+            // Update Request Status
             $purchaseRequest->update([
                 'status' => PurchaseRequest::STATUS_PURCHASED,
                 'purchased_at' => now(),
             ]);
 
+            // Calculate totals
             $order->update([
                 'declared_value' => $order->calculateTotalDeclaredValue(),
                 'iva_amount' => $order->calculateIVA()
@@ -426,6 +444,7 @@ class AdminPurchaseRequestController extends Controller
 
             DB::commit();
 
+            // Send Notification Email
             try {
                 Mail::to($user)->queue(new PurchaseRequestItemsPurchased($purchaseRequest, $order));
                 Log::info('Items purchased email queued for ' . $user->email);
