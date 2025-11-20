@@ -36,7 +36,9 @@ return [
         'financial-dashboard/*',
         'user-types',
         'shipment-tracking',
-        'shipment-tracking/*'
+        'shipment-tracking/*',
+        'purchase-requests',
+        'purchase-requests/*'
     ],
 
     'allowed_methods' => ['*'],

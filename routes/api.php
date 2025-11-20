@@ -19,7 +19,15 @@ use App\Http\Controllers\TrackingController;
 use App\Http\Controllers\FunnelCaptureController;
 use App\Http\Controllers\AdminBusinessExpenseController;
 use App\Http\Controllers\UnifiedAdminDashboardController;
-use App\Http\Controllers\ShipmentTrackingController; // NEW
+use App\Http\Controllers\ShipmentTrackingController;
+use App\Http\Controllers\PurchaseRequestController;
+use App\Http\Controllers\AdminPurchaseRequestController;
+
+/*
+|--------------------------------------------------------------------------
+| API Routes
+|--------------------------------------------------------------------------
+*/
 
 Route::post('/webhooks/stripe', [StripeWebhookController::class, 'handle']);
 
@@ -55,11 +63,9 @@ Route::get('/user-types', function () {
     ]);
 });
 
-// OLD TRACKING (keep for backward compatibility)
 Route::post('/track', [TrackingController::class, 'track']);
 Route::get('/track', [TrackingController::class, 'form']);
 
-// NEW SHIPMENT TRACKING ROUTES - PUBLIC
 Route::prefix('shipment-tracking')->group(function () {
     Route::post('/track', [ShipmentTrackingController::class, 'track']);
     Route::get('/carriers', [ShipmentTrackingController::class, 'carriers']);
@@ -75,6 +81,11 @@ Route::middleware(['web'])->group(function () {
         ->whereIn('provider', ['google', 'facebook']);
 });
 
+/*
+|--------------------------------------------------------------------------
+| Authenticated Customer Routes
+|--------------------------------------------------------------------------
+*/
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/user', function (Request $request) {
         $user = $request->user();
@@ -106,6 +117,12 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/{paymentMethodId}/default', [PaymentMethodController::class, 'setDefault']);
     });
     
+    Route::prefix('purchase-requests')->group(function () {
+        Route::get('/', [PurchaseRequestController::class, 'index']);
+        Route::post('/', [PurchaseRequestController::class, 'store']);
+        Route::get('/{purchaseRequest}', [PurchaseRequestController::class, 'show']);
+    });
+
     Route::prefix('orders')->group(function () {
         Route::get('/', [OrderController::class, 'index']);
         Route::post('/', [OrderController::class, 'create']);
@@ -127,6 +144,11 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/{order}/items/{item}/proof', [OrderItemController::class, 'viewProof']);
     });
     
+    /*
+    |--------------------------------------------------------------------------
+    | Authenticated Admin Routes
+    |--------------------------------------------------------------------------
+    */
     Route::middleware('admin')->prefix('admin')->group(function () {
         
         Route::get('/dashboard', [UnifiedAdminDashboardController::class, 'index']);
@@ -134,6 +156,19 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/dashboard/manual-metrics', [UnifiedAdminDashboardController::class, 'getManualMetrics']);
         Route::delete('/admin/dashboard/manual-metrics', [UnifiedAdminDashboardController::class, 'deleteManualMetrics']);
         
+        Route::prefix('purchase-requests')->group(function () {
+            Route::get('/', [AdminPurchaseRequestController::class, 'index']);
+            Route::delete('/bulk', [AdminPurchaseRequestController::class, 'bulkDestroy']);
+            Route::get('/{purchaseRequest}', [AdminPurchaseRequestController::class, 'show']);
+            
+            Route::put('/{purchaseRequest}', [AdminPurchaseRequestController::class, 'update']);
+            Route::delete('/{purchaseRequest}', [AdminPurchaseRequestController::class, 'destroy']);
+            
+            Route::post('/{purchaseRequest}/quote', [AdminPurchaseRequestController::class, 'createQuote']);
+            Route::post('/{purchaseRequest}/mark-purchased', [AdminPurchaseRequestController::class, 'markAsPurchased']);
+            Route::put('/{purchaseRequest}/reject', [AdminPurchaseRequestController::class, 'reject']);
+        });
+
         Route::prefix('management')->group(function () {
             Route::post('/orders', [AdminOrderManagementController::class, 'createOrder']);
             Route::put('/orders/{order}', [AdminOrderManagementController::class, 'updateOrder']);
