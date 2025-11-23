@@ -57,7 +57,11 @@ class Order extends Model
         'gia_mime_type',
         'gia_size',
         'gia_url',
-        'dhl_waybill_number',
+        'guia_number',
+        'deposit_amount', // New
+        'deposit_paid_at', // New
+        'deposit_invoice_id', // New
+        'deposit_payment_link', // New
     ];
 
     protected $casts = [
@@ -75,7 +79,9 @@ class Order extends Model
         'quoted_amount' => 'decimal:2',
         'declared_value' => 'decimal:2',
         'iva_amount' => 'decimal:2',
+        'deposit_amount' => 'decimal:2',
         'paid_at' => 'datetime',
+        'deposit_paid_at' => 'datetime',
         'estimated_delivery_date' => 'date',
         'actual_delivery_date' => 'date',
         'completed_at' => 'datetime',
@@ -115,8 +121,6 @@ class Order extends Model
             if ($order->skipEmailNotifications) {
                 Log::info('Email notification skipped for admin manual operation', [
                     'order_id' => $order->id,
-                    'order_number' => $order->order_number,
-                    'previous_status' => $order->previousStatus ?? null,
                     'new_status' => $order->status,
                 ]);
                 return;
@@ -127,14 +131,12 @@ class Order extends Model
 
                 Log::info('Order status changed', [
                     'order_id' => $order->id,
-                    'order_number' => $order->order_number,
                     'previous_status' => $order->previousStatus,
                     'new_status' => $order->status,
                 ]);
 
                 try {
                     Mail::to($order->user)->send(new OrderStatusChanged($order, $order->previousStatus));
-                    Log::info('Order status change email sent successfully');
                 } catch (\Exception $e) {
                     Log::error('Failed to send order status email', [
                         'order_id' => $order->id,
@@ -154,7 +156,7 @@ class Order extends Model
             self::STATUS_PROCESSING => 'Processing',
             self::STATUS_SHIPPED => 'Shipped',
             self::STATUS_DELIVERED => 'Delivered',
-            self::STATUS_AWAITING_PAYMENT => 'Awaiting Payment',
+            self::STATUS_AWAITING_PAYMENT => 'Awaiting Final Payment',
             self::STATUS_PAID => 'Paid',
             self::STATUS_CANCELLED => 'Cancelled',
         ];
@@ -182,26 +184,16 @@ class Order extends Model
 
     public function allItemsArrived(): bool
     {
-        if ($this->items()->count() === 0) {
-            return false;
-        }
-
+        if ($this->items()->count() === 0) return false;
         return $this->items()->where('arrived', false)->count() === 0;
     }
 
     public function allItemsWeighed(): bool
     {
-        if ($this->items()->count() === 0) {
-            return false;
-        }
-
+        if ($this->items()->count() === 0) return false;
         return $this->items()->whereNull('weight')->count() === 0;
     }
 
-    /**
-     * Check if order can be quoted (invoice prepared)
-     * Now requires delivery first
-     */
     public function canBeQuoted(): bool
     {
         return $this->status === self::STATUS_DELIVERED;
@@ -214,10 +206,6 @@ class Order extends Model
             $this->allItemsWeighed();
     }
 
-    /**
-     * Check if order is ready for invoice
-     * Order must be delivered before invoice can be sent
-     */
     public function isReadyForQuote(): bool
     {
         return $this->status === self::STATUS_DELIVERED &&
@@ -228,15 +216,10 @@ class Order extends Model
     {
         $total = $this->items()->count();
         if ($total === 0) return 0;
-
         $arrived = $this->arrivedItems()->count();
         return round(($arrived / $total) * 100);
     }
 
-    /**
-     * UPDATED: Mark order as complete
-     * Now includes check to see if all items have already arrived
-     */
     public function markAsComplete(): void
     {
         if ($this->status !== self::STATUS_COLLECTING) {
@@ -247,69 +230,22 @@ class Order extends Model
             throw new \Exception('Order must have at least one item');
         }
 
-        // First, mark as awaiting packages
         $this->update([
             'status' => self::STATUS_AWAITING_PACKAGES,
             'completed_at' => now(),
         ]);
 
-        Log::info('Order marked as complete', [
-            'order_id' => $this->id,
-            'order_number' => $this->order_number,
-            'total_items' => $this->items()->count(),
-            'arrived_items' => $this->arrivedItems()->count(),
-        ]);
-
-        // CRITICAL FIX: Immediately check if all items have already arrived
-        // This handles the case where user reopened order, removed items that hadn't arrived,
-        // and now all remaining items are already at the warehouse
         if ($this->allItemsArrived()) {
-            Log::info('All items already arrived upon completion, auto-advancing to packages_complete', [
-                'order_id' => $this->id,
-                'order_number' => $this->order_number,
-            ]);
-            
-            // Calculate total weight from arrived items
-            $totalWeight = $this->calculateTotalWeight();
-            
-            // Auto-advance to packages_complete status
             $this->update([
                 'status' => self::STATUS_PACKAGES_COMPLETE,
-                'total_weight' => $totalWeight,
+                'total_weight' => $this->calculateTotalWeight(),
             ]);
         }
     }
 
-    /**
-     * UPDATED: Reopen order for editing
-     * Can only reopen from awaiting_packages or packages_complete
-     * Cannot reopen once processing has started
-     */
     public function reopenForEditing(): void
     {
-        // STRICT CHECK: Only allow reopening from these two specific statuses
         if (!in_array($this->status, [self::STATUS_AWAITING_PACKAGES, self::STATUS_PACKAGES_COMPLETE])) {
-            // Provide helpful error messages based on current status
-            if ($this->status === self::STATUS_PROCESSING) {
-                throw new \Exception('Cannot reopen order - it is currently being processed by our team. Please contact support if you need to make changes.');
-            }
-            
-            if ($this->status === self::STATUS_SHIPPED) {
-                throw new \Exception('Cannot reopen order - it has already been shipped. Please contact support for assistance.');
-            }
-            
-            if ($this->status === self::STATUS_DELIVERED) {
-                throw new \Exception('Cannot reopen order - it has already been delivered. Please contact support if you have any issues.');
-            }
-            
-            if (in_array($this->status, [self::STATUS_AWAITING_PAYMENT, self::STATUS_PAID])) {
-                throw new \Exception('Cannot reopen order - invoice has already been sent or payment has been received. Please contact support for assistance.');
-            }
-            
-            if ($this->status === self::STATUS_COLLECTING) {
-                throw new \Exception('Order is already open for editing.');
-            }
-            
             throw new \Exception('Order cannot be reopened in current status');
         }
 
@@ -317,18 +253,8 @@ class Order extends Model
             'status' => self::STATUS_COLLECTING,
             'completed_at' => null,
         ]);
-
-        Log::info('Order reopened for editing', [
-            'order_id' => $this->id,
-            'order_number' => $this->order_number,
-            'arrived_items_count' => $this->arrivedItems()->count(),
-            'pending_items_count' => $this->pendingItems()->count(),
-        ]);
     }
 
-    /**
-     * Check if order can be reopened (user-facing check)
-     */
     public function canBeReopened(): bool
     {
         return in_array($this->status, [
@@ -349,22 +275,12 @@ class Order extends Model
         ]);
     }
 
-    /**
-     * Check and update package arrival status
-     * This is called when individual items are marked as arrived
-     */
     public function checkAndUpdatePackageStatus(): void
     {
         if ($this->status === self::STATUS_AWAITING_PACKAGES && $this->allItemsArrived()) {
             $this->update([
                 'status' => self::STATUS_PACKAGES_COMPLETE,
                 'total_weight' => $this->calculateTotalWeight(),
-            ]);
-            
-            Log::info('Order auto-advanced to packages_complete', [
-                'order_id' => $this->id,
-                'order_number' => $this->order_number,
-                'total_weight' => $this->total_weight,
             ]);
         }
     }
@@ -373,13 +289,11 @@ class Order extends Model
     {
         $breakdown = $this->quote_breakdown ?? [];
         $total = 0;
-
         foreach ($breakdown as $item) {
             if (isset($item['amount'])) {
                 $total += floatval($item['amount']);
             }
         }
-
         return $total;
     }
 
@@ -388,12 +302,14 @@ class Order extends Model
         return $this->status === self::STATUS_PAID;
     }
 
+    public function isDepositPaid(): bool
+    {
+        return !is_null($this->deposit_paid_at);
+    }
+
     public function isQuoteExpired(): bool
     {
-        if (!$this->quote_expires_at) {
-            return false;
-        }
-
+        if (!$this->quote_expires_at) return false;
         return $this->quote_expires_at->isPast();
     }
 
@@ -409,7 +325,6 @@ class Order extends Model
         do {
             $tracking = 'TRK' . strtoupper(Str::random(6));
         } while (self::where('tracking_number', $tracking)->exists());
-
         return $tracking;
     }
 
@@ -429,12 +344,6 @@ class Order extends Model
             ->whereNotNull('payment_link');
     }
 
-    public function scopeAwaitingPayment($query)
-    {
-        return $query->where('status', self::STATUS_AWAITING_PAYMENT)
-            ->whereNotNull('payment_link');
-    }
-
     public function scopeReadyToProcess($query)
     {
         return $query->where('status', self::STATUS_PACKAGES_COMPLETE);
@@ -445,9 +354,6 @@ class Order extends Model
         return $query->where('status', self::STATUS_COLLECTING);
     }
 
-    /**
-     * Scope for orders ready for invoice (delivered but not yet invoiced)
-     */
     public function scopeReadyForInvoice($query)
     {
         return $query->where('status', self::STATUS_DELIVERED)
@@ -468,49 +374,30 @@ class Order extends Model
     public function calculateIVA(): float
     {
         $totalDeclaredValue = $this->calculateTotalDeclaredValue();
-
         if ($totalDeclaredValue >= 50) {
             return round($totalDeclaredValue * 0.16, 2);
         }
-
         return 0;
-    }
-
-    public function convertToMXN($usdAmount): float
-    {
-        $exchangeRate = config('services.exchange_rate.usd_to_mxn', 18.00);
-        return round($usdAmount * $exchangeRate, 2);
     }
 
     public function getGiaFullUrlAttribute(): ?string
     {
-        if (!$this->gia_url) {
-            return null;
-        }
-
-        if (filter_var($this->gia_url, FILTER_VALIDATE_URL)) {
-            return $this->gia_url;
-        }
-
+        if (!$this->gia_url) return null;
+        if (filter_var($this->gia_url, FILTER_VALIDATE_URL)) return $this->gia_url;
         return config('filesystems.disks.spaces.url') . '/' . $this->gia_url;
     }
 
     public function getDhlTrackingUrlAttribute(): ?string
     {
-        if (!$this->dhl_waybill_number) {
-            return null;
-        }
-
-        $cleanWaybill = str_replace(' ', '', $this->dhl_waybill_number);
-
-        return "https://www.dhl.com/mx-es/home/tracking.html?tracking-id={$cleanWaybill}";
+        if (!$this->guia_number) return null;
+        $cleanGuia = str_replace(' ', '', $this->guia_number);
+        return "https://www.dhl.com/mx-es/home/tracking.html?tracking-id={$cleanGuia}";
     }
 
     public function deleteGia(): void
     {
         if ($this->gia_path) {
             \Illuminate\Support\Facades\Storage::disk('spaces')->delete($this->gia_path);
-
             $this->update([
                 'gia_path' => null,
                 'gia_filename' => null,
@@ -521,18 +408,13 @@ class Order extends Model
         }
     }
 
-    public function getFormattedWaybillAttribute(): ?string
+    public function getFormattedGuiaAttribute(): ?string
     {
-        if (!$this->dhl_waybill_number) {
-            return null;
-        }
-
-        $clean = str_replace(' ', '', $this->dhl_waybill_number);
-
+        if (!$this->guia_number) return null;
+        $clean = str_replace(' ', '', $this->guia_number);
         if (strlen($clean) === 10) {
             return substr($clean, 0, 2) . ' ' . substr($clean, 2, 4) . ' ' . substr($clean, 6, 4);
         }
-
-        return $this->dhl_waybill_number;
+        return $this->guia_number;
     }
 }

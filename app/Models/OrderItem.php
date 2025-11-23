@@ -6,8 +6,6 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Facades\Mail;
-use App\Mail\PackageArrived;
 
 class OrderItem extends Model
 {
@@ -17,24 +15,31 @@ class OrderItem extends Model
         'order_id',
         'product_url',
         'product_name',
-        'product_image_url',
+        'product_image_url', // Can be external URL or link to uploaded file
         'retailer',
         'quantity',
         'declared_value',
         'tracking_number',
         'tracking_url',
         'carrier',
-        'estimated_delivery_date', // NEW
+        'estimated_delivery_date',
         'arrived',
         'arrived_at',
         'weight',
         'dimensions',
+        
         // Proof of purchase fields
         'proof_of_purchase_path',
         'proof_of_purchase_filename',
         'proof_of_purchase_mime_type',
         'proof_of_purchase_size',
         'proof_of_purchase_url',
+
+        // New Product Image File fields
+        'product_image_path',
+        'product_image_filename',
+        'product_image_mime_type',
+        'product_image_size',
     ];
 
     protected $casts = [
@@ -42,22 +47,15 @@ class OrderItem extends Model
         'declared_value' => 'decimal:2',
         'arrived' => 'boolean',
         'arrived_at' => 'datetime',
-        'estimated_delivery_date' => 'date', // NEW
+        'estimated_delivery_date' => 'date',
         'weight' => 'decimal:2',
         'dimensions' => 'array',
         'proof_of_purchase_size' => 'integer',
+        'product_image_size' => 'integer',
     ];
 
-    /**
-     * The accessors to append to the model's array form.
-     *
-     * @var array
-     */
-    protected $appends = ['proof_of_purchase_full_url', 'is_overdue']; // Added is_overdue
+    protected $appends = ['proof_of_purchase_full_url', 'is_overdue'];
 
-    /**
-     * Carrier constants
-     */
     const CARRIERS = [
         'ups' => 'UPS',
         'fedex' => 'FedEx',
@@ -70,66 +68,36 @@ class OrderItem extends Model
         'unknown' => 'Unknown',
     ];
 
-    /**
-     * Get the order that owns the item.
-     */
     public function order(): BelongsTo
     {
         return $this->belongsTo(Order::class);
     }
 
-    /**
-     * Check if item is overdue (estimated delivery date has passed but not arrived)
-     */
     public function getIsOverdueAttribute(): bool
     {
         if (!$this->estimated_delivery_date || $this->arrived) {
             return false;
         }
-
         return $this->estimated_delivery_date->isPast();
     }
 
-    /**
-     * Get days until estimated delivery
-     */
     public function getDaysUntilDeliveryAttribute(): ?int
     {
-        if (!$this->estimated_delivery_date) {
+        if (!$this->estimated_delivery_date || $this->arrived) {
             return null;
         }
-
-        if ($this->arrived) {
-            return null;
-        }
-
         return now()->diffInDays($this->estimated_delivery_date, false);
     }
 
-    /**
-     * Mark item as arrived
-     */
     public function markAsArrived(): void
     {
-        $wasNotArrived = !$this->arrived;
-        
         $this->update([
             'arrived' => true,
             'arrived_at' => now(),
         ]);
-        
-        // Send notification if item wasn't already marked as arrived
-        // if ($wasNotArrived) {
-        //     Mail::to($this->order->user)->send(new PackageArrived($this));
-        // }
-        
-        // Check if all items have arrived
         $this->order->checkAndUpdatePackageStatus();
     }
 
-    /**
-     * Mark item as not arrived
-     */
     public function markAsNotArrived(): void
     {
         $this->update([
@@ -138,40 +106,28 @@ class OrderItem extends Model
         ]);
     }
 
-    /**
-     * Update weight and dimensions
-     */
     public function updateMeasurements(float $weight, ?array $dimensions = null): void
     {
         $data = ['weight' => $weight];
-        
         if ($dimensions) {
             $data['dimensions'] = $dimensions;
         }
-        
         $this->update($data);
-        
-        // Update order's total weight
         $this->order->update([
             'total_weight' => $this->order->calculateTotalWeight()
         ]);
     }
 
-    /**
-     * Get total value (declared_value * quantity)
-     */
     public function getTotalValueAttribute(): float
     {
         return $this->declared_value * $this->quantity;
     }
 
-    /**
-     * Extract retailer from URL
-     */
     public function extractRetailer(): ?string
     {
-        $url = parse_url($this->product_url, PHP_URL_HOST);
+        if (!$this->product_url) return null;
         
+        $url = parse_url($this->product_url, PHP_URL_HOST);
         if (!$url) return null;
         
         $retailers = [
@@ -180,13 +136,9 @@ class OrderItem extends Model
             'walmart.com' => 'Walmart',
             'target.com' => 'Target',
             'bestbuy.com' => 'Best Buy',
-            'homedepot.com' => 'Home Depot',
-            'lowes.com' => 'Lowes',
-            'costco.com' => 'Costco',
-            'samsclub.com' => 'Sams Club',
-            'macys.com' => 'Macys',
-            'nordstrom.com' => 'Nordstrom',
-            'zappos.com' => 'Zappos',
+            'shein.com' => 'Shein',
+            'temu.com' => 'Temu',
+            'aliexpress.com' => 'AliExpress',
             'nike.com' => 'Nike',
             'adidas.com' => 'Adidas',
             'apple.com' => 'Apple',
@@ -201,55 +153,27 @@ class OrderItem extends Model
         return ucfirst(str_replace('www.', '', $url));
     }
 
-    /**
-     * Detect carrier from tracking number
-     */
     public function detectCarrier(): ?string
     {
         if (!$this->tracking_number) return null;
         
-        // Remove spaces and convert to uppercase
         $tracking = strtoupper(str_replace(' ', '', $this->tracking_number));
         
-        // UPS: 1Z followed by 16 more chars
-        if (preg_match('/^1Z[0-9A-Z]{16}$/', $tracking)) {
-            return 'ups';
-        }
-        
-        // FedEx: 12 or 15 digits
-        if (preg_match('/^\d{12}$|^\d{15}$/', $tracking)) {
-            return 'fedex';
-        }
-        
-        // USPS: 20-22 digits, or starts with 94
-        if (preg_match('/^94\d{20}$|^\d{20,22}$/', $tracking)) {
-            return 'usps';
-        }
-        
-        // Amazon: TBA followed by digits
-        if (preg_match('/^TBA\d+$/', $tracking)) {
-            return 'amazon';
-        }
-        
-        // DHL: 10 digits
-        if (preg_match('/^\d{10}$/', $tracking)) {
-            return 'dhl';
-        }
+        if (preg_match('/^1Z[0-9A-Z]{16}$/', $tracking)) return 'ups';
+        if (preg_match('/^\d{12}$|^\d{15}$/', $tracking)) return 'fedex';
+        if (preg_match('/^94\d{20}$|^\d{20,22}$/', $tracking)) return 'usps';
+        if (preg_match('/^TBA\d+$/', $tracking)) return 'amazon';
+        if (preg_match('/^\d{10}$/', $tracking)) return 'dhl';
         
         return 'unknown';
     }
 
-    /**
-     * Get tracking URL based on carrier
-     */
     public function getTrackingUrlAttribute(): ?string
     {
-        // If we already have a tracking URL, return it
         if ($this->attributes['tracking_url'] ?? null) {
             return $this->attributes['tracking_url'];
         }
         
-        // Otherwise, build it from carrier and tracking number
         if (!$this->carrier || !$this->tracking_number) {
             return null;
         }
@@ -265,48 +189,23 @@ class OrderItem extends Model
         return $urls[$this->carrier] ?? null;
     }
 
-    /**
-     * Get carrier display name
-     */
     public function getCarrierNameAttribute(): string
     {
         return self::CARRIERS[$this->carrier] ?? 'Unknown';
     }
 
-    /**
-     * Check if item is ready for consolidation
-     */
-    public function isReady(): bool
-    {
-        return $this->arrived && $this->weight !== null;
-    }
-
-    /**
-     * Get the full URL for the proof of purchase file
-     */
     public function getProofOfPurchaseFullUrlAttribute(): ?string
     {
-        if (!$this->proof_of_purchase_url) {
-            return null;
-        }
-        
-        // If it's already a full URL, return it
-        if (filter_var($this->proof_of_purchase_url, FILTER_VALIDATE_URL)) {
-            return $this->proof_of_purchase_url;
-        }
-        
-        // Otherwise, prepend the DO Spaces URL
+        if (!$this->proof_of_purchase_url) return null;
+        if (filter_var($this->proof_of_purchase_url, FILTER_VALIDATE_URL)) return $this->proof_of_purchase_url;
         return config('filesystems.disks.spaces.url') . '/' . $this->proof_of_purchase_url;
     }
 
-    /**
-     * Delete the proof of purchase file
-     */
+    // File Cleanup
     public function deleteProofOfPurchase(): void
     {
         if ($this->proof_of_purchase_path) {
             Storage::disk('spaces')->delete($this->proof_of_purchase_path);
-            
             $this->update([
                 'proof_of_purchase_path' => null,
                 'proof_of_purchase_filename' => null,
@@ -317,100 +216,52 @@ class OrderItem extends Model
         }
     }
 
-    /**
-     * Scope for arrived items
-     */
-    public function scopeArrived($query)
+    public function deleteProductImage(): void
     {
-        return $query->where('arrived', true);
+        if ($this->product_image_path) {
+            Storage::disk('spaces')->delete($this->product_image_path);
+            $this->update([
+                'product_image_path' => null,
+                'product_image_filename' => null,
+                'product_image_mime_type' => null,
+                'product_image_size' => null,
+                // Don't verify URL here as it might be an external URL
+                // If it matched the path, we could clear it, but safer to leave unless we want to reset to null
+            ]);
+        }
     }
 
-    /**
-     * Scope for pending items
-     */
-    public function scopePending($query)
-    {
-        return $query->where('arrived', false);
-    }
-
-    /**
-     * Scope for items missing measurements
-     */
-    public function scopeMissingMeasurements($query)
-    {
-        return $query->whereNull('weight');
-    }
-
-    /**
-     * Scope for items with estimated delivery date
-     */
-    public function scopeWithEstimatedDelivery($query)
-    {
-        return $query->whereNotNull('estimated_delivery_date');
-    }
-
-    /**
-     * Scope for items expected to arrive by a certain date
-     */
-    public function scopeExpectedBy($query, $date)
-    {
-        return $query->whereNotNull('estimated_delivery_date')
-            ->whereDate('estimated_delivery_date', '<=', $date);
-    }
-
-    /**
-     * Scope for items expected to arrive between dates
-     */
-    public function scopeExpectedBetween($query, $startDate, $endDate)
-    {
-        return $query->whereNotNull('estimated_delivery_date')
-            ->whereDate('estimated_delivery_date', '>=', $startDate)
-            ->whereDate('estimated_delivery_date', '<=', $endDate);
-    }
-
-    /**
-     * Scope for overdue items (estimated delivery passed but not arrived)
-     */
-    public function scopeOverdue($query)
-    {
+    // Scopes
+    public function scopeArrived($query) { return $query->where('arrived', true); }
+    public function scopePending($query) { return $query->where('arrived', false); }
+    public function scopeOverdue($query) {
         return $query->where('arrived', false)
             ->whereNotNull('estimated_delivery_date')
             ->whereDate('estimated_delivery_date', '<', now());
     }
-
-    /**
-     * Scope for arriving soon (within X days)
-     */
-    public function scopeArrivingSoon($query, $days = 3)
-    {
+    public function scopeArrivingSoon($query, $days = 3) {
         return $query->where('arrived', false)
             ->whereNotNull('estimated_delivery_date')
             ->whereDate('estimated_delivery_date', '>=', now())
             ->whereDate('estimated_delivery_date', '<=', now()->addDays($days));
     }
+    public function scopeExpectedBy($query, $date) {
+        return $query->whereNotNull('estimated_delivery_date')
+            ->whereDate('estimated_delivery_date', '<=', $date);
+    }
 
-    /**
-     * Boot method to set defaults
-     */
     protected static function boot()
     {
         parent::boot();
         
         static::creating(function ($item) {
-            // Auto-detect retailer if not set
-            if (!$item->retailer) {
-                $item->retailer = $item->extractRetailer();
-            }
-            
-            // Auto-detect carrier if not set
-            if (!$item->carrier && $item->tracking_number) {
-                $item->carrier = $item->detectCarrier();
-            }
+            if (!$item->retailer) $item->retailer = $item->extractRetailer();
+            if (!$item->carrier && $item->tracking_number) $item->carrier = $item->detectCarrier();
         });
         
-        // Clean up file when deleting item
         static::deleting(function ($item) {
             $item->deleteProofOfPurchase();
+            $item->deleteProductImage();
         });
     }
 }

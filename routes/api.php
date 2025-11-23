@@ -35,7 +35,9 @@ Route::get('/', function () {
     return response()->json(['status' => 'ok']);
 });
 
+// Public Product Routes
 Route::get('/products', [ProductController::class, 'index']);
+Route::get('/products/{priceId}', [ProductController::class, 'show']); // Added this
 
 Route::get('/user-types', function () {
     return response()->json([
@@ -68,6 +70,7 @@ Route::get('/track', [TrackingController::class, 'form']);
 
 Route::prefix('shipment-tracking')->group(function () {
     Route::post('/track', [ShipmentTrackingController::class, 'track']);
+    Route::post('/track/bulk', [ShipmentTrackingController::class, 'trackBulk']);
     Route::get('/carriers', [ShipmentTrackingController::class, 'carriers']);
     Route::get('/carriers/search', [ShipmentTrackingController::class, 'searchCarrier']);
 });

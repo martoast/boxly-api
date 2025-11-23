@@ -5,6 +5,7 @@ namespace App\Services;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Http\Client\Pool;
 
 class AfterShipService
 {
@@ -18,9 +19,38 @@ class AfterShipService
     }
 
     /**
-     * Create a new tracking
+     * Helper to guess carrier based on format patterns
+     * Solves collision issues between Estafeta (MX) and DHL (Global)
      */
-    public function createTracking(string $trackingNumber, ?string $slug = null): array
+    private function predictSlug(string $trackingNumber): ?string
+    {
+        $clean = preg_replace('/[^A-Za-z0-9]/', '', $trackingNumber);
+
+        // 1. UPS (Global) - Starts with 1Z
+        if (preg_match('/^1Z[A-Z0-9]{16}$/i', $clean)) {
+            return 'ups';
+        }
+        // 2. USPS (USA) - 22 digits, starts with 9
+        elseif (preg_match('/^9\d{21}$/', $clean)) {
+            return 'usps';
+        }
+        // 3. ESTAFETA (Mexico) - 10 digits (Collision with DHL)
+        elseif (preg_match('/^\d{10}$/', $clean)) {
+            return 'estafeta';
+        }
+        // 4. Estafeta Long Format - 22 digits, not starting with 9
+        elseif (preg_match('/^\d{22}$/', $clean)) {
+            return 'estafeta';
+        }
+
+        return null;
+    }
+
+    /**
+     * Create/Register a tracking number
+     * Returns true if successful or already exists. False if invalid for the carrier.
+     */
+    public function createTracking(string $trackingNumber, ?string $slug = null): bool
     {
         try {
             $payload = ['tracking_number' => $trackingNumber];
@@ -34,60 +64,46 @@ class AfterShipService
                 'Content-Type' => 'application/json',
             ])->post("{$this->baseUrl}/trackings", $payload);
 
-            if ($response->failed()) {
-                Log::error('AfterShip create tracking failed', [
-                    'tracking_number' => $trackingNumber,
-                    'status' => $response->status(),
-                    'response' => $response->json(),
-                ]);
-                
-                return [
-                    'success' => false,
-                    'error' => 'Failed to create tracking',
-                    'details' => $response->json(),
-                ];
+            if ($response->successful()) {
+                return true;
             }
 
             $data = $response->json();
+            $metaCode = $data['meta']['code'] ?? 0;
+            $errorType = $data['meta']['type'] ?? '';
 
-            Log::info('AfterShip tracking created', [
+            // Success if it already exists
+            if ($metaCode === 4003 || $errorType === 'TrackingAlreadyExist') {
+                return true;
+            }
+
+            // If we forced a slug but it was invalid, return false to trigger fallback
+            if ($slug && ($metaCode === 4005 || str_contains(strtolower($data['meta']['message'] ?? ''), 'invalid'))) {
+                 return false;
+            }
+
+            Log::error('AfterShip create tracking failed', [
                 'tracking_number' => $trackingNumber,
-                'slug' => $data['data']['slug'] ?? null,
-                'status_code' => $data['meta']['code'],
+                'response' => $data,
             ]);
-
-            return [
-                'success' => true,
-                'data' => $data['data'],
-                'meta' => $data['meta'],
-            ];
+            
+            return false;
 
         } catch (\Exception $e) {
-            Log::error('AfterShip create tracking exception', [
-                'tracking_number' => $trackingNumber,
-                'error' => $e->getMessage(),
-            ]);
-
-            return [
-                'success' => false,
-                'error' => $e->getMessage(),
-            ];
+            Log::error('AfterShip create tracking exception', ['error' => $e->getMessage()]);
+            return false;
         }
     }
 
     /**
-     * Get tracking information
+     * Get tracking information for a single tracking number
      */
     public function getTracking(string $trackingNumber): array
     {
         try {
-            // Try cache first (cache for 5 minutes)
             $cacheKey = "aftership_tracking_{$trackingNumber}";
             
             if (Cache::has($cacheKey)) {
-                Log::info('AfterShip tracking retrieved from cache', [
-                    'tracking_number' => $trackingNumber,
-                ]);
                 return Cache::get($cacheKey);
             }
 
@@ -99,12 +115,6 @@ class AfterShipService
             ]);
 
             if ($response->failed()) {
-                Log::error('AfterShip get tracking failed', [
-                    'tracking_number' => $trackingNumber,
-                    'status' => $response->status(),
-                    'response' => $response->json(),
-                ]);
-
                 return [
                     'success' => false,
                     'error' => 'Failed to get tracking information',
@@ -124,25 +134,16 @@ class AfterShipService
             $result = [
                 'success' => true,
                 'data' => $data['data']['trackings'][0],
-                'meta' => $data['meta'],
+                'meta' => $data['meta'] ?? [],
             ];
 
-            // Cache the result
-            Cache::put($cacheKey, $result, now()->addMinutes(5));
-
-            Log::info('AfterShip tracking retrieved', [
-                'tracking_number' => $trackingNumber,
-                'status' => $result['data']['tag'] ?? null,
-            ]);
+            // Cache for 15 minutes
+            Cache::put($cacheKey, $result, now()->addMinutes(15));
 
             return $result;
 
         } catch (\Exception $e) {
-            Log::error('AfterShip get tracking exception', [
-                'tracking_number' => $trackingNumber,
-                'error' => $e->getMessage(),
-            ]);
-
+            Log::error('AfterShip get tracking exception', ['error' => $e->getMessage()]);
             return [
                 'success' => false,
                 'error' => $e->getMessage(),
@@ -151,22 +152,92 @@ class AfterShipService
     }
 
     /**
-     * Track a package (create if needed, then get info)
+     * MAIN TRACK METHOD
+     * Uses prediction with auto-detect fallback
      */
-    public function trackPackage(string $trackingNumber, ?string $slug = null): array
+    public function trackPackage(string $trackingNumber, ?string $inputSlug = null): array
     {
-        // First, try to create the tracking (will return existing if already tracked)
-        $createResult = $this->createTracking($trackingNumber, $slug);
+        // 1. Predict slug
+        $predictedSlug = $inputSlug ?? $this->predictSlug($trackingNumber);
 
-        // Wait a moment for AfterShip to fetch data
-        sleep(2);
+        // 2. Try to create with prediction
+        $creationSuccess = false;
+        if ($predictedSlug) {
+            $creationSuccess = $this->createTracking($trackingNumber, $predictedSlug);
+        }
 
-        // Get the tracking information
+        // 3. Fallback: If prediction failed (or was null), try Auto-Detect
+        if (!$creationSuccess) {
+            $this->createTracking($trackingNumber, null);
+        }
+
+        // 4. Retrieve Data
         return $this->getTracking($trackingNumber);
     }
 
     /**
-     * Get list of available couriers
+     * Batch track multiple packages concurrently
+     */
+    public function getTrackingBatch(array $packages): array
+    {
+        $results = [];
+        $toFetch = [];
+
+        // Check Cache
+        foreach ($packages as $pkg) {
+            $num = $pkg['tracking_number'];
+            $cacheKey = "aftership_tracking_{$num}";
+            
+            if (Cache::has($cacheKey)) {
+                $cached = Cache::get($cacheKey);
+                if ($cached['success'] ?? false) {
+                    $results[$num] = $this->formatTrackingData($cached);
+                }
+            } else {
+                $toFetch[] = $pkg;
+            }
+        }
+
+        if (empty($toFetch)) {
+            return $results;
+        }
+
+        // Fetch Missing
+        try {
+            $responses = Http::pool(function (Pool $pool) use ($toFetch) {
+                foreach ($toFetch as $pkg) {
+                    $pool->as($pkg['tracking_number'])->withHeaders([
+                        'as-api-key' => $this->apiKey,
+                        'Content-Type' => 'application/json',
+                    ])->get("{$this->baseUrl}/trackings", [
+                        'tracking_numbers' => $pkg['tracking_number'],
+                    ]);
+                }
+            });
+
+            foreach ($responses as $trackingNumber => $response) {
+                if ($response->ok()) {
+                    $json = $response->json();
+                    
+                    if (!empty($json['data']['trackings'])) {
+                        $rawData = $json['data']['trackings'][0];
+                        $resultWrapper = ['success' => true, 'data' => $rawData];
+                        
+                        Cache::put("aftership_tracking_{$trackingNumber}", $resultWrapper, now()->addMinutes(15));
+                        
+                        $results[$trackingNumber] = $this->formatTrackingData($resultWrapper);
+                    }
+                }
+            }
+        } catch (\Exception $e) {
+            Log::error('Batch tracking error', ['error' => $e->getMessage()]);
+        }
+
+        return $results;
+    }
+
+    /**
+     * Get list of supported carriers
      */
     public function getCouriers(bool $activeOnly = false): array
     {
@@ -199,19 +270,15 @@ class AfterShipService
             $result = [
                 'success' => true,
                 'data' => $data['data'],
-                'meta' => $data['meta'],
+                'meta' => $data['meta'] ?? [],
             ];
 
-            // Cache for 24 hours
             Cache::put($cacheKey, $result, now()->addHours(24));
 
             return $result;
 
         } catch (\Exception $e) {
-            Log::error('AfterShip get couriers exception', [
-                'error' => $e->getMessage(),
-            ]);
-
+            Log::error('AfterShip get couriers exception', ['error' => $e->getMessage()]);
             return [
                 'success' => false,
                 'error' => $e->getMessage(),
@@ -220,7 +287,7 @@ class AfterShipService
     }
 
     /**
-     * Search for courier by name
+     * Search for a carrier
      */
     public function searchCourier(string $name): array
     {
@@ -244,7 +311,7 @@ class AfterShipService
     }
 
     /**
-     * Format tracking data for response
+     * Format tracking data for consistent API response
      */
     public function formatTrackingData(array $trackingData): array
     {
@@ -257,12 +324,12 @@ class AfterShipService
         return [
             'tracking_number' => $data['tracking_number'],
             'carrier' => [
-                'slug' => $data['slug'],
-                'name' => strtoupper($data['slug']),
+                'slug' => $data['slug'] ?? null,
+                'name' => isset($data['slug']) ? strtoupper($data['slug']) : null,
             ],
             'status' => [
-                'tag' => $data['tag'],
-                'message' => $data['subtag_message'] ?? 'N/A',
+                'tag' => $data['tag'] ?? 'Pending',
+                'message' => $data['subtag_message'] ?? 'Status unavailable',
             ],
             'service_type' => $data['shipment_type'] ?? null,
             'origin' => [
@@ -273,8 +340,7 @@ class AfterShipService
                 'country' => $data['destination_country_region'] ?? null,
                 'location' => $data['destination_raw_location'] ?? null,
             ],
-            'estimated_delivery' => $data['courier_estimated_delivery_date']['estimated_delivery_date'] ?? null,
-            'tracking_url' => $data['courier_tracking_link'] ?? null,
+            'estimated_delivery' => $data['expected_delivery'] ?? null, 
             'checkpoints' => array_map(function ($checkpoint) {
                 return [
                     'time' => $checkpoint['checkpoint_time'],

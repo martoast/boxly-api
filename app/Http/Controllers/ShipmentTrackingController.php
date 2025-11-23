@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Http\Requests\TrackPackageRequest;
+use App\Http\Requests\TrackBulkPackageRequest;
 use App\Services\AfterShipService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -18,20 +19,13 @@ class ShipmentTrackingController extends Controller
     }
 
     /**
-     * Track a package by tracking number
+     * Track a single package
      */
     public function track(TrackPackageRequest $request): JsonResponse
     {
         $trackingNumber = $request->input('tracking_number');
         $carrier = $request->input('carrier');
 
-        Log::info('Package tracking requested', [
-            'tracking_number' => $trackingNumber,
-            'carrier' => $carrier,
-            'ip' => $request->ip(),
-        ]);
-
-        // Track the package
         $result = $this->afterShip->trackPackage($trackingNumber, $carrier);
 
         if (!$result['success']) {
@@ -41,12 +35,26 @@ class ShipmentTrackingController extends Controller
             ], 404);
         }
 
-        // Format the tracking data
-        $formattedData = $this->afterShip->formatTrackingData($result);
+        return response()->json([
+            'success' => true,
+            'data' => $this->afterShip->formatTrackingData($result),
+        ]);
+    }
+
+    /**
+     * NEW: Track multiple packages at once
+     */
+    public function trackBulk(TrackBulkPackageRequest $request): JsonResponse
+    {
+        $packages = $request->input('packages'); // Array of {tracking_number, carrier}
+
+        // Use the service's batch method to fetch efficiently
+        $results = $this->afterShip->getTrackingBatch($packages);
 
         return response()->json([
             'success' => true,
-            'data' => $formattedData,
+            'data' => $results, // Returns keyed array [tracking_number => data]
+            'count' => count($results)
         ]);
     }
 
@@ -56,7 +64,7 @@ class ShipmentTrackingController extends Controller
     public function carriers(Request $request): JsonResponse
     {
         $activeOnly = $request->boolean('active_only', false);
-        $country = $request->input('country'); // e.g., 'MEX', 'USA'
+        $country = $request->input('country');
 
         $result = $this->afterShip->getCouriers($activeOnly);
 
@@ -69,21 +77,18 @@ class ShipmentTrackingController extends Controller
 
         $couriers = $result['data']['couriers'];
 
-        // Filter by country if provided
         if ($country) {
             $couriers = array_filter($couriers, function ($courier) use ($country) {
                 return in_array($country, $courier['service_from_country_regions'] ?? []);
             });
         }
 
-        // Format courier data
         $formattedCouriers = array_map(function ($courier) {
             return [
                 'slug' => $courier['slug'],
                 'name' => $courier['name'],
                 'phone' => $courier['phone'] ?? null,
                 'website' => $courier['web_url'] ?? null,
-                'countries' => $courier['service_from_country_regions'] ?? [],
             ];
         }, $couriers);
 
@@ -99,12 +104,8 @@ class ShipmentTrackingController extends Controller
      */
     public function searchCarrier(Request $request): JsonResponse
     {
-        $request->validate([
-            'query' => 'required|string|min:2',
-        ]);
-
+        $request->validate(['query' => 'required|string|min:2']);
         $query = $request->input('query');
-
         $result = $this->afterShip->searchCourier($query);
 
         if (!$result['success']) {

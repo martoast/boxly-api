@@ -125,7 +125,7 @@ class AdminOrderManagementController extends Controller
             'delivered_at' => 'nullable|date',
             'estimated_delivery_date' => 'nullable|date',
             'actual_delivery_date' => 'nullable|date',
-            'dhl_waybill_number' => 'nullable|string|max:50',
+            'guia_number' => 'nullable|string|max:50',
             'stripe_invoice_id' => 'nullable|string|max:255',
             'payment_link' => 'nullable|url|max:500',
         ]);

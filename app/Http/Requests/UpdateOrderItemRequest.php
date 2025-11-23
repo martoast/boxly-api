@@ -44,7 +44,9 @@ class UpdateOrderItemRequest extends FormRequest
             'tracking_number' => 'sometimes|nullable|string|max:100',
             'tracking_url' => 'sometimes|nullable|url|max:500',
             'carrier' => 'sometimes|nullable|string|max:50',
-            'estimated_delivery_date' => 'sometimes|nullable|date|after_or_equal:today', // NEW
+            'estimated_delivery_date' => 'sometimes|nullable|date|after_or_equal:today', 
+            'proof_of_purchase' => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:10240',
+            'product_image' => 'nullable|file|mimes:jpg,jpeg,png,webp|max:5120',
         ];
     }
 
@@ -62,6 +64,7 @@ class UpdateOrderItemRequest extends FormRequest
             'declared_value.min' => 'Declared value must be at least $0.01.',
             'estimated_delivery_date.date' => 'Please provide a valid delivery date.',
             'estimated_delivery_date.after_or_equal' => 'Estimated delivery date cannot be in the past.',
+            'product_image.max' => 'Product image size cannot exceed 5MB.',
         ];
     }
 }
