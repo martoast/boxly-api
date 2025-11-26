@@ -26,7 +26,7 @@ class StoreOrderItemRequest extends FormRequest
             'product_url' => 'nullable|url|max:1000',
             'product_name' => 'required|string|max:255',
             'merchant_order_id' => 'nullable|string|max:255',
-            'quantity' => 'required|integer|min:1|max:100',
+            'quantity' => 'required|integer|min:1|max:9999',
             'declared_value' => 'nullable|numeric|min:0.01|max:99999.99',
             'tracking_number' => 'nullable|string|max:100',
             'tracking_url' => 'nullable|url|max:1000',
