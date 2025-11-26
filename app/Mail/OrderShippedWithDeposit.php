@@ -35,7 +35,8 @@ class OrderShippedWithDeposit extends Mailable implements ShouldQueue
     public function content(): Content
     {
         $cleanGuia = str_replace(' ', '', $this->order->guia_number);
-        $trackingLink = config('app.frontend_url') . '/track?tracking_number=' . $cleanGuia;
+        // $trackingLink = config('app.frontend_url') . '/track?tracking_number=' . $cleanGuia;
+        $trackingLink = "https://contactaftershipmh6u.aftership.com/";
 
         return new Content(
             view: 'emails.orders.shipped-with-deposit',
