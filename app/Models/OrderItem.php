@@ -17,6 +17,7 @@ class OrderItem extends Model
         'product_name',
         'product_image_url', // Can be external URL or link to uploaded file
         'retailer',
+        'merchant_order_id',
         'quantity',
         'declared_value',
         'tracking_number',

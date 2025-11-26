@@ -2,7 +2,6 @@
 
 namespace App\Http\Requests;
 
-use App\Models\Order;
 use Illuminate\Foundation\Http\FormRequest;
 
 class CompleteOrderRequest extends FormRequest
@@ -14,10 +13,10 @@ class CompleteOrderRequest extends FormRequest
     {
         $order = $this->route('order');
         
-        // Check if user owns the order and it's in the correct status
-        return $order->user_id === $this->user()->id && 
-               $order->status === Order::STATUS_COLLECTING &&  // Changed to 'collecting'
-               $order->items()->count() > 0;
+        // ONLY check if the user owns the order here.
+        // Let the Controller/Model handle status checks (Empty items, Wrong status)
+        // so we can return specific error messages (400) instead of generic Forbidden (403).
+        return $order && $order->user_id === $this->user()->id;
     }
 
     /**
@@ -26,17 +25,7 @@ class CompleteOrderRequest extends FormRequest
     public function rules(): array
     {
         return [
-            // No additional data needed, just authorization
-        ];
-    }
-
-    /**
-     * Get custom error messages
-     */
-    public function messages(): array
-    {
-        return [
-            'authorize' => 'You cannot complete this order.',
+            // No validation rules needed here
         ];
     }
 }

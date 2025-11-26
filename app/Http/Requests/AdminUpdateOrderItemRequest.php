@@ -25,6 +25,7 @@ class AdminUpdateOrderItemRequest extends FormRequest
             'product_url' => 'sometimes|required|url|max:1000',
             'product_name' => 'sometimes|required|string|max:255',
             'product_image_url' => 'nullable|url|max:1000',
+            'merchant_order_id' => 'nullable|string|max:255',
             'retailer' => 'nullable|string|max:100',
             'quantity' => 'sometimes|required|integer|min:1|max:999',
             'declared_value' => 'nullable|numeric|min:0|max:99999.99',
@@ -34,7 +35,7 @@ class AdminUpdateOrderItemRequest extends FormRequest
                 'nullable',
                 Rule::in(array_keys(OrderItem::CARRIERS))
             ],
-            'estimated_delivery_date' => 'nullable|date', // NEW - Admin can set past dates
+            'estimated_delivery_date' => 'nullable|date',
             'arrived' => 'sometimes|boolean',
             'arrived_at' => 'nullable|date',
             'weight' => 'nullable|numeric|min:0.01|max:999.99',

@@ -28,6 +28,7 @@ class OrderItemController extends Controller
             $item = $order->items()->create([
                 'product_url' => $request->product_url,
                 'product_name' => $request->product_name,
+                'merchant_order_id' => $request->merchant_order_id,
                 'quantity' => $request->quantity,
                 'declared_value' => $request->declared_value,
                 'tracking_number' => $request->tracking_number,
@@ -35,7 +36,6 @@ class OrderItemController extends Controller
                 'carrier' => $request->carrier,
                 'estimated_delivery_date' => $request->estimated_delivery_date,
                 // product_image_url will be updated if file is uploaded, 
-                // or it might come from the scraper if we implemented one (logic below)
             ]);
 
             // Auto-detect retailer

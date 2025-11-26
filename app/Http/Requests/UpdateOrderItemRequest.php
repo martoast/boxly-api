@@ -39,6 +39,7 @@ class UpdateOrderItemRequest extends FormRequest
         return [
             'product_url' => 'sometimes|nullable|url|max:500',
             'product_name' => 'sometimes|required|string|max:255',
+            'merchant_order_id' => 'nullable|string|max:255',
             'quantity' => 'sometimes|required|integer|min:1|max:100',
             'declared_value' => 'sometimes|required|numeric|min:0.01|max:99999.99',
             'tracking_number' => 'sometimes|nullable|string|max:100',
