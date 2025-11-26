@@ -1,53 +1,44 @@
-<?php
+{{-- purchase-requests/quote-sent.blade.php --}}
+@extends('emails.layout')
 
-namespace App\Mail;
+@section('subject', $locale === 'es' ? '💰 Tu cotización está lista' : '💰 Your quote is ready')
 
-use App\Models\PurchaseRequest;
-use Illuminate\Bus\Queueable;
-use Illuminate\Contracts\Queue\ShouldQueue;
-use Illuminate\Mail\Mailable;
-use Illuminate\Mail\Mailables\Content;
-use Illuminate\Mail\Mailables\Envelope;
-use Illuminate\Queue\SerializesModels;
-use Illuminate\Mail\Mailables\Address;
+@section('content')
+    @php
+        app()->setLocale($locale);
+    @endphp
 
-class PurchaseRequestQuoteSent extends Mailable implements ShouldQueue
-{
-    use Queueable, SerializesModels;
+    <h2>
+        {{ $locale === 'es' ? '¡Tu cotización final está lista!' : 'Your final quote is ready!' }}
+    </h2>
 
-    public function __construct(
-        public PurchaseRequest $purchaseRequest
-    ) {}
+    <p>
+        {{ $locale === 'es' ? 'Hola' : 'Hello' }} {{ $user->name }},
+    </p>
 
-    public function envelope(): Envelope
-    {
-        $locale = $this->purchaseRequest->user->preferred_language ?? 'es';
-        
-        $subject = $locale === 'es' 
-            ? '💰 Cotización lista para tu Compra Asistida - ' . $this->purchaseRequest->request_number
-            : '💰 Quote ready for your Assisted Purchase - ' . $this->purchaseRequest->request_number;
+    <p>
+        @if($locale === 'es')
+            Hemos preparado la cotización para tu solicitud de compra asistida {{ $request->request_number }}.
+        @else
+            We have prepared the quote for your assisted purchase request {{ $request->request_number }}.
+        @endif
+    </p>
 
-        return new Envelope(
-            from: new Address(config('mail.from.address'), config('mail.from.name')),
-            subject: $subject,
-        );
-    }
+    <p style="font-size: 18px; margin: 25px 0;">
+        {{ $locale === 'es' ? 'Total a Pagar:' : 'Total to Pay:' }} ${{ number_format($request->total_amount, 2) }} USD
+    </p>
 
-    public function content(): Content
-    {
-        return new Content(
-            view: 'emails.purchase-requests.quote-sent',
-            with: [
-                'request' => $this->purchaseRequest,
-                'user' => $this->purchaseRequest->user,
-                'locale' => $this->purchaseRequest->user->preferred_language ?? 'es',
-                'url' => $this->purchaseRequest->payment_link,
-            ]
-        );
-    }
+    <div style="text-align: center; margin: 35px 0;">
+        <a href="{{ $url }}" class="button">
+            {{ $locale === 'es' ? 'Pagar Ahora' : 'Pay Now' }}
+        </a>
+    </div>
 
-    public function attachments(): array
-    {
-        return [];
-    }
-}
+    <p style="color: #666; text-align: center;">
+        @if($locale === 'es')
+            Si tienes alguna pregunta sobre tu cotización, por favor contáctanos.
+        @else
+            If you have any questions about your quote, please contact us.
+        @endif
+    </p>
+@endsection

@@ -1,5 +1,6 @@
+{{-- layout.blade.php --}}
 <!DOCTYPE html>
-<html lang="{{ $order->user->preferred_language ?? 'es' }}">
+<html lang="{{ $locale ?? 'es' }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -26,17 +27,12 @@
             padding-bottom: 20px;
             border-bottom: 1px solid #e0e0e0;
         }
-        .header h1 {
-            margin: 0;
-            font-size: 24px;
-            font-weight: 600;
-        }
         .content {
             margin-bottom: 30px;
         }
         h2 {
             font-size: 20px;
-            margin-bottom: 16px;
+            margin-bottom: 20px;
             font-weight: 600;
             color: #333;
         }
@@ -54,15 +50,6 @@
             margin: 20px 0;
             border-radius: 4px;
         }
-        .button:hover {
-            background-color: #245591;
-        }
-        .info-box {
-            background-color: #f8f9fa;
-            padding: 16px;
-            margin: 20px 0;
-            border-left: 3px solid #2E6BB7;
-        }
         .footer {
             margin-top: 30px;
             padding-top: 20px;
@@ -73,10 +60,6 @@
         .footer a {
             color: #2E6BB7;
             text-decoration: none;
-        }
-        strong {
-            font-weight: 600;
-            color: #333;
         }
         @media only screen and (max-width: 600px) {
             body {
@@ -95,15 +78,12 @@
         </div>
         
         <div class="footer">
-            @php
-                $locale = $order->user->preferred_language ?? 'es';
-            @endphp
             <p>
-                {{ __('emails.footer.questions', [], $locale) }}
+                {{ ($locale ?? 'es') === 'es' ? '¿Tienes preguntas? Contáctanos:' : 'Have questions? Contact us:' }}
                 <a href="mailto:contact@boxly.mx">contact@boxly.mx</a>
             </p>
             <p style="font-size: 12px;">
-                {{ __('emails.footer.copyright', ['year' => date('Y'), 'app_name' => config('app.name')], $locale) }}
+                © {{ date('Y') }} {{ config('app.name') }}. {{ ($locale ?? 'es') === 'es' ? 'Todos los derechos reservados.' : 'All rights reserved.' }}
             </p>
         </div>
     </div>
