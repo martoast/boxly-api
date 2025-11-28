@@ -19,7 +19,7 @@ class OrderItemController extends Controller
     public function store(StoreOrderItemRequest $request, Order $order)
     {
         DB::beginTransaction();
-        
+
         try {
             $user = $request->user();
             $userName = Str::slug($user->name);
@@ -42,7 +42,7 @@ class OrderItemController extends Controller
             if ($item->product_url && !$item->retailer) {
                 $item->retailer = $item->extractRetailer();
             }
-            
+
             // Auto-detect carrier
             if (!$item->carrier && $item->tracking_number) {
                 $item->carrier = $item->detectCarrier();
@@ -52,13 +52,13 @@ class OrderItemController extends Controller
             if ($request->hasFile('proof_of_purchase')) {
                 $file = $request->file('proof_of_purchase');
                 $storagePath = "users/{$userName}-{$user->id}/orders/{$order->order_number}/items/{$item->id}/proof";
-                
+
                 $extension = $file->getClientOriginalExtension();
                 $filename = "proof-" . time() . ".{$extension}";
-                
+
                 $path = Storage::disk('spaces')->putFileAs($storagePath, $file, $filename, 'public');
                 $url = config('filesystems.disks.spaces.url') . '/' . $path;
-                
+
                 $item->update([
                     'proof_of_purchase_path' => $path,
                     'proof_of_purchase_filename' => $file->getClientOriginalName(),
@@ -72,10 +72,10 @@ class OrderItemController extends Controller
             if ($request->hasFile('product_image')) {
                 $imgFile = $request->file('product_image');
                 $imgStoragePath = "users/{$userName}-{$user->id}/orders/{$order->order_number}/items/{$item->id}/image";
-                
+
                 $imgExt = $imgFile->getClientOriginalExtension();
                 $imgFilename = "product-" . time() . ".{$imgExt}";
-                
+
                 $imgPath = Storage::disk('spaces')->putFileAs($imgStoragePath, $imgFile, $imgFilename, 'public');
                 $imgUrl = config('filesystems.disks.spaces.url') . '/' . $imgPath;
 
@@ -87,16 +87,15 @@ class OrderItemController extends Controller
                     'product_image_url' => $imgUrl, // Overwrite any URL with the uploaded file
                 ]);
             }
-            
+
             $item->save();
             DB::commit();
-            
+
             return response()->json([
                 'success' => true,
                 'message' => 'Item added to order',
                 'data' => $item->fresh()
             ], 201);
-            
         } catch (\Exception $e) {
             DB::rollBack();
             // Clean up uploaded files if needed
@@ -116,8 +115,28 @@ class OrderItemController extends Controller
         $user = $request->user();
         $userName = Str::slug($user->name);
 
+        // Get validated data except file fields
+        $data = $request->safe()->except(['proof_of_purchase', 'product_image', 'remove_proof_of_purchase', 'remove_product_image']);
+
+        // Convert empty strings to null for nullable fields
+        $nullableFields = [
+            'product_url',
+            'merchant_order_id',
+            'tracking_number',
+            'tracking_url',
+            'carrier',
+            'estimated_delivery_date',
+            'declared_value'
+        ];
+
+        foreach ($nullableFields as $field) {
+            if (array_key_exists($field, $data) && ($data[$field] === '' || $data[$field] === null)) {
+                $data[$field] = null;
+            }
+        }
+
         // Update basic fields
-        $item->update($request->safe()->except(['proof_of_purchase', 'product_image']));
+        $item->update($data);
 
         // Re-detect carrier if tracking number changed
         if ($request->has('tracking_number') && !$request->has('carrier')) {
@@ -125,18 +144,28 @@ class OrderItemController extends Controller
             $item->save();
         }
 
-        // 1. Handle Proof of Purchase Replacement
+        // Handle Proof of Purchase Deletion
+        if ($request->boolean('remove_proof_of_purchase')) {
+            $item->deleteProofOfPurchase();
+        }
+
+        // Handle Product Image Deletion
+        if ($request->boolean('remove_product_image')) {
+            $item->deleteProductImage();
+            $item->update(['product_image_url' => null]);
+        }
+
+        // Handle Proof of Purchase Replacement
         if ($request->hasFile('proof_of_purchase')) {
-            // Delete old file
             $item->deleteProofOfPurchase();
 
             $file = $request->file('proof_of_purchase');
             $storagePath = "users/{$userName}-{$user->id}/orders/{$order->order_number}/items/{$item->id}/proof";
             $filename = "proof-" . time() . "." . $file->getClientOriginalExtension();
-            
+
             $path = Storage::disk('spaces')->putFileAs($storagePath, $file, $filename, 'public');
             $url = config('filesystems.disks.spaces.url') . '/' . $path;
-            
+
             $item->update([
                 'proof_of_purchase_path' => $path,
                 'proof_of_purchase_filename' => $file->getClientOriginalName(),
@@ -146,15 +175,14 @@ class OrderItemController extends Controller
             ]);
         }
 
-        // 2. Handle Product Image Replacement
+        // Handle Product Image Replacement
         if ($request->hasFile('product_image')) {
-            // Delete old file
             $item->deleteProductImage();
 
             $imgFile = $request->file('product_image');
             $imgStoragePath = "users/{$userName}-{$user->id}/orders/{$order->order_number}/items/{$item->id}/image";
             $imgFilename = "product-" . time() . "." . $imgFile->getClientOriginalExtension();
-            
+
             $imgPath = Storage::disk('spaces')->putFileAs($imgStoragePath, $imgFile, $imgFilename, 'public');
             $imgUrl = config('filesystems.disks.spaces.url') . '/' . $imgPath;
 

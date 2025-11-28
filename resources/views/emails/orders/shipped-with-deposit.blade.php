@@ -49,6 +49,43 @@
         {{ $locale === 'es' ? 'Depósito Requerido' : 'Deposit Required' }}
     </h2>
 
+    {{-- Show box details if available --}}
+    @if(isset($boxes) && $boxes->count() > 0)
+    <div style="background-color: #f9f9f9; border-radius: 8px; padding: 15px; margin-bottom: 20px;">
+        <p style="margin: 0 0 10px 0; font-weight: bold;">
+            {{ $locale === 'es' ? 'Cajas en tu envío:' : 'Boxes in your shipment:' }}
+        </p>
+        <table style="width: 100%; border-collapse: collapse;">
+            @foreach($boxes as $box)
+            <tr>
+                <td style="padding: 5px 0;">
+                    {{ $box->quantity > 1 ? $box->quantity . 'x ' : '' }}{{ $box->box_name }}
+                </td>
+                <td style="padding: 5px 0; text-align: right;">
+                    ${{ number_format($box->box_price * $box->quantity, 2) }} {{ strtoupper($box->currency) }}
+                </td>
+            </tr>
+            @endforeach
+            <tr style="border-top: 1px solid #ddd;">
+                <td style="padding: 10px 0 5px 0; font-weight: bold;">
+                    {{ $locale === 'es' ? 'Total:' : 'Total:' }}
+                </td>
+                <td style="padding: 10px 0 5px 0; text-align: right; font-weight: bold;">
+                    ${{ number_format($totalBoxPrice, 2) }} {{ strtoupper($order->currency ?? 'mxn') }}
+                </td>
+            </tr>
+            <tr>
+                <td style="padding: 5px 0; color: #2E6BB7; font-weight: bold;">
+                    {{ $locale === 'es' ? 'Depósito (50%):' : 'Deposit (50%):' }}
+                </td>
+                <td style="padding: 5px 0; text-align: right; color: #2E6BB7; font-weight: bold;">
+                    ${{ number_format($order->deposit_amount, 2) }} {{ strtoupper($order->currency ?? 'mxn') }}
+                </td>
+            </tr>
+        </table>
+    </div>
+    @endif
+
     <p>
         @if($locale === 'es')
             Como parte del proceso de envío, se requiere el pago del depósito del 50%. El saldo restante se cobrará al momento de la entrega.
@@ -62,7 +99,7 @@
             {{ $locale === 'es' ? 'Pagar Depósito' : 'Pay Deposit' }}
         </a>
     </div>
-    
+
     <p style="font-size: 12px; color: #999; text-align: center;">
         {{ $locale === 'es' ? 'Si ya realizaste el pago, por favor ignora este mensaje.' : 'If you have already made the payment, please ignore this message.' }}
     </p>

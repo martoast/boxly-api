@@ -65,14 +65,20 @@ class AdminQuoteController extends Controller
         }
     }
 
+    /**
+     * Send final invoice for remaining 50% balance + extras.
+     * Now supports multiple boxes per order.
+     */
     public function sendInvoice(Request $request, Order $order)
     {
         if ($order->status !== Order::STATUS_DELIVERED) {
             return response()->json(['success' => false, 'message' => 'Order must be delivered'], 400);
         }
 
-        if (!$order->box_price) {
-             return response()->json(['success' => false, 'message' => 'Box price is missing from order'], 400);
+        // Check if we have box pricing (either via boxes relationship or legacy field)
+        $totalBoxPrice = $order->calculateTotalBoxPrice();
+        if ($totalBoxPrice <= 0) {
+            return response()->json(['success' => false, 'message' => 'Box price is missing from order'], 400);
         }
 
         DB::beginTransaction();
@@ -82,14 +88,19 @@ class AdminQuoteController extends Controller
             $stripe = Cashier::stripe();
 
             $depositPaid = $order->deposit_amount ?? 0;
-            $remainingBoxBalance = $order->box_price - $depositPaid;
-            
+            $remainingBoxBalance = $totalBoxPrice - $depositPaid;
+
             $extrasTotal = 0;
             if ($order->quote_breakdown) {
                 $extrasTotal = collect($order->quote_breakdown)->sum('amount');
             }
 
             $totalFinalInvoice = $remainingBoxBalance + $extrasTotal;
+
+            // Determine box count for metadata
+            $boxCount = $order->boxes()->exists()
+                ? $order->total_box_count
+                : 1;
 
             $stripeInvoice = $stripe->invoices->create([
                 'customer' => $user->stripe_id,
@@ -98,40 +109,62 @@ class AdminQuoteController extends Controller
                 'description' => "Final Balance - Order {$order->order_number}",
                 'metadata' => [
                     'type' => 'final_invoice',
-                    'order_id' => (string)$order->id,
+                    'order_id' => (string) $order->id,
                     'order_number' => $order->order_number,
-                    'admin_id' => (string)$request->user()->id,
+                    'admin_id' => (string) $request->user()->id,
+                    'box_count' => (string) $boxCount,
+                    'total_box_price' => (string) $totalBoxPrice,
                 ],
                 'auto_advance' => false,
             ]);
 
+            // Add remaining balance line items
             if ($remainingBoxBalance > 0) {
-                $stripe->invoiceItems->create([
-                    'customer' => $user->stripe_id,
-                    'invoice' => $stripeInvoice->id,
-                    'amount' => intval($remainingBoxBalance * 100),
-                    'currency' => 'mxn',
-                    'description' => "Remaining 50% Balance for Shipment (Total: \${$order->box_price}, Paid Deposit: \${$depositPaid})",
-                ]);
+                // Check if order has multiple boxes via the relationship
+                if ($order->boxes()->exists() && $order->boxes()->count() > 0) {
+                    // Create line item for each box showing remaining 50%
+                    foreach ($order->boxes as $box) {
+                        $boxRemainingAmount = ($box->box_price * $box->quantity) * 0.5;
+                        $description = $box->quantity > 1
+                            ? "Remaining 50%: {$box->quantity}x {$box->box_name} @ \${$box->box_price} each"
+                            : "Remaining 50%: {$box->box_name} (\${$box->box_price})";
+
+                        $stripe->invoiceItems->create([
+                            'customer' => $user->stripe_id,
+                            'invoice' => $stripeInvoice->id,
+                            'amount' => intval($boxRemainingAmount * 100),
+                            'currency' => $order->currency ?? 'mxn',
+                            'description' => $description,
+                        ]);
+                    }
+                } else {
+                    // Legacy single box format
+                    $stripe->invoiceItems->create([
+                        'customer' => $user->stripe_id,
+                        'invoice' => $stripeInvoice->id,
+                        'amount' => intval($remainingBoxBalance * 100),
+                        'currency' => $order->currency ?? 'mxn',
+                        'description' => "Remaining 50% Balance for Shipment (Total: \${$totalBoxPrice}, Paid Deposit: \${$depositPaid})",
+                    ]);
+                }
             }
 
+            // Add any extras from quote breakdown
             if ($order->quote_breakdown) {
                 foreach ($order->quote_breakdown as $item) {
                     $stripe->invoiceItems->create([
                         'customer' => $user->stripe_id,
                         'invoice' => $stripeInvoice->id,
                         'amount' => intval($item['amount'] * 100),
-                        'currency' => 'mxn',
+                        'currency' => $order->currency ?? 'mxn',
                         'description' => $item['description'],
                     ]);
                 }
             }
 
-            // FIX: Capture the updated invoice object
             $finalizedInvoice = $stripe->invoices->finalizeInvoice($stripeInvoice->id);
             $sentInvoice = $stripe->invoices->sendInvoice($stripeInvoice->id);
-            
-            // Use the URL from the sent invoice object
+
             $paymentLink = $sentInvoice->hosted_invoice_url;
 
             $order->update([
@@ -146,8 +179,9 @@ class AdminQuoteController extends Controller
             DB::commit();
 
             Log::info('Final invoice sent', [
-                'order_id' => $order->id, 
+                'order_id' => $order->id,
                 'total' => $totalFinalInvoice,
+                'box_count' => $boxCount,
                 'link' => $paymentLink
             ]);
 
@@ -155,9 +189,10 @@ class AdminQuoteController extends Controller
                 'success' => true,
                 'message' => 'Final invoice sent successfully',
                 'data' => [
-                    'order' => $order->fresh(),
+                    'order' => $order->fresh()->load('boxes'),
                     'payment_link' => $paymentLink,
-                    'total_due' => $totalFinalInvoice
+                    'total_due' => $totalFinalInvoice,
+                    'box_count' => $boxCount,
                 ]
             ]);
 
@@ -212,10 +247,10 @@ class AdminQuoteController extends Controller
 
     public function ordersReadyForQuote(Request $request)
     {
-        $query = Order::with(['user', 'items'])
+        $query = Order::with(['user', 'items', 'boxes'])
             ->where('status', Order::STATUS_DELIVERED)
             ->whereNull('quote_sent_at');
-            
+
         return response()->json(['success' => true, 'data' => $query->paginate(20)]);
     }
 }

@@ -38,6 +38,12 @@ class OrderShippedWithDeposit extends Mailable implements ShouldQueue
         // $trackingLink = config('app.frontend_url') . '/track?tracking_number=' . $cleanGuia;
         $trackingLink = "https://contactaftershipmh6u.aftership.com/";
 
+        // Get box information for the email
+        $boxes = $this->order->boxes;
+        $hasMultipleBoxes = $this->order->hasMultipleBoxes();
+        $boxSummary = $this->order->box_summary;
+        $totalBoxPrice = $this->order->calculateTotalBoxPrice();
+
         return new Content(
             view: 'emails.orders.shipped-with-deposit',
             with: [
@@ -47,7 +53,12 @@ class OrderShippedWithDeposit extends Mailable implements ShouldQueue
                 'trackingLink' => $trackingLink,
                 'depositLink' => $this->order->deposit_payment_link,
                 // We still pass the URL as a backup in case they can't open the attachment
-                'giaUrl' => $this->order->gia_full_url, 
+                'giaUrl' => $this->order->gia_full_url,
+                // Multi-box support
+                'boxes' => $boxes,
+                'hasMultipleBoxes' => $hasMultipleBoxes,
+                'boxSummary' => $boxSummary,
+                'totalBoxPrice' => $totalBoxPrice,
             ]
         );
     }

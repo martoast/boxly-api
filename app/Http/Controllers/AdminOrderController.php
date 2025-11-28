@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 use App\Http\Requests\AdminUpdateOrderStatusRequest;
 use App\Http\Requests\AdminShipOrderRequest;
 use App\Models\Order;
+use App\Models\OrderBox;
 use App\Models\OrderItem;
 use App\Models\User;
 use App\Mail\OrderShippedWithDeposit;
@@ -26,7 +27,7 @@ class AdminOrderController extends Controller
 
         $perPage = $request->input('per_page') ?? $request->input('limit') ?? 20;
 
-        $query = Order::with(['user', 'items']);
+        $query = Order::with(['user', 'items', 'boxes']);
 
         if ($request->has('status')) {
             $query->status($request->status);
@@ -70,14 +71,14 @@ class AdminOrderController extends Controller
     {
         return response()->json([
             'success' => true,
-            'data' => $order->load(['user', 'items'])
+            'data' => $order->load(['user', 'items', 'boxes'])
         ]);
     }
 
     public function readyToShip(Request $request)
     {
         $perPage = $request->input('per_page') ?? 20;
-        $query = Order::with(['user', 'items'])
+        $query = Order::with(['user', 'items', 'boxes'])
             ->status(Order::STATUS_PROCESSING)
             ->oldest('processing_started_at');
 
@@ -91,7 +92,7 @@ class AdminOrderController extends Controller
     public function readyToProcess(Request $request)
     {
         $perPage = $request->input('per_page') ?? 20;
-        $query = Order::with(['user', 'items'])
+        $query = Order::with(['user', 'items', 'boxes'])
             ->status(Order::STATUS_PACKAGES_COMPLETE)
             ->oldest('updated_at');
 
@@ -148,12 +149,17 @@ class AdminOrderController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Order status updated successfully',
-            'data' => $order->fresh()->load(['user', 'items'])
+            'data' => $order->fresh()->load(['user', 'items', 'boxes'])
         ]);
     }
 
     /**
-     * Ship order: Uses Stripe Price ID to set box details, calculates 50% deposit, creates invoice
+     * Ship order: Supports multiple boxes per order.
+     * Creates OrderBox entries, calculates 50% deposit of total box price, creates invoice.
+     *
+     * Request can contain:
+     * - boxes: array of [{stripe_price_id, quantity}] for multiple boxes
+     * - stripe_price_id: single price ID (backwards compatible, converted to boxes array)
      */
     public function shipOrder(AdminShipOrderRequest $request, Order $order)
     {
@@ -165,87 +171,152 @@ class AdminOrderController extends Controller
 
         try {
             $user = $order->user;
+            $stripe = Cashier::stripe();
 
-            // 1. Fetch Price/Product Data from Stripe
-            try {
-                $stripePrice = Cashier::stripe()->prices->retrieve($request->stripe_price_id, [
-                    'expand' => ['product']
-                ]);
-            } catch (\Exception $e) {
-                return response()->json(['success' => false, 'message' => 'Invalid Stripe Price ID provided'], 422);
+            // 1. Fetch all box details from Stripe and calculate totals
+            $boxEntries = [];
+            $totalBoxPrice = 0;
+            $currency = 'mxn';
+            $boxDescriptions = [];
+
+            foreach ($request->boxes as $boxInput) {
+                try {
+                    $stripePrice = $stripe->prices->retrieve($boxInput['stripe_price_id'], [
+                        'expand' => ['product']
+                    ]);
+                } catch (\Exception $e) {
+                    DB::rollBack();
+                    return response()->json([
+                        'success' => false,
+                        'message' => "Invalid Stripe Price ID: {$boxInput['stripe_price_id']}"
+                    ], 422);
+                }
+
+                $quantity = $boxInput['quantity'] ?? 1;
+                $boxPrice = $stripePrice->unit_amount / 100;
+                $boxName = $stripePrice->product->name;
+                $boxSize = $stripePrice->product->metadata->type ?? null;
+                $currency = strtolower($stripePrice->currency);
+
+                $boxEntries[] = [
+                    'stripe_price_id' => $stripePrice->id,
+                    'stripe_product_id' => $stripePrice->product->id,
+                    'box_size' => $boxSize,
+                    'box_name' => $boxName,
+                    'box_price' => $boxPrice,
+                    'currency' => $currency,
+                    'quantity' => $quantity,
+                ];
+
+                $lineTotal = $boxPrice * $quantity;
+                $totalBoxPrice += $lineTotal;
+
+                // Build description for invoice line item
+                $desc = $quantity > 1 ? "{$quantity}x {$boxName}" : $boxName;
+                $boxDescriptions[] = $desc;
             }
 
-            // Extract details
-            $boxPrice = $stripePrice->unit_amount / 100; // Convert cents to main unit
-            $boxName = $stripePrice->product->name; // e.g. "Medium Box"
-            $boxSize = $stripePrice->product->metadata->type ?? null; // e.g. "medium"
-
             // 2. Calculate 50% Deposit
-            $depositAmount = round($boxPrice * 0.5, 2);
+            $depositAmount = round($totalBoxPrice * 0.5, 2);
 
             // 3. Handle GIA File Upload
+            $uploadedPath = null;
             if ($request->hasFile('gia_file')) {
                 $file = $request->file('gia_file');
                 $userName = Str::slug($user->name);
                 $storagePath = "users/{$userName}-{$user->id}/orders/{$order->order_number}/shipping";
                 $filename = "gia-" . time() . ".pdf";
-                
-                $path = Storage::disk('spaces')->putFileAs($storagePath, $file, $filename, 'public');
-                $url = config('filesystems.disks.spaces.url') . '/' . $path;
-                
-                $order->gia_path = $path;
+
+                $uploadedPath = Storage::disk('spaces')->putFileAs($storagePath, $file, $filename, 'public');
+                $url = config('filesystems.disks.spaces.url') . '/' . $uploadedPath;
+
+                $order->gia_path = $uploadedPath;
                 $order->gia_filename = $file->getClientOriginalName();
                 $order->gia_mime_type = $file->getClientMimeType();
                 $order->gia_size = $file->getSize();
                 $order->gia_url = $url;
             }
 
-            // 4. Create Stripe Invoice for Deposit
+            // 4. Create Stripe Customer if needed
             if (!$user->stripe_id) {
                 $user->createAsStripeCustomer();
             }
-            $stripe = Cashier::stripe();
+
+            // 5. Create Stripe Invoice for 50% Deposit
+            $boxCount = count($boxEntries);
+            $invoiceDescription = $boxCount > 1
+                ? "Deposit (50%) for Order {$order->order_number} - {$boxCount} boxes"
+                : "Deposit (50%) for Order {$order->order_number}";
 
             $stripeInvoice = $stripe->invoices->create([
                 'customer' => $user->stripe_id,
-                'currency' => strtolower($stripePrice->currency),
+                'currency' => $currency,
                 'collection_method' => 'send_invoice',
                 'days_until_due' => 3,
-                'description' => "Deposit (50%) for Order {$order->order_number}",
+                'description' => $invoiceDescription,
                 'metadata' => [
                     'type' => 'deposit',
-                    'order_id' => $order->id,
+                    'order_id' => (string) $order->id,
                     'order_number' => $order->order_number,
-                    'stripe_price_id' => $stripePrice->id,
+                    'box_count' => (string) $boxCount,
+                    'total_box_price' => (string) $totalBoxPrice,
                 ],
                 'auto_advance' => false,
             ]);
 
-            $stripe->invoiceItems->create([
-                'customer' => $user->stripe_id,
-                'invoice' => $stripeInvoice->id,
-                'amount' => intval($depositAmount * 100),
-                'currency' => strtolower($stripePrice->currency),
-                'description' => "50% Deposit for {$boxName} (Total: \${$boxPrice} {$stripePrice->currency})",
-            ]);
+            // Create line items for each box type
+            foreach ($boxEntries as $entry) {
+                $lineDescription = $entry['quantity'] > 1
+                    ? "50% Deposit: {$entry['quantity']}x {$entry['box_name']} @ \${$entry['box_price']} each"
+                    : "50% Deposit: {$entry['box_name']} (\${$entry['box_price']})";
+
+                $lineAmount = round(($entry['box_price'] * $entry['quantity']) * 0.5, 2);
+
+                $stripe->invoiceItems->create([
+                    'customer' => $user->stripe_id,
+                    'invoice' => $stripeInvoice->id,
+                    'amount' => intval($lineAmount * 100),
+                    'currency' => $currency,
+                    'description' => $lineDescription,
+                ]);
+            }
 
             $stripe->invoices->finalizeInvoice($stripeInvoice->id);
             $sentInvoice = $stripe->invoices->sendInvoice($stripeInvoice->id);
 
-            // 5. Update Order Data
+            // 6. Clear any existing boxes and create new OrderBox entries
+            $order->boxes()->delete();
+            foreach ($boxEntries as $entry) {
+                OrderBox::create([
+                    'order_id' => $order->id,
+                    'stripe_price_id' => $entry['stripe_price_id'],
+                    'stripe_product_id' => $entry['stripe_product_id'],
+                    'box_size' => $entry['box_size'],
+                    'box_name' => $entry['box_name'],
+                    'box_price' => $entry['box_price'],
+                    'currency' => $entry['currency'],
+                    'quantity' => $entry['quantity'],
+                ]);
+            }
+
+            // 7. Update Order Data
+            // For backwards compatibility, also set the legacy single-box fields
+            // using the first/primary box if there's only one
+            $primaryBox = $boxEntries[0];
+
             $order->status = Order::STATUS_SHIPPED;
             $order->guia_number = $request->guia_number;
             $order->estimated_delivery_date = $request->estimated_delivery_date;
             $order->shipped_at = now();
-            
-            // Set Box/Product Info
-            $order->box_size = $boxSize;
-            $order->box_price = $boxPrice;
-            $order->stripe_price_id = $stripePrice->id;
-            $order->stripe_product_id = $stripePrice->product->id;
-            $order->currency = strtolower($stripePrice->currency);
-            
-            // Set Deposit Info
+
+            // Legacy single-box fields (for backwards compatibility)
+            $order->box_size = count($boxEntries) === 1 ? $primaryBox['box_size'] : null;
+            $order->box_price = $totalBoxPrice; // Store total for easy access
+            $order->stripe_price_id = count($boxEntries) === 1 ? $primaryBox['stripe_price_id'] : null;
+            $order->stripe_product_id = count($boxEntries) === 1 ? $primaryBox['stripe_product_id'] : null;
+            $order->currency = $currency;
+
+            // Deposit Info
             $order->deposit_amount = $depositAmount;
             $order->deposit_invoice_id = $stripeInvoice->id;
             $order->deposit_payment_link = $sentInvoice->hosted_invoice_url;
@@ -254,32 +325,42 @@ class AdminOrderController extends Controller
                 $order->notes = ($order->notes ? $order->notes . "\n" : '') . "Shipped: " . $request->notes;
             }
 
-            $order->skipEmailNotifications = true; // We send custom email
+            $order->skipEmailNotifications = true;
             $order->save();
 
             DB::commit();
 
-            // 6. Send Email
+            // 8. Send Email
             try {
                 Mail::to($user)->queue(new OrderShippedWithDeposit($order));
-                Log::info('Order shipped email queued', ['order_id' => $order->id]);
+                Log::info('Order shipped email queued', [
+                    'order_id' => $order->id,
+                    'box_count' => $boxCount,
+                    'total_box_price' => $totalBoxPrice,
+                    'deposit_amount' => $depositAmount,
+                ]);
             } catch (\Exception $e) {
                 Log::error('Failed to queue email', ['error' => $e->getMessage()]);
             }
 
             return response()->json([
                 'success' => true,
-                'message' => 'Order shipped and deposit invoice generated successfully',
+                'message' => $boxCount > 1
+                    ? "Order shipped with {$boxCount} boxes. Deposit invoice generated."
+                    : 'Order shipped and deposit invoice generated successfully',
                 'data' => [
-                    'order' => $order->fresh()->load(['user', 'items']),
-                    'deposit_link' => $order->deposit_payment_link
+                    'order' => $order->fresh()->load(['user', 'items', 'boxes']),
+                    'deposit_link' => $order->deposit_payment_link,
+                    'boxes' => $boxEntries,
+                    'total_box_price' => $totalBoxPrice,
+                    'deposit_amount' => $depositAmount,
                 ]
             ]);
 
         } catch (\Exception $e) {
             DB::rollBack();
-            if (isset($path)) Storage::disk('spaces')->delete($path);
-            Log::error('Failed to ship order', ['error' => $e->getMessage()]);
+            if (isset($uploadedPath)) Storage::disk('spaces')->delete($uploadedPath);
+            Log::error('Failed to ship order', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }
     }

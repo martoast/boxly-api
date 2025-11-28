@@ -39,15 +39,17 @@ class UpdateOrderItemRequest extends FormRequest
         return [
             'product_url' => 'sometimes|nullable|url|max:500',
             'product_name' => 'sometimes|required|string|max:255',
-            'merchant_order_id' => 'nullable|string|max:255',
+            'merchant_order_id' => 'sometimes|nullable|string|max:255',
             'quantity' => 'sometimes|required|integer|min:1|max:9999',
-            'declared_value' => 'sometimes|required|numeric|min:0.01|max:99999.99',
+            'declared_value' => 'sometimes|nullable|numeric|min:0|max:99999.99',
             'tracking_number' => 'sometimes|nullable|string|max:100',
             'tracking_url' => 'sometimes|nullable|url|max:500',
             'carrier' => 'sometimes|nullable|string|max:50',
-            'estimated_delivery_date' => 'sometimes|nullable|date|after_or_equal:today', 
+            'estimated_delivery_date' => 'sometimes|nullable|date|after_or_equal:today',
             'proof_of_purchase' => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:10240',
             'product_image' => 'nullable|file|mimes:jpg,jpeg,png,webp|max:5120',
+            'remove_proof_of_purchase' => 'sometimes|nullable|boolean',
+            'remove_product_image' => 'sometimes|nullable|boolean',
         ];
     }
 

@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Mail;
 use App\Mail\OrderStatusChanged;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Illuminate\Support\Collection;
 
 class Order extends Model
 {
@@ -182,6 +183,15 @@ class Order extends Model
         return $this->items()->where('arrived', false);
     }
 
+    /**
+     * Get the boxes associated with this order.
+     * Supports multiple boxes per order.
+     */
+    public function boxes(): HasMany
+    {
+        return $this->hasMany(OrderBox::class);
+    }
+
     public function allItemsArrived(): bool
     {
         if ($this->items()->count() === 0) return false;
@@ -305,6 +315,94 @@ class Order extends Model
     public function isDepositPaid(): bool
     {
         return !is_null($this->deposit_paid_at);
+    }
+
+    /**
+     * Check if order has multiple boxes.
+     */
+    public function hasMultipleBoxes(): bool
+    {
+        return $this->boxes()->count() > 1 || $this->boxes()->sum('quantity') > 1;
+    }
+
+    /**
+     * Get total box count (sum of all quantities).
+     */
+    public function getTotalBoxCountAttribute(): int
+    {
+        return (int) $this->boxes()->sum('quantity');
+    }
+
+    /**
+     * Calculate total price of all boxes.
+     * This is the sum of (box_price * quantity) for each box entry.
+     */
+    public function calculateTotalBoxPrice(): float
+    {
+        // If using the new boxes relationship
+        if ($this->boxes()->exists()) {
+            return (float) $this->boxes->sum(function ($box) {
+                return $box->box_price * $box->quantity;
+            });
+        }
+
+        // Fallback to legacy single box_price field for backwards compatibility
+        return (float) ($this->box_price ?? 0);
+    }
+
+    /**
+     * Calculate the deposit amount (50% of total box price).
+     */
+    public function calculateDepositAmount(): float
+    {
+        return round($this->calculateTotalBoxPrice() * 0.5, 2);
+    }
+
+    /**
+     * Get a summary of boxes for display.
+     * Returns array like: ['1x Medium Box', '2x Large Box']
+     */
+    public function getBoxSummaryAttribute(): array
+    {
+        if (!$this->boxes()->exists()) {
+            // Fallback to legacy single box
+            if ($this->box_size) {
+                return [ucfirst(str_replace('-', ' ', $this->box_size)) . ' Box'];
+            }
+            return [];
+        }
+
+        return $this->boxes->map(function ($box) {
+            return $box->description;
+        })->toArray();
+    }
+
+    /**
+     * Get box distribution counts for this order.
+     * Returns array like: ['medium' => 1, 'large' => 2]
+     */
+    public function getBoxDistribution(): array
+    {
+        $distribution = [
+            'extra-small' => 0,
+            'small' => 0,
+            'medium' => 0,
+            'large' => 0,
+            'extra-large' => 0,
+        ];
+
+        if ($this->boxes()->exists()) {
+            foreach ($this->boxes as $box) {
+                if (isset($distribution[$box->box_size])) {
+                    $distribution[$box->box_size] += $box->quantity;
+                }
+            }
+        } elseif ($this->box_size && isset($distribution[$this->box_size])) {
+            // Fallback to legacy single box
+            $distribution[$this->box_size] = 1;
+        }
+
+        return $distribution;
     }
 
     public function isQuoteExpired(): bool

@@ -32,12 +32,33 @@ class AdminShipOrderRequest extends FormRequest
                 'date',
                 'after:today'
             ],
-            // Now strictly requires Stripe Price ID
-            'stripe_price_id' => [
-                'required',
+
+            // NEW: Support for multiple boxes
+            // Admin can send either a single stripe_price_id OR an array of boxes
+            'boxes' => [
+                'required_without:stripe_price_id',
+                'array',
+                'min:1',
+            ],
+            'boxes.*.stripe_price_id' => [
+                'required_with:boxes',
                 'string',
                 'starts_with:price_',
             ],
+            'boxes.*.quantity' => [
+                'sometimes',
+                'integer',
+                'min:1',
+                'max:10',
+            ],
+
+            // Legacy single box support (backwards compatible)
+            'stripe_price_id' => [
+                'required_without:boxes',
+                'string',
+                'starts_with:price_',
+            ],
+
             'notes' => [
                 'nullable',
                 'string',
@@ -53,7 +74,13 @@ class AdminShipOrderRequest extends FormRequest
             'guia_number.regex' => 'Guia number must contain only numbers and spaces.',
             'gia_file.required' => 'GIA document is required.',
             'estimated_delivery_date.required' => 'Estimated delivery date is required.',
-            'stripe_price_id.required' => 'Please select a valid Box Product from the list.',
+            'stripe_price_id.required_without' => 'Please select at least one box or provide a stripe_price_id.',
+            'boxes.required_without' => 'Please select at least one box.',
+            'boxes.min' => 'At least one box is required.',
+            'boxes.*.stripe_price_id.required_with' => 'Each box must have a valid Stripe Price ID.',
+            'boxes.*.stripe_price_id.starts_with' => 'Invalid Stripe Price ID format.',
+            'boxes.*.quantity.min' => 'Quantity must be at least 1.',
+            'boxes.*.quantity.max' => 'Quantity cannot exceed 10.',
         ];
     }
 
@@ -63,6 +90,27 @@ class AdminShipOrderRequest extends FormRequest
             $this->merge([
                 'guia_number' => preg_replace('/\s+/', ' ', trim($this->guia_number))
             ]);
+        }
+
+        // Convert single stripe_price_id to boxes array format for unified processing
+        // This makes the controller logic simpler
+        if ($this->has('stripe_price_id') && !$this->has('boxes')) {
+            $this->merge([
+                'boxes' => [
+                    ['stripe_price_id' => $this->stripe_price_id, 'quantity' => 1]
+                ]
+            ]);
+        }
+
+        // Ensure each box has a default quantity of 1
+        if ($this->has('boxes')) {
+            $boxes = collect($this->boxes)->map(function ($box) {
+                return [
+                    'stripe_price_id' => $box['stripe_price_id'],
+                    'quantity' => $box['quantity'] ?? 1,
+                ];
+            })->toArray();
+            $this->merge(['boxes' => $boxes]);
         }
     }
 }

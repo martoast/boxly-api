@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\BusinessExpense;
 use App\Models\MonthlyManualMetric;
 use App\Models\Order;
+use App\Models\OrderBox;
 use App\Models\OrderItem;
 use App\Models\PurchaseRequest;
 use App\Models\PurchaseRequestItem;
@@ -614,7 +615,9 @@ class UnifiedAdminDashboardController extends Controller
     }
 
     /**
-     * Get box size distribution with manual metrics support
+     * Get box size distribution with manual metrics support.
+     * Now counts boxes from both the new order_boxes table AND legacy orders.box_size field.
+     * Each box's quantity is properly counted (e.g., 2x Medium = 2 medium boxes).
      */
     private function getBoxDistribution(array $dateRanges, int $year, int $month, string $period): array
     {
@@ -623,7 +626,7 @@ class UnifiedAdminDashboardController extends Controller
 
         if ($period === 'all') {
             $manualMetrics = MonthlyManualMetric::where('is_manual_mode', true)->get();
-            
+
             $manualBoxes = [
                 'extra-small' => $manualMetrics->sum('boxes_extra_small'),
                 'small' => $manualMetrics->sum('boxes_small'),
@@ -631,15 +634,21 @@ class UnifiedAdminDashboardController extends Controller
                 'large' => $manualMetrics->sum('boxes_large'),
                 'extra-large' => $manualMetrics->sum('boxes_extra_large'),
             ];
-            
+
+            // Count boxes from the new order_boxes table (sum of quantities by size)
+            $newBoxCounts = $this->getBoxCountsFromOrderBoxes();
+
+            // Count legacy boxes from orders that don't have entries in order_boxes
+            $legacyBoxCounts = $this->getLegacyBoxCounts();
+
             $calculatedBoxes = [
-                'extra-small' => Order::where('box_size', 'extra-small')->count(),
-                'small' => Order::where('box_size', 'small')->count(),
-                'medium' => Order::where('box_size', 'medium')->count(),
-                'large' => Order::where('box_size', 'large')->count(),
-                'extra-large' => Order::where('box_size', 'extra-large')->count(),
+                'extra-small' => $newBoxCounts['extra-small'] + $legacyBoxCounts['extra-small'],
+                'small' => $newBoxCounts['small'] + $legacyBoxCounts['small'],
+                'medium' => $newBoxCounts['medium'] + $legacyBoxCounts['medium'],
+                'large' => $newBoxCounts['large'] + $legacyBoxCounts['large'],
+                'extra-large' => $newBoxCounts['extra-large'] + $legacyBoxCounts['extra-large'],
             ];
-            
+
             $totalBoxes = [
                 'extra-small' => $manualBoxes['extra-small'] + $calculatedBoxes['extra-small'],
                 'small' => $manualBoxes['small'] + $calculatedBoxes['small'],
@@ -647,7 +656,13 @@ class UnifiedAdminDashboardController extends Controller
                 'large' => $manualBoxes['large'] + $calculatedBoxes['large'],
                 'extra-large' => $manualBoxes['extra-large'] + $calculatedBoxes['extra-large'],
             ];
-            
+
+            // Count orders without any box selection
+            $ordersWithNewBoxes = OrderBox::distinct('order_id')->pluck('order_id');
+            $notSelected = Order::whereNull('box_size')
+                ->whereNotIn('id', $ordersWithNewBoxes)
+                ->count();
+
             return [
                 'source' => 'combined',
                 'extra-small' => $totalBoxes['extra-small'],
@@ -655,7 +670,7 @@ class UnifiedAdminDashboardController extends Controller
                 'medium' => $totalBoxes['medium'],
                 'large' => $totalBoxes['large'],
                 'extra-large' => $totalBoxes['extra-large'],
-                'not_selected' => Order::whereNull('box_size')->count(),
+                'not_selected' => $notSelected,
                 'total' => array_sum($totalBoxes),
             ];
         }
@@ -679,14 +694,85 @@ class UnifiedAdminDashboardController extends Controller
             ];
         }
 
+        // Calculated mode for specific date range
+        $newBoxCounts = $this->getBoxCountsFromOrderBoxes($start, $end);
+        $legacyBoxCounts = $this->getLegacyBoxCounts($start, $end);
+
+        $ordersWithNewBoxes = OrderBox::whereHas('order', function ($q) use ($start, $end) {
+            $q->whereBetween('created_at', [$start, $end]);
+        })->distinct('order_id')->pluck('order_id');
+
+        $notSelected = Order::whereBetween('created_at', [$start, $end])
+            ->whereNull('box_size')
+            ->whereNotIn('id', $ordersWithNewBoxes)
+            ->count();
+
         return [
             'source' => 'calculated',
-            'extra-small' => Order::whereBetween('created_at', [$start, $end])->where('box_size', 'extra-small')->count(),
-            'small' => Order::whereBetween('created_at', [$start, $end])->where('box_size', 'small')->count(),
-            'medium' => Order::whereBetween('created_at', [$start, $end])->where('box_size', 'medium')->count(),
-            'large' => Order::whereBetween('created_at', [$start, $end])->where('box_size', 'large')->count(),
-            'extra-large' => Order::whereBetween('created_at', [$start, $end])->where('box_size', 'extra-large')->count(),
-            'not_selected' => Order::whereBetween('created_at', [$start, $end])->whereNull('box_size')->count(),
+            'extra-small' => $newBoxCounts['extra-small'] + $legacyBoxCounts['extra-small'],
+            'small' => $newBoxCounts['small'] + $legacyBoxCounts['small'],
+            'medium' => $newBoxCounts['medium'] + $legacyBoxCounts['medium'],
+            'large' => $newBoxCounts['large'] + $legacyBoxCounts['large'],
+            'extra-large' => $newBoxCounts['extra-large'] + $legacyBoxCounts['extra-large'],
+            'not_selected' => $notSelected,
+        ];
+    }
+
+    /**
+     * Get box counts from the new order_boxes table.
+     * Sums quantities by box_size.
+     */
+    private function getBoxCountsFromOrderBoxes(?string $start = null, ?string $end = null): array
+    {
+        $query = OrderBox::query();
+
+        if ($start && $end) {
+            $query->whereHas('order', function ($q) use ($start, $end) {
+                $q->whereBetween('created_at', [$start, $end]);
+            });
+        }
+
+        $counts = $query->select('box_size', DB::raw('SUM(quantity) as total'))
+            ->groupBy('box_size')
+            ->pluck('total', 'box_size')
+            ->toArray();
+
+        return [
+            'extra-small' => (int) ($counts['extra-small'] ?? 0),
+            'small' => (int) ($counts['small'] ?? 0),
+            'medium' => (int) ($counts['medium'] ?? 0),
+            'large' => (int) ($counts['large'] ?? 0),
+            'extra-large' => (int) ($counts['extra-large'] ?? 0),
+        ];
+    }
+
+    /**
+     * Get box counts from legacy orders.box_size field.
+     * Only counts orders that DON'T have entries in order_boxes table.
+     */
+    private function getLegacyBoxCounts(?string $start = null, ?string $end = null): array
+    {
+        // Get order IDs that have entries in the new order_boxes table
+        $ordersWithNewBoxes = OrderBox::distinct('order_id')->pluck('order_id');
+
+        $query = Order::whereNotNull('box_size')
+            ->whereNotIn('id', $ordersWithNewBoxes);
+
+        if ($start && $end) {
+            $query->whereBetween('created_at', [$start, $end]);
+        }
+
+        $counts = $query->select('box_size', DB::raw('COUNT(*) as total'))
+            ->groupBy('box_size')
+            ->pluck('total', 'box_size')
+            ->toArray();
+
+        return [
+            'extra-small' => (int) ($counts['extra-small'] ?? 0),
+            'small' => (int) ($counts['small'] ?? 0),
+            'medium' => (int) ($counts['medium'] ?? 0),
+            'large' => (int) ($counts['large'] ?? 0),
+            'extra-large' => (int) ($counts['extra-large'] ?? 0),
         ];
     }
 

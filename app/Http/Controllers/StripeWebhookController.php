@@ -38,23 +38,33 @@ class StripeWebhookController extends Controller
     {
         $invoice = $event->data->object;
         $metadata = isset($invoice->metadata) ? $invoice->metadata->toArray() : [];
-        
-        Log::info('Invoice Paid Webhook', ['id' => $invoice->id, 'metadata' => $metadata]);
+
+        Log::info('Invoice Paid Webhook', [
+            'id' => $invoice->id,
+            'metadata' => $metadata,
+            'amount_paid' => $invoice->amount_paid,
+        ]);
 
         $type = $metadata['type'] ?? null;
 
-        // 1. Handle Deposit Payment (First 50%)
+        // 1. Handle Deposit Payment (First 50%) - supports multiple boxes
         if ($type === 'deposit' && isset($metadata['order_id'])) {
             $order = Order::find($metadata['order_id']);
             if ($order) {
                 $newAmount = $invoice->amount_paid / 100;
+                $boxCount = $metadata['box_count'] ?? 1;
 
                 $order->update([
                     'deposit_paid_at' => now(),
                     'amount_paid' => ($order->amount_paid ?? 0) + $newAmount,
                 ]);
-                
-                Log::info('Order deposit paid', ['order_id' => $order->id]);
+
+                Log::info('Order deposit paid', [
+                    'order_id' => $order->id,
+                    'amount' => $newAmount,
+                    'box_count' => $boxCount,
+                    'total_box_price' => $metadata['total_box_price'] ?? null,
+                ]);
 
                 // SEND DEPOSIT EMAIL
                 try {
@@ -82,23 +92,29 @@ class StripeWebhookController extends Controller
     protected function handleOrderPaid($invoice, $metadata)
     {
         $order = Order::find($metadata['order_id']);
-        
+
         if (!$order || $order->isPaid()) return;
-        
+
         try {
             $newAmount = $invoice->amount_paid / 100;
+            $boxCount = $metadata['box_count'] ?? 1;
 
             $order->update([
                 'status' => Order::STATUS_PAID,
-                'amount_paid' => ($order->amount_paid ?? 0) + $newAmount, 
+                'amount_paid' => ($order->amount_paid ?? 0) + $newAmount,
                 'paid_at' => now(),
                 'stripe_payment_intent_id' => $invoice->payment_intent
             ]);
-            
-            Log::info('Order fully paid', ['order_id' => $order->id]);
-            
+
+            Log::info('Order fully paid', [
+                'order_id' => $order->id,
+                'amount' => $newAmount,
+                'box_count' => $boxCount,
+                'total_box_price' => $metadata['total_box_price'] ?? null,
+            ]);
+
             Mail::to($order->user)->send(new PaymentReceived($order));
-            
+
         } catch (\Exception $e) {
             Log::error('Order paid handling failed', ['error' => $e->getMessage()]);
         }
