@@ -3,11 +3,13 @@
 namespace App\Http\Controllers;
 
 use App\Models\Order;
+use App\Models\OrderBox;
 use App\Models\User;
 use App\Models\OrderItem;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Laravel\Cashier\Cashier;
 
 class AdminOrderManagementController extends Controller
 {
@@ -19,17 +21,28 @@ class AdminOrderManagementController extends Controller
         $request->validate([
             'user_id' => 'required|exists:users,id',
             'status' => 'nullable|string|in:' . implode(',', array_keys(Order::getStatuses())),
+            
+            // Allow either full_address OR individual fields
             'delivery_address' => 'required|array',
-            'delivery_address.street' => 'required|string|max:255',
-            'delivery_address.exterior_number' => 'required|string|max:20',
+            'delivery_address.full_address' => 'nullable|string|max:1000',
+            
+            // Individual fields only required if full_address is not provided
+            'delivery_address.street' => 'required_without:delivery_address.full_address|nullable|string|max:255',
+            'delivery_address.exterior_number' => 'required_without:delivery_address.full_address|nullable|string|max:20',
             'delivery_address.interior_number' => 'nullable|string|max:20',
-            'delivery_address.colonia' => 'required|string|max:100',
-            'delivery_address.municipio' => 'required|string|max:100',
-            'delivery_address.estado' => 'required|string|max:100',
-            'delivery_address.postal_code' => 'required|regex:/^\d{5}$/',
+            'delivery_address.colonia' => 'required_without:delivery_address.full_address|nullable|string|max:100',
+            'delivery_address.municipio' => 'required_without:delivery_address.full_address|nullable|string|max:100',
+            'delivery_address.estado' => 'required_without:delivery_address.full_address|nullable|string|max:100',
+            'delivery_address.postal_code' => 'required_without:delivery_address.full_address|nullable|regex:/^\d{5}$/',
             'delivery_address.referencias' => 'nullable|string|max:500',
+            
             'is_rural' => 'boolean',
             'notes' => 'nullable|string|max:2000',
+            
+            // Boxes support for creation
+            'boxes' => 'nullable|array',
+            'boxes.*.stripe_price_id' => 'required_with:boxes|string|max:255',
+            'boxes.*.quantity' => 'nullable|integer|min:1|max:99',
         ]);
 
         DB::beginTransaction();
@@ -53,6 +66,12 @@ class AdminOrderManagementController extends Controller
             $order->skipEmailNotifications = true;
             $order->save();
 
+            // Handle boxes if provided - fetch from Stripe
+            if ($request->has('boxes') && is_array($request->boxes) && count($request->boxes) > 0) {
+                $boxEntries = $this->fetchBoxDetailsFromStripe($request->boxes);
+                $this->saveBoxEntries($order, $boxEntries);
+            }
+
             DB::commit();
 
             Log::info('Admin created order', [
@@ -60,12 +79,13 @@ class AdminOrderManagementController extends Controller
                 'order_number' => $order->order_number,
                 'user_id' => $user->id,
                 'admin_id' => $request->user()->id,
+                'boxes_count' => $request->has('boxes') ? count($request->boxes) : 0,
             ]);
 
             return response()->json([
                 'success' => true,
                 'message' => 'Order created successfully',
-                'data' => $order->fresh()->load(['user', 'items'])
+                'data' => $order->fresh()->load(['user', 'items', 'boxes'])
             ], 201);
 
         } catch (\Exception $e) {
@@ -74,6 +94,7 @@ class AdminOrderManagementController extends Controller
             Log::error('Admin failed to create order', [
                 'admin_id' => $request->user()->id,
                 'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
             ]);
             
             return response()->json([
@@ -98,14 +119,19 @@ class AdminOrderManagementController extends Controller
             'iva_amount' => 'nullable|numeric|min:0|max:99999.99',
             'is_rural' => 'nullable|boolean',
             'rural_surcharge' => 'nullable|numeric|min:0|max:9999.99',
+            
+            // Allow either full_address OR individual fields for updates
             'delivery_address' => 'nullable|array',
-            'delivery_address.street' => 'required_with:delivery_address|string|max:255',
-            'delivery_address.exterior_number' => 'required_with:delivery_address|string|max:20',
+            'delivery_address.full_address' => 'nullable|string|max:1000',
+            'delivery_address.street' => 'nullable|string|max:255',
+            'delivery_address.exterior_number' => 'nullable|string|max:20',
             'delivery_address.interior_number' => 'nullable|string|max:20',
-            'delivery_address.colonia' => 'required_with:delivery_address|string|max:100',
-            'delivery_address.municipio' => 'required_with:delivery_address|string|max:100',
-            'delivery_address.estado' => 'required_with:delivery_address|string|max:100',
-            'delivery_address.postal_code' => 'required_with:delivery_address|regex:/^\d{5}$/',
+            'delivery_address.colonia' => 'nullable|string|max:100',
+            'delivery_address.municipio' => 'nullable|string|max:100',
+            'delivery_address.estado' => 'nullable|string|max:100',
+            'delivery_address.postal_code' => 'nullable|regex:/^\d{5}$/',
+            'delivery_address.referencias' => 'nullable|string|max:500',
+            
             'total_weight' => 'nullable|numeric|min:0|max:999.99',
             'actual_weight' => 'nullable|numeric|min:0|max:999.99',
             'shipping_cost' => 'nullable|numeric|min:0|max:99999.99',
@@ -114,9 +140,11 @@ class AdminOrderManagementController extends Controller
             'quoted_amount' => 'nullable|numeric|min:0|max:999999.99',
             'quote_breakdown' => 'nullable|array',
             'amount_paid' => 'nullable|numeric|min:0|max:999999.99',
+            'deposit_amount' => 'nullable|numeric|min:0|max:999999.99',
             'currency' => 'nullable|string|in:mxn,usd',
             'notes' => 'nullable|string|max:2000',
             'paid_at' => 'nullable|date',
+            'deposit_paid_at' => 'nullable|date',
             'completed_at' => 'nullable|date',
             'processing_started_at' => 'nullable|date',
             'quote_sent_at' => 'nullable|date',
@@ -127,7 +155,15 @@ class AdminOrderManagementController extends Controller
             'actual_delivery_date' => 'nullable|date',
             'guia_number' => 'nullable|string|max:50',
             'stripe_invoice_id' => 'nullable|string|max:255',
+            'deposit_invoice_id' => 'nullable|string|max:255',
             'payment_link' => 'nullable|url|max:500',
+            'deposit_payment_link' => 'nullable|url|max:500',
+            
+            // Boxes support - only need stripe_price_id and quantity, we fetch the rest from Stripe
+            'boxes' => 'nullable|array',
+            'boxes.*.id' => 'nullable|integer',
+            'boxes.*.stripe_price_id' => 'required_with:boxes|string|max:255',
+            'boxes.*.quantity' => 'nullable|integer|min:1|max:99',
         ]);
 
         DB::beginTransaction();
@@ -136,8 +172,47 @@ class AdminOrderManagementController extends Controller
             // Skip email notifications for admin manual updates
             $order->skipEmailNotifications = true;
             
-            // Update the order with any provided fields
-            $order->update($request->all());
+            // Separate boxes from other update data
+            $updateData = $request->except(['boxes']);
+            
+            // Handle boxes array if provided
+            if ($request->has('boxes')) {
+                $boxes = $request->input('boxes');
+                
+                // Delete existing boxes
+                $order->boxes()->delete();
+                
+                if (is_array($boxes) && count($boxes) > 0) {
+                    // Fetch full details from Stripe and save
+                    $boxEntries = $this->fetchBoxDetailsFromStripe($boxes);
+                    $totalBoxPrice = $this->saveBoxEntries($order, $boxEntries);
+                    
+                    // Update order's box_price with total
+                    $updateData['box_price'] = $totalBoxPrice;
+                    
+                    // If single box, set legacy fields for backwards compatibility
+                    if (count($boxEntries) === 1) {
+                        $singleBox = $boxEntries[0];
+                        $updateData['box_size'] = $singleBox['box_size'];
+                        $updateData['stripe_price_id'] = $singleBox['stripe_price_id'];
+                        $updateData['stripe_product_id'] = $singleBox['stripe_product_id'];
+                    } else {
+                        // Multiple boxes - clear legacy single-box fields
+                        $updateData['box_size'] = null;
+                        $updateData['stripe_price_id'] = null;
+                        $updateData['stripe_product_id'] = null;
+                    }
+                } else {
+                    // Empty boxes array - clear all box-related fields
+                    $updateData['box_price'] = null;
+                    $updateData['box_size'] = null;
+                    $updateData['stripe_price_id'] = null;
+                    $updateData['stripe_product_id'] = null;
+                }
+            }
+            
+            // Update the order with processed data
+            $order->update($updateData);
 
             DB::commit();
 
@@ -146,12 +221,14 @@ class AdminOrderManagementController extends Controller
                 'order_number' => $order->order_number,
                 'admin_id' => $request->user()->id,
                 'fields_updated' => array_keys($request->all()),
+                'boxes_updated' => $request->has('boxes'),
+                'boxes_count' => $request->has('boxes') ? count($request->input('boxes', [])) : null,
             ]);
 
             return response()->json([
                 'success' => true,
                 'message' => 'Order updated successfully',
-                'data' => $order->fresh()->load(['user', 'items'])
+                'data' => $order->fresh()->load(['user', 'items', 'boxes'])
             ]);
 
         } catch (\Exception $e) {
@@ -161,6 +238,7 @@ class AdminOrderManagementController extends Controller
                 'order_id' => $order->id,
                 'admin_id' => $request->user()->id,
                 'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
             ]);
             
             return response()->json([
@@ -169,6 +247,89 @@ class AdminOrderManagementController extends Controller
                 'error' => config('app.debug') ? $e->getMessage() : null
             ], 500);
         }
+    }
+
+    /**
+     * Fetch box details from Stripe for each box entry
+     * 
+     * @param array $boxes Array of boxes with stripe_price_id and quantity
+     * @return array Array of box entries with full Stripe details
+     * @throws \Exception If Stripe price is invalid
+     */
+    private function fetchBoxDetailsFromStripe(array $boxes): array
+    {
+        $stripe = Cashier::stripe();
+        $boxEntries = [];
+
+        foreach ($boxes as $boxInput) {
+            $stripePriceId = $boxInput['stripe_price_id'];
+            $quantity = $boxInput['quantity'] ?? 1;
+
+            try {
+                $stripePrice = $stripe->prices->retrieve($stripePriceId, [
+                    'expand' => ['product']
+                ]);
+            } catch (\Exception $e) {
+                throw new \Exception("Invalid Stripe Price ID: {$stripePriceId}");
+            }
+
+            $boxEntries[] = [
+                'stripe_price_id' => $stripePrice->id,
+                'stripe_product_id' => $stripePrice->product->id,
+                'box_size' => $stripePrice->product->metadata->type ?? null,
+                'box_name' => $stripePrice->product->name,
+                'box_price' => $stripePrice->unit_amount / 100,
+                'currency' => strtolower($stripePrice->currency),
+                'quantity' => $quantity,
+            ];
+        }
+
+        return $boxEntries;
+    }
+
+    /**
+     * Save box entries to the database
+     * 
+     * @param Order $order The order to attach boxes to
+     * @param array $boxEntries Array of box data from fetchBoxDetailsFromStripe
+     * @return float Total box price
+     */
+    private function saveBoxEntries(Order $order, array $boxEntries): float
+    {
+        $totalBoxPrice = 0;
+
+        foreach ($boxEntries as $entry) {
+            OrderBox::create([
+                'order_id' => $order->id,
+                'stripe_price_id' => $entry['stripe_price_id'],
+                'stripe_product_id' => $entry['stripe_product_id'],
+                'box_size' => $entry['box_size'],
+                'box_name' => $entry['box_name'],
+                'box_price' => $entry['box_price'],
+                'currency' => $entry['currency'],
+                'quantity' => $entry['quantity'],
+            ]);
+
+            $totalBoxPrice += $entry['box_price'] * $entry['quantity'];
+        }
+
+        // Update order with total and legacy fields
+        $updateData = ['box_price' => $totalBoxPrice];
+
+        if (count($boxEntries) === 1) {
+            $singleBox = $boxEntries[0];
+            $updateData['box_size'] = $singleBox['box_size'];
+            $updateData['stripe_price_id'] = $singleBox['stripe_price_id'];
+            $updateData['stripe_product_id'] = $singleBox['stripe_product_id'];
+        } else {
+            $updateData['box_size'] = null;
+            $updateData['stripe_price_id'] = null;
+            $updateData['stripe_product_id'] = null;
+        }
+
+        $order->update($updateData);
+
+        return $totalBoxPrice;
     }
 
     /**
@@ -181,6 +342,9 @@ class AdminOrderManagementController extends Controller
         try {
             $orderNumber = $order->order_number;
             $userId = $order->user_id;
+            
+            // Delete all boxes
+            $order->boxes()->delete();
             
             // Delete all items first (this will trigger model events to delete files)
             $order->items()->each(function ($item) {
@@ -285,7 +449,7 @@ class AdminOrderManagementController extends Controller
                 'message' => 'Item added successfully',
                 'data' => [
                     'item' => $item->fresh(),
-                    'order' => $order->fresh()->load('items')
+                    'order' => $order->fresh()->load(['items', 'boxes'])
                 ]
             ], 201);
 
@@ -353,7 +517,7 @@ class AdminOrderManagementController extends Controller
                 'message' => 'Item updated successfully',
                 'data' => [
                     'item' => $item->fresh(),
-                    'order' => $order->fresh()->load('items')
+                    'order' => $order->fresh()->load(['items', 'boxes'])
                 ]
             ]);
 
@@ -402,7 +566,7 @@ class AdminOrderManagementController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'Item deleted successfully',
-                'data' => $order->fresh()->load('items')
+                'data' => $order->fresh()->load(['items', 'boxes'])
             ]);
 
         } catch (\Exception $e) {
