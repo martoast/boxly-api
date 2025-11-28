@@ -19,7 +19,10 @@ class MonthlyManualMetric extends Model
         'boxes_large',
         'boxes_extra_large',
         'total_conversations',
-        'is_manual_mode', // 👈 NEW FLAG
+        'is_manual_mode',
+        'is_financial_manual',
+        'is_boxes_manual',
+        'is_orders_manual',
         'notes',
         'created_by',
     ];
@@ -37,7 +40,10 @@ class MonthlyManualMetric extends Model
         'boxes_large' => 'integer',
         'boxes_extra_large' => 'integer',
         'total_conversations' => 'integer',
-        'is_manual_mode' => 'boolean', // 👈 NEW FLAG
+        'is_manual_mode' => 'boolean',
+        'is_financial_manual' => 'boolean',
+        'is_boxes_manual' => 'boolean',
+        'is_orders_manual' => 'boolean',
     ];
 
     protected $appends = ['total_boxes'];
@@ -75,7 +81,10 @@ class MonthlyManualMetric extends Model
                 'boxes_large' => 0,
                 'boxes_extra_large' => 0,
                 'total_conversations' => 0,
-                'is_manual_mode' => false, // 👈 Default to false
+                'is_manual_mode' => false,
+                'is_financial_manual' => false,
+                'is_boxes_manual' => false,
+                'is_orders_manual' => false,
             ]
         );
     }

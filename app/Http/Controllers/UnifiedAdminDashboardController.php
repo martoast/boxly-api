@@ -79,23 +79,40 @@ class UnifiedAdminDashboardController extends Controller
 
     /**
      * Update manual metrics for a specific month
+     *
+     * Supports granular control with individual flags:
+     * - is_financial_manual: Control revenue/profit manually
+     * - is_boxes_manual: Control box distribution manually
+     * - is_orders_manual: Control orders count manually
+     *
+     * Legacy is_manual_mode is still supported for backward compatibility
+     * and will set all granular flags when used.
      */
     public function updateManualMetrics(Request $request)
     {
         $validated = $request->validate([
             'year' => 'required|integer|min:2020|max:2100',
             'month' => 'required|integer|min:1|max:12',
-            'is_manual_mode' => 'required|boolean',
+            // Legacy flag (optional now)
+            'is_manual_mode' => 'nullable|boolean',
+            // Granular flags
+            'is_financial_manual' => 'nullable|boolean',
+            'is_boxes_manual' => 'nullable|boolean',
+            'is_orders_manual' => 'nullable|boolean',
+            // Financial values
             'total_revenue' => 'nullable|numeric|min:0',
             'total_expenses' => 'nullable|numeric|min:0',
             'total_profit' => 'nullable|numeric',
+            // Orders
             'total_orders' => 'nullable|integer|min:0',
+            // Boxes
             'boxes_extra_small' => 'nullable|integer|min:0',
             'boxes_small' => 'nullable|integer|min:0',
             'boxes_medium' => 'nullable|integer|min:0',
             'boxes_large' => 'nullable|integer|min:0',
             'boxes_extra_large' => 'nullable|integer|min:0',
-            'total_conversations' => 'required|integer|min:0',
+            // Other
+            'total_conversations' => 'nullable|integer|min:0',
             'notes' => 'nullable|string|max:2000',
         ]);
 
@@ -109,6 +126,20 @@ class UnifiedAdminDashboardController extends Controller
         $validated['boxes_medium'] = $validated['boxes_medium'] ?? 0;
         $validated['boxes_large'] = $validated['boxes_large'] ?? 0;
         $validated['boxes_extra_large'] = $validated['boxes_extra_large'] ?? 0;
+        $validated['total_conversations'] = $validated['total_conversations'] ?? 0;
+
+        // Handle legacy is_manual_mode: if set to true, enable all granular flags
+        if (isset($validated['is_manual_mode']) && $validated['is_manual_mode']) {
+            $validated['is_financial_manual'] = $validated['is_financial_manual'] ?? true;
+            $validated['is_boxes_manual'] = $validated['is_boxes_manual'] ?? true;
+            $validated['is_orders_manual'] = $validated['is_orders_manual'] ?? true;
+        }
+
+        // Set defaults for granular flags if not provided
+        $validated['is_manual_mode'] = $validated['is_manual_mode'] ?? false;
+        $validated['is_financial_manual'] = $validated['is_financial_manual'] ?? false;
+        $validated['is_boxes_manual'] = $validated['is_boxes_manual'] ?? false;
+        $validated['is_orders_manual'] = $validated['is_orders_manual'] ?? false;
 
         $metric = MonthlyManualMetric::getOrCreateForMonth(
             $validated['year'],
@@ -224,7 +255,7 @@ class UnifiedAdminDashboardController extends Controller
             // Get manual metrics where is_manual_mode = true
             $manualMetrics = MonthlyManualMetric::where('is_manual_mode', true)->get();
             $calculatedCustomers = User::where('role', 'customer')->count();
-            
+
             return [
                 'total_customers' => $calculatedCustomers,
                 'active_customers' => User::where('role', 'customer')
@@ -260,13 +291,13 @@ class UnifiedAdminDashboardController extends Controller
             'active_customers' => User::where('role', 'customer')
                 ->whereHas('orders', function ($q) use ($start, $end) {
                     $q->whereBetween('created_at', [$start, $end])
-                      ->whereIn('status', [
-                        Order::STATUS_COLLECTING,
-                        Order::STATUS_AWAITING_PACKAGES,
-                        Order::STATUS_PACKAGES_COMPLETE,
-                        Order::STATUS_PROCESSING,
-                        Order::STATUS_SHIPPED
-                    ]);
+                        ->whereIn('status', [
+                            Order::STATUS_COLLECTING,
+                            Order::STATUS_AWAITING_PACKAGES,
+                            Order::STATUS_PACKAGES_COMPLETE,
+                            Order::STATUS_PROCESSING,
+                            Order::STATUS_SHIPPED
+                        ]);
                 })
                 ->count(),
             'new_customers_this_month' => User::where('role', 'customer')
@@ -387,40 +418,36 @@ class UnifiedAdminDashboardController extends Controller
 
         // --- PURCHASE REQUEST METRICS ---
         $purchaseRequestsCount = PurchaseRequest::whereBetween('created_at', [$start, $end])->count();
-        
-        // FIXED: Count purchased items more robustly
-        // If 'purchased_at' is null, use 'updated_at' as a fallback for the date filter
-        $purchasedItemsCount = PurchaseRequestItem::whereHas('purchaseRequest', function($q) use ($start, $end) {
+
+        $purchasedItemsCount = PurchaseRequestItem::whereHas('purchaseRequest', function ($q) use ($start, $end) {
             $q->where('status', 'purchased')
-              ->where(function($query) use ($start, $end) {
-                  $query->whereBetween('purchased_at', [$start, $end])
-                        ->orWhere(function($sub) use ($start, $end) {
+                ->where(function ($query) use ($start, $end) {
+                    $query->whereBetween('purchased_at', [$start, $end])
+                        ->orWhere(function ($sub) use ($start, $end) {
                             $sub->whereNull('purchased_at')
                                 ->whereBetween('updated_at', [$start, $end]);
                         });
-              });
+                });
         })->sum('quantity');
-        
+
         // Service Fee Revenue
         $serviceFeeUSD = PurchaseRequest::whereBetween('paid_at', [$start, $end])
             ->whereIn('status', ['paid', 'purchased'])
             ->sum('processing_fee');
         $serviceFeeMXN = round($serviceFeeUSD * 18.00, 2);
 
-
         // --- SHIPPING METRICS ---
         $shippingRevenue = Order::whereBetween('paid_at', [$start, $end])->sum('amount_paid');
-        
+
         $calculatedTotalRevenue = $shippingRevenue + $serviceFeeMXN;
 
-
-        // --- CUSTOMERS & EXPENSES ---
+        // --- CUSTOMERS & EXPENSES (always calculate from DB for reference) ---
         $newCustomers = User::where('role', 'customer')
             ->whereBetween('created_at', [$start, $end])
             ->count();
 
         $expensesQuery = BusinessExpense::whereBetween('expense_date', [$start, $end]);
-        $expensesByCategory = [
+        $calculatedExpensesByCategory = [
             'shipping' => round($expensesQuery->clone()->where('category', 'shipping')->sum('amount'), 2),
             'ads' => round($expensesQuery->clone()->where('category', 'ads')->sum('amount'), 2),
             'software' => round($expensesQuery->clone()->where('category', 'software')->sum('amount'), 2),
@@ -428,10 +455,9 @@ class UnifiedAdminDashboardController extends Controller
             'po_box' => round($expensesQuery->clone()->where('category', 'po_box')->sum('amount'), 2),
             'misc' => round($expensesQuery->clone()->where('category', 'misc')->sum('amount'), 2),
         ];
-        $totalExpenses = array_sum($expensesByCategory);
-        $expensesByCategory['total'] = round($totalExpenses, 2);
-        $adSpend = $expensesByCategory['ads'];
-
+        $calculatedTotalExpenses = array_sum($calculatedExpensesByCategory);
+        $calculatedExpensesByCategory['total'] = round($calculatedTotalExpenses, 2);
+        $calculatedAdSpend = $calculatedExpensesByCategory['ads'];
 
         // === ALL TIME MODE ===
         if ($period === 'all') {
@@ -448,25 +474,24 @@ class UnifiedAdminDashboardController extends Controller
             $manualOrders = $manualMetrics->sum('total_orders');
             $calculatedOrders = Order::count();
             $totalOrders = $manualOrders + $calculatedOrders;
-            
+
             $totalConversations = MonthlyManualMetric::sum('total_conversations');
-            
+
             $allExpensesQuery = BusinessExpense::query();
             $allTotalExpenses = $allExpensesQuery->sum('amount');
-            $allAdSpend = $allExpensesQuery->where('category', 'ads')->sum('amount');
+            $allAdSpend = BusinessExpense::where('category', 'ads')->sum('amount');
 
             $profit = $totalRevenue - $allTotalExpenses;
             $profitMargin = $totalRevenue > 0 ? ($profit / $totalRevenue) * 100 : 0;
-            
+
             $allCustomers = User::where('role', 'customer')->count();
             $cac = $allCustomers > 0 ? round($allAdSpend / $allCustomers, 2) : 0;
             $roas = $allAdSpend > 0 ? round($totalRevenue / $allAdSpend, 2) : 0;
             $conversionRate = $totalConversations > 0 ? round(($totalOrders / $totalConversations) * 100, 2) : 0;
-            
+
             $allPurchaseRequestsCount = PurchaseRequest::count();
-            
-            // FIXED: All time purchased items count simply checks status
-            $allPurchasedItemsCount = PurchaseRequestItem::whereHas('purchaseRequest', function($q) {
+
+            $allPurchasedItemsCount = PurchaseRequestItem::whereHas('purchaseRequest', function ($q) {
                 $q->where('status', 'purchased');
             })->sum('quantity');
 
@@ -480,7 +505,7 @@ class UnifiedAdminDashboardController extends Controller
                     'shipping_revenue' => round($allShippingRevenue, 2),
                     'service_fee_revenue' => round($allServiceFeeMXN, 2),
                 ],
-                'expenses' => $expensesByCategory,
+                'expenses' => $calculatedExpensesByCategory,
                 'profit' => [
                     'amount' => round($profit, 2),
                     'margin' => round($profitMargin, 2),
@@ -500,8 +525,6 @@ class UnifiedAdminDashboardController extends Controller
             ];
         }
 
-        // ... (Rest of the function remains the same for Month/Calculated logic)
-        
         // === SPECIFIC MONTH / PERIOD MODE ===
         $manualMetric = null;
         if ($period === 'month') {
@@ -510,59 +533,39 @@ class UnifiedAdminDashboardController extends Controller
                 ->first();
         }
 
-        $isManualMode = $manualMetric && $manualMetric->is_manual_mode;
+        // Check granular manual flags (fall back to is_manual_mode for backward compatibility)
+        $isFinancialManual = $manualMetric && ($manualMetric->is_financial_manual || $manualMetric->is_manual_mode);
+        $isOrdersManual = $manualMetric && ($manualMetric->is_orders_manual || $manualMetric->is_manual_mode);
 
-        if ($isManualMode) {
-            $profit = $manualMetric->total_revenue - $totalExpenses;
-            $profitMargin = $manualMetric->total_revenue > 0 ? ($profit / $manualMetric->total_revenue) * 100 : 0;
-            $cac = $newCustomers > 0 ? round($adSpend / $newCustomers, 2) : 0;
-            $roas = $adSpend > 0 ? round($manualMetric->total_revenue / $adSpend, 2) : 0;
-            $conversionRate = $manualMetric->total_conversations > 0 ? round(($manualMetric->total_orders / $manualMetric->total_conversations) * 100, 2) : 0;
+        // Determine which revenue and expenses to use
+        $revenueToUse = $isFinancialManual ? $manualMetric->total_revenue : $calculatedTotalRevenue;
+        $expensesToUse = $isFinancialManual ? $manualMetric->total_expenses : $calculatedTotalExpenses;
+        $ordersToUse = $isOrdersManual ? $manualMetric->total_orders : Order::whereBetween('created_at', [$start, $end])->count();
 
-            return [
-                'source' => 'manual',
-                'revenue' => [
-                    'period_total' => round($manualMetric->total_revenue, 2),
-                    'total_all_time' => round(Order::sum('amount_paid') + (\App\Models\PurchaseRequest::whereIn('status', ['paid', 'purchased'])->sum('processing_fee') * 18), 2),
-                ],
-                'expenses' => $expensesByCategory,
-                'profit' => [
-                    'amount' => round($profit, 2),
-                    'margin' => round($profitMargin, 2),
-                ],
-                'metrics' => [
-                    'total_orders' => $manualMetric->total_orders,
-                    'new_customers' => $newCustomers,
-                    'total_conversations' => $manualMetric->total_conversations,
-                    'cac' => $cac,
-                    'roas' => $roas,
-                    'conversion_rate' => $conversionRate,
-                    'ad_spend' => $adSpend,
-                    'purchase_requests_count' => $purchaseRequestsCount,
-                    'purchased_items_count' => $purchasedItemsCount,
-                ],
-                'manual_metrics' => [
-                    'id' => $manualMetric->id,
-                    'is_manual_mode' => true,
-                    'notes' => $manualMetric->notes,
-                    'last_updated' => $manualMetric->updated_at,
-                ],
-            ];
+        // Conversations always come from manual metric if it exists
+        $conversations = $manualMetric ? $manualMetric->total_conversations : 0;
+
+        // Calculate profit and metrics using the appropriate revenue AND expenses
+        $profit = $revenueToUse - $expensesToUse;
+        $profitMargin = $revenueToUse > 0 ? ($profit / $revenueToUse) * 100 : 0;
+
+        // For CAC/ROAS, we need ad spend - use calculated if financial is manual (since we don't track manual ad spend separately)
+        // Or we could use the manual expenses as a proxy... but for now, let's keep ad spend from DB
+        $adSpendToUse = $calculatedAdSpend;
+
+        $cac = $newCustomers > 0 ? round($adSpendToUse / $newCustomers, 2) : 0;
+        $roas = $adSpendToUse > 0 ? round($revenueToUse / $adSpendToUse, 2) : 0;
+        $conversionRate = $conversations > 0 ? round(($ordersToUse / $conversations) * 100, 2) : 0;
+
+        // Determine source based on what's manual
+        $source = 'calculated';
+        if ($isFinancialManual && $isOrdersManual) {
+            $source = 'manual';
+        } elseif ($isFinancialManual || $isOrdersManual) {
+            $source = 'mixed';
         }
 
-        // === CALCULATED DATA (Default) ===
-        
-        $profit = $calculatedTotalRevenue - $totalExpenses;
-        $profitMargin = $calculatedTotalRevenue > 0 ? ($profit / $calculatedTotalRevenue) * 100 : 0;
-
-        $conversations = $manualMetric ? $manualMetric->total_conversations : 0;
-        $ordersCount = Order::whereBetween('created_at', [$start, $end])->count();
-        
-        $cac = $newCustomers > 0 ? round($adSpend / $newCustomers, 2) : 0;
-        $roas = $adSpend > 0 ? round($calculatedTotalRevenue / $adSpend, 2) : 0;
-        $conversionRate = $conversations > 0 ? round(($ordersCount / $conversations) * 100, 2) : 0;
-
-        // Period Breakdowns
+        // Period Breakdowns (always calculated from DB)
         $todayShipping = Order::whereDate('paid_at', today())->sum('amount_paid');
         $todayFees = PurchaseRequest::whereDate('paid_at', today())->whereIn('status', ['paid', 'purchased'])->sum('processing_fee') * 18;
         $todayRevenue = $todayShipping + $todayFees;
@@ -574,13 +577,23 @@ class UnifiedAdminDashboardController extends Controller
         $monthShipping = Order::whereMonth('paid_at', now()->month)->whereYear('paid_at', now()->year)->sum('amount_paid');
         $monthFees = PurchaseRequest::whereMonth('paid_at', now()->month)->whereYear('paid_at', now()->year)->whereIn('status', ['paid', 'purchased'])->sum('processing_fee') * 18;
         $monthRevenue = $monthShipping + $monthFees;
-        
+
         $totalRevenueAllTime = Order::sum('amount_paid') + (PurchaseRequest::whereIn('status', ['paid', 'purchased'])->sum('processing_fee') * 18);
 
+        // Build expenses response - show manual total if financial is manual, but always include calculated breakdown
+        $expensesResponse = $calculatedExpensesByCategory;
+        if ($isFinancialManual) {
+            $expensesResponse['total'] = round($expensesToUse, 2);
+            $expensesResponse['is_manual'] = true;
+            $expensesResponse['calculated_total'] = round($calculatedTotalExpenses, 2);
+        }
+
         return [
-            'source' => 'calculated',
+            'source' => $source,
             'revenue' => [
-                'period_total' => round($calculatedTotalRevenue, 2),
+                'period_total' => round($revenueToUse, 2),
+                'is_manual' => $isFinancialManual,
+                'calculated_value' => round($calculatedTotalRevenue, 2),
                 'today' => round($todayRevenue, 2),
                 'this_week' => round($weekRevenue, 2),
                 'this_month' => round($monthRevenue, 2),
@@ -590,24 +603,30 @@ class UnifiedAdminDashboardController extends Controller
                     'service_fees' => round($serviceFeeMXN, 2),
                 ]
             ],
-            'expenses' => $expensesByCategory,
+            'expenses' => $expensesResponse,
             'profit' => [
                 'amount' => round($profit, 2),
                 'margin' => round($profitMargin, 2),
             ],
             'metrics' => [
+                'total_orders' => $ordersToUse,
+                'total_orders_is_manual' => $isOrdersManual,
+                'total_orders_calculated' => Order::whereBetween('created_at', [$start, $end])->count(),
                 'new_customers' => $newCustomers,
                 'total_conversations' => $conversations,
                 'cac' => $cac,
                 'roas' => $roas,
                 'conversion_rate' => $conversionRate,
-                'ad_spend' => $adSpend,
+                'ad_spend' => $adSpendToUse,
                 'purchase_requests_count' => $purchaseRequestsCount,
                 'purchased_items_count' => $purchasedItemsCount,
             ],
             'manual_metrics' => $manualMetric ? [
                 'id' => $manualMetric->id,
-                'is_manual_mode' => false,
+                'is_manual_mode' => $manualMetric->is_manual_mode,
+                'is_financial_manual' => $manualMetric->is_financial_manual,
+                'is_orders_manual' => $manualMetric->is_orders_manual,
+                'is_boxes_manual' => $manualMetric->is_boxes_manual,
                 'notes' => $manualMetric->notes,
                 'last_updated' => $manualMetric->updated_at,
             ] : null,
@@ -679,24 +698,20 @@ class UnifiedAdminDashboardController extends Controller
             ->where('month', $month)
             ->first();
 
-        $isManualMode = $manualMetric && $manualMetric->is_manual_mode;
+        // Check granular flag (fall back to is_manual_mode for backward compatibility)
+        $isBoxesManual = $manualMetric && ($manualMetric->is_boxes_manual || $manualMetric->is_manual_mode);
 
-        if ($isManualMode) {
-            return [
-                'source' => 'manual',
-                'extra-small' => $manualMetric->boxes_extra_small,
-                'small' => $manualMetric->boxes_small,
-                'medium' => $manualMetric->boxes_medium,
-                'large' => $manualMetric->boxes_large,
-                'extra-large' => $manualMetric->boxes_extra_large,
-                'not_selected' => 0,
-                'total' => $manualMetric->total_boxes,
-            ];
-        }
-
-        // Calculated mode for specific date range
+        // Always calculate the DB values for reference
         $newBoxCounts = $this->getBoxCountsFromOrderBoxes($start, $end);
         $legacyBoxCounts = $this->getLegacyBoxCounts($start, $end);
+
+        $calculatedBoxes = [
+            'extra-small' => $newBoxCounts['extra-small'] + $legacyBoxCounts['extra-small'],
+            'small' => $newBoxCounts['small'] + $legacyBoxCounts['small'],
+            'medium' => $newBoxCounts['medium'] + $legacyBoxCounts['medium'],
+            'large' => $newBoxCounts['large'] + $legacyBoxCounts['large'],
+            'extra-large' => $newBoxCounts['extra-large'] + $legacyBoxCounts['extra-large'],
+        ];
 
         $ordersWithNewBoxes = OrderBox::whereHas('order', function ($q) use ($start, $end) {
             $q->whereBetween('created_at', [$start, $end]);
@@ -707,14 +722,39 @@ class UnifiedAdminDashboardController extends Controller
             ->whereNotIn('id', $ordersWithNewBoxes)
             ->count();
 
+        if ($isBoxesManual) {
+            return [
+                'source' => 'manual',
+                'is_manual' => true,
+                'extra-small' => $manualMetric->boxes_extra_small,
+                'small' => $manualMetric->boxes_small,
+                'medium' => $manualMetric->boxes_medium,
+                'large' => $manualMetric->boxes_large,
+                'extra-large' => $manualMetric->boxes_extra_large,
+                'not_selected' => 0,
+                'total' => $manualMetric->total_boxes,
+                'calculated' => [
+                    'extra-small' => $calculatedBoxes['extra-small'],
+                    'small' => $calculatedBoxes['small'],
+                    'medium' => $calculatedBoxes['medium'],
+                    'large' => $calculatedBoxes['large'],
+                    'extra-large' => $calculatedBoxes['extra-large'],
+                    'not_selected' => $notSelected,
+                    'total' => array_sum($calculatedBoxes),
+                ],
+            ];
+        }
+
         return [
             'source' => 'calculated',
-            'extra-small' => $newBoxCounts['extra-small'] + $legacyBoxCounts['extra-small'],
-            'small' => $newBoxCounts['small'] + $legacyBoxCounts['small'],
-            'medium' => $newBoxCounts['medium'] + $legacyBoxCounts['medium'],
-            'large' => $newBoxCounts['large'] + $legacyBoxCounts['large'],
-            'extra-large' => $newBoxCounts['extra-large'] + $legacyBoxCounts['extra-large'],
+            'is_manual' => false,
+            'extra-small' => $calculatedBoxes['extra-small'],
+            'small' => $calculatedBoxes['small'],
+            'medium' => $calculatedBoxes['medium'],
+            'large' => $calculatedBoxes['large'],
+            'extra-large' => $calculatedBoxes['extra-large'],
             'not_selected' => $notSelected,
+            'total' => array_sum($calculatedBoxes),
         ];
     }
 
