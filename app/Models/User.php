@@ -194,7 +194,7 @@ class User extends Authenticatable
      */
     public function activeOrders()
     {
-        return $this->orders()->whereNotIn('status', ['delivered', 'cancelled']);
+        return $this->orders()->whereNotIn('status', ['delivered', 'cancelled', 'paid']);
     }
 
     /**

@@ -437,7 +437,13 @@ class UnifiedAdminDashboardController extends Controller
         $serviceFeeMXN = round($serviceFeeUSD * 18.00, 2);
 
         // --- SHIPPING METRICS ---
-        $shippingRevenue = Order::whereBetween('paid_at', [$start, $end])->sum('amount_paid');
+        // Revenue from deposits paid in this period
+        $depositRevenue = Order::whereBetween('deposit_paid_at', [$start, $end])->sum('deposit_amount');
+        // Revenue from final payments paid in this period (amount_paid - deposit_amount = remaining payment)
+        $finalPaymentRevenue = Order::whereBetween('paid_at', [$start, $end])
+            ->selectRaw('SUM(COALESCE(amount_paid, 0) - COALESCE(deposit_amount, 0)) as total')
+            ->value('total') ?? 0;
+        $shippingRevenue = $depositRevenue + $finalPaymentRevenue;
 
         $calculatedTotalRevenue = $shippingRevenue + $serviceFeeMXN;
 
@@ -464,7 +470,12 @@ class UnifiedAdminDashboardController extends Controller
             $manualMetrics = MonthlyManualMetric::where('is_manual_mode', true)->get();
             $manualRevenue = $manualMetrics->sum('total_revenue');
 
-            $allShippingRevenue = Order::whereNotNull('paid_at')->sum('amount_paid');
+            // Revenue from all deposits + all final payments
+            $allDepositRevenue = Order::whereNotNull('deposit_paid_at')->sum('deposit_amount');
+            $allFinalPaymentRevenue = Order::whereNotNull('paid_at')
+                ->selectRaw('SUM(COALESCE(amount_paid, 0) - COALESCE(deposit_amount, 0)) as total')
+                ->value('total') ?? 0;
+            $allShippingRevenue = $allDepositRevenue + $allFinalPaymentRevenue;
             $allServiceFeeUSD = PurchaseRequest::whereIn('status', ['paid', 'purchased'])->sum('processing_fee');
             $allServiceFeeMXN = $allServiceFeeUSD * 18.00;
             $allCalculatedRevenue = $allShippingRevenue + $allServiceFeeMXN;
