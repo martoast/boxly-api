@@ -46,8 +46,12 @@
 
     @elseif($request->payment_method === \App\Models\PurchaseRequest::PAYMENT_METHOD_MANUAL_DEPOSIT)
         {{-- MANUAL DEPOSIT SECTION --}}
-        <div style="margin: 30px 0; border: 2px solid #f39c12; padding: 20px; border-radius: 8px; background-color: #fffbf0;">
-            <h3 style="margin-top: 0; color: #f39c12;">
+        @php
+            $amountInMxn = round($request->total_amount * 18, 2);
+        @endphp
+
+        <div style="margin: 30px 0; padding: 20px; border: 1px solid #ddd; border-radius: 4px;">
+            <h3 style="margin-top: 0; margin-bottom: 15px;">
                 {{ $locale === 'es' ? 'Instrucciones de Transferencia Bancaria' : 'Bank Transfer Instructions' }}
             </h3>
 
@@ -55,7 +59,7 @@
                 {{ $locale === 'es' ? 'Por favor, realiza una transferencia bancaria a la siguiente cuenta:' : 'Please send a bank transfer to the following account:' }}
             </p>
 
-            <div style="background-color: white; padding: 15px; border-left: 4px solid #f39c12; margin: 15px 0;">
+            <div style="padding: 15px; margin: 15px 0; background-color: #f9f9f9;">
                 <p style="margin: 8px 0;">
                     <strong>{{ $locale === 'es' ? 'Nombre del Beneficiario:' : 'Beneficiary Name:' }}</strong><br>
                     {{ config('payment.nu_beneficiary_name') }}
@@ -71,14 +75,22 @@
             </div>
 
             <p style="margin: 15px 0; font-weight: bold;">
-                {{ $locale === 'es' ? 'Total a Transferir:' : 'Total to Transfer:' }} ${{ number_format($request->total_amount, 2) }} USD
+                {{ $locale === 'es' ? 'Total a Transferir:' : 'Total to Transfer:' }} ${{ number_format($amountInMxn, 2) }} MXN
             </p>
 
             <p style="color: #666; font-size: 14px; margin-top: 20px;">
                 @if($locale === 'es')
-                    Una vez que hayas completado la transferencia, por favor responde a este correo con una captura de pantalla o comprobante de pago. Esto nos ayuda a confirmar la recepción y procesar tu pedido rápidamente.
+                    Una vez que hayas completado la transferencia, por favor comparte una captura de pantalla o comprobante de pago a través de WhatsApp o responde a este correo. Esto nos ayuda a confirmar la recepción y procesar tu pedido rápidamente.
                 @else
-                    Once you have completed the transfer, please reply to this email with a screenshot or proof of payment. This helps us confirm receipt and process your order quickly.
+                    Once you have completed the transfer, please share a screenshot or proof of payment via WhatsApp or reply to this email. This helps us confirm receipt and process your order quickly.
+                @endif
+            </p>
+
+            <p style="color: #666; font-size: 14px; margin-top: 30px;">
+                @if($locale === 'es')
+                    Si tienes alguna pregunta contáctanos en WhatsApp: +1 619 559-1920
+                @else
+                    If you have any questions, contact us on WhatsApp: +1 619 559-1920
                 @endif
             </p>
         </div>
