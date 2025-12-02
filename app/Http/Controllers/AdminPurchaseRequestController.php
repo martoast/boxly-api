@@ -66,6 +66,7 @@ class AdminPurchaseRequestController extends Controller
             'items.*.notes' => 'nullable|string|max:500',
             'items.*.image' => 'nullable|file|mimes:jpg,jpeg,png,webp,pdf|max:10240',
             'status' => 'nullable|in:pending_review,quoted,paid,purchased',
+            'payment_method' => 'nullable|in:stripe,manual_deposit',
             'admin_notes' => 'nullable|string',
         ]);
 
@@ -80,6 +81,7 @@ class AdminPurchaseRequestController extends Controller
                 'request_number' => PurchaseRequest::generateRequestNumber(),
                 'status' => $request->status ?? PurchaseRequest::STATUS_PENDING_REVIEW,
                 'currency' => 'usd',
+                'payment_method' => $request->payment_method ?? PurchaseRequest::PAYMENT_METHOD_STRIPE,
                 'admin_notes' => $request->admin_notes,
             ]);
 
@@ -269,11 +271,12 @@ class AdminPurchaseRequestController extends Controller
 
     public function createQuote(Request $request, PurchaseRequest $purchaseRequest)
     {
-        $request->validate([
+        $validated = $request->validate([
             'items_total' => 'required|numeric|min:0',
-            'shipping_cost' => 'required|numeric|min:0', 
-            'sales_tax' => 'required|numeric|min:0', 
-            'admin_notes' => 'nullable|string'
+            'shipping_cost' => 'required|numeric|min:0',
+            'sales_tax' => 'required|numeric|min:0',
+            'admin_notes' => 'nullable|string',
+            'payment_method' => 'nullable|in:stripe,manual_deposit',
         ]);
 
         if ($purchaseRequest->status !== PurchaseRequest::STATUS_PENDING_REVIEW) {
@@ -284,72 +287,100 @@ class AdminPurchaseRequestController extends Controller
 
         try {
             // 1. Calculate Totals in USD
-            $subtotalUsd = floatval($request->items_total) + floatval($request->shipping_cost) + floatval($request->sales_tax);
-            
+            $subtotalUsd = floatval($validated['items_total']) + floatval($validated['shipping_cost']) + floatval($validated['sales_tax']);
+
             // 2. Apply 8% Markup
             $markupPercentage = 0.08;
             $feeUsd = round($subtotalUsd * $markupPercentage, 2);
             $totalUsd = $subtotalUsd + $feeUsd;
 
-            // 3. Convert to MXN
-            $exchangeRate = 18.00;
-            $subtotalMxn = round($subtotalUsd * $exchangeRate, 2);
-            $feeMxn = round($feeUsd * $exchangeRate, 2);
+            // 3. Determine Payment Method
+            $paymentMethod = $validated['payment_method'] ?? PurchaseRequest::PAYMENT_METHOD_STRIPE;
 
-            // 4. Create Stripe Invoice (MXN)
-            $user = $purchaseRequest->user;
-            if (!$user->stripe_id) {
-                $user->createAsStripeCustomer();
+            // 4a. STRIPE PAYMENT FLOW
+            if ($paymentMethod === PurchaseRequest::PAYMENT_METHOD_STRIPE) {
+                // Convert to MXN
+                $exchangeRate = 18.00;
+                $subtotalMxn = round($subtotalUsd * $exchangeRate, 2);
+                $feeMxn = round($feeUsd * $exchangeRate, 2);
+
+                // Create Stripe customer if needed
+                $user = $purchaseRequest->user;
+                if (!$user->stripe_id) {
+                    $user->createAsStripeCustomer();
+                }
+
+                $stripe = Cashier::stripe();
+
+                $stripeInvoice = $stripe->invoices->create([
+                    'customer' => $user->stripe_id,
+                    'currency' => 'mxn',
+                    'collection_method' => 'send_invoice',
+                    'days_until_due' => 3,
+                    'description' => "Assisted Purchase Request: {$purchaseRequest->request_number}",
+                    'metadata' => [
+                        'type' => 'purchase_request_invoice',
+                        'purchase_request_id' => $purchaseRequest->id,
+                        'request_number' => $purchaseRequest->request_number,
+                    ],
+                    'auto_advance' => false,
+                ]);
+
+                $stripe->invoiceItems->create([
+                    'customer' => $user->stripe_id,
+                    'invoice' => $stripeInvoice->id,
+                    'amount' => intval($subtotalMxn * 100),
+                    'currency' => 'mxn',
+                    'description' => "Cost of Goods (Products, Shipping & Tax) - \${$subtotalUsd} USD @ {$exchangeRate} MXN/USD",
+                ]);
+
+                $stripe->invoiceItems->create([
+                    'customer' => $user->stripe_id,
+                    'invoice' => $stripeInvoice->id,
+                    'amount' => intval($feeMxn * 100),
+                    'currency' => 'mxn',
+                    'description' => "Service Fee (8%) - \${$feeUsd} USD @ {$exchangeRate} MXN/USD",
+                ]);
+
+                $stripe->invoices->finalizeInvoice($stripeInvoice->id);
+                $sentInvoice = $stripe->invoices->sendInvoice($stripeInvoice->id);
+
+                // Update Model with Stripe details
+                $purchaseRequest->update([
+                    'items_total' => $validated['items_total'],
+                    'shipping_cost' => $validated['shipping_cost'],
+                    'sales_tax' => $validated['sales_tax'],
+                    'processing_fee' => $feeUsd,
+                    'total_amount' => $totalUsd,
+                    'currency' => 'usd',
+                    'payment_method' => PurchaseRequest::PAYMENT_METHOD_STRIPE,
+                    'status' => PurchaseRequest::STATUS_QUOTED,
+                    'stripe_invoice_id' => $stripeInvoice->id,
+                    'payment_link' => $sentInvoice->hosted_invoice_url,
+                    'quote_sent_at' => now(),
+                    'admin_notes' => $validated['admin_notes'],
+                ]);
             }
-            
-            $stripe = Cashier::stripe();
+            // 4b. MANUAL DEPOSIT PAYMENT FLOW
+            else {
+                // Skip Stripe entirely, just calculate and store totals
+                $user = $purchaseRequest->user;
 
-            $stripeInvoice = $stripe->invoices->create([
-                'customer' => $user->stripe_id,
-                'currency' => 'mxn',
-                'collection_method' => 'send_invoice',
-                'days_until_due' => 3, 
-                'description' => "Assisted Purchase Request: {$purchaseRequest->request_number}",
-                'metadata' => [
-                    'type' => 'purchase_request_invoice',
-                    'purchase_request_id' => $purchaseRequest->id,
-                    'request_number' => $purchaseRequest->request_number,
-                ],
-                'auto_advance' => false,
-            ]);
-
-            $stripe->invoiceItems->create([
-                'customer' => $user->stripe_id,
-                'invoice' => $stripeInvoice->id,
-                'amount' => intval($subtotalMxn * 100),
-                'currency' => 'mxn',
-                'description' => "Cost of Goods (Products, Shipping & Tax) - \${$subtotalUsd} USD @ {$exchangeRate} MXN/USD",
-            ]);
-
-            $stripe->invoiceItems->create([
-                'customer' => $user->stripe_id,
-                'invoice' => $stripeInvoice->id,
-                'amount' => intval($feeMxn * 100),
-                'currency' => 'mxn',
-                'description' => "Service Fee (8%) - \${$feeUsd} USD @ {$exchangeRate} MXN/USD",
-            ]);
-
-            $stripe->invoices->finalizeInvoice($stripeInvoice->id);
-            $sentInvoice = $stripe->invoices->sendInvoice($stripeInvoice->id);
-
-            // 5. Update Model
-            $purchaseRequest->update([
-                'items_total' => $request->items_total,
-                'shipping_cost' => $request->shipping_cost,
-                'sales_tax' => $request->sales_tax,
-                'processing_fee' => $feeUsd,
-                'total_amount' => $totalUsd,
-                'status' => PurchaseRequest::STATUS_QUOTED,
-                'stripe_invoice_id' => $stripeInvoice->id,
-                'payment_link' => $sentInvoice->hosted_invoice_url,
-                'quote_sent_at' => now(),
-                'admin_notes' => $request->admin_notes,
-            ]);
+                $purchaseRequest->update([
+                    'items_total' => $validated['items_total'],
+                    'shipping_cost' => $validated['shipping_cost'],
+                    'sales_tax' => $validated['sales_tax'],
+                    'processing_fee' => $feeUsd,
+                    'total_amount' => $totalUsd,
+                    'currency' => 'usd',
+                    'payment_method' => PurchaseRequest::PAYMENT_METHOD_MANUAL_DEPOSIT,
+                    'status' => PurchaseRequest::STATUS_QUOTED,
+                    'stripe_invoice_id' => null,
+                    'payment_link' => null,
+                    'quote_sent_at' => now(),
+                    'admin_notes' => $validated['admin_notes'],
+                ]);
+            }
 
             DB::commit();
 

@@ -22,6 +22,7 @@ class PurchaseRequest extends Model
         'processing_fee',
         'total_amount',
         'currency',
+        'payment_method',
         'stripe_invoice_id',
         'payment_link',
         'quote_sent_at',
@@ -48,9 +49,21 @@ class PurchaseRequest extends Model
     const STATUS_REJECTED = 'rejected';
     const STATUS_CANCELLED = 'cancelled';
 
+    const PAYMENT_METHOD_STRIPE = 'stripe';
+    const PAYMENT_METHOD_MANUAL_DEPOSIT = 'manual_deposit';
+
     public static function generateRequestNumber(): string
     {
         return 'PR-' . date('y') . '-' . strtoupper(Str::random(5));
+    }
+
+    public function getPaymentMethodLabelAttribute(): string
+    {
+        return match($this->payment_method) {
+            self::PAYMENT_METHOD_STRIPE => 'Stripe',
+            self::PAYMENT_METHOD_MANUAL_DEPOSIT => 'Manual Bank Transfer (NU)',
+            default => 'Unknown',
+        };
     }
 
     public function user(): BelongsTo
