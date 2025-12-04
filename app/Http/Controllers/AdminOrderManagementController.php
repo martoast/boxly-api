@@ -9,6 +9,8 @@ use App\Models\OrderItem;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Laravel\Cashier\Cashier;
 
 class AdminOrderManagementController extends Controller
@@ -411,6 +413,7 @@ class AdminOrderManagementController extends Controller
 
     /**
      * Add item to any order (regardless of status)
+     * Supports file uploads for proof_of_purchase and product_image
      */
     public function addItem(Request $request, Order $order)
     {
@@ -420,15 +423,36 @@ class AdminOrderManagementController extends Controller
             'quantity' => 'required|integer|min:1|max:999',
             'declared_value' => 'nullable|numeric|min:0|max:99999.99',
             'tracking_number' => 'nullable|string|max:255',
+            'tracking_url' => 'nullable|url|max:1000',
             'carrier' => 'nullable|string|in:' . implode(',', array_keys(OrderItem::CARRIERS)),
+            'merchant_order_id' => 'nullable|string|max:255',
+            'estimated_delivery_date' => 'nullable|date',
             'arrived' => 'boolean',
             'weight' => 'nullable|numeric|min:0.01|max:999.99',
+            'dimensions' => 'nullable|array',
+            'dimensions.length' => 'nullable|numeric|min:0|max:999',
+            'dimensions.width' => 'nullable|numeric|min:0|max:999',
+            'dimensions.height' => 'nullable|numeric|min:0|max:999',
+            'product_image_url' => 'nullable|url|max:1000',
+            // File uploads
+            'proof_of_purchase' => 'nullable|file|mimes:pdf,jpg,jpeg,png|max:10240',
+            'product_image' => 'nullable|file|mimes:jpg,jpeg,png,gif,webp|max:5120',
         ]);
 
         DB::beginTransaction();
 
         try {
-            $item = $order->items()->create($request->all());
+            $user = $order->user;
+            $userName = Str::slug($user->name);
+
+            // Create the order item with all fields
+            $itemData = $request->only([
+                'product_name', 'product_url', 'quantity', 'declared_value',
+                'tracking_number', 'tracking_url', 'carrier', 'merchant_order_id',
+                'estimated_delivery_date', 'weight', 'dimensions', 'product_image_url'
+            ]);
+
+            $item = $order->items()->create($itemData);
 
             // Auto-detect retailer and carrier if not provided
             if ($item->product_url && !$item->retailer) {
@@ -437,24 +461,59 @@ class AdminOrderManagementController extends Controller
             if (!$item->carrier && $item->tracking_number) {
                 $item->carrier = $item->detectCarrier();
             }
-            if ($request->arrived) {
+            if ($request->boolean('arrived')) {
+                $item->arrived = true;
                 $item->arrived_at = now();
             }
+
+            // Handle Proof of Purchase Upload
+            if ($request->hasFile('proof_of_purchase')) {
+                $file = $request->file('proof_of_purchase');
+                $storagePath = "users/{$userName}-{$user->id}/orders/{$order->order_number}/items/{$item->id}/proof";
+
+                $extension = $file->getClientOriginalExtension();
+                $filename = "proof-" . time() . ".{$extension}";
+
+                $path = Storage::disk('spaces')->putFileAs($storagePath, $file, $filename, 'public');
+                $url = config('filesystems.disks.spaces.url') . '/' . $path;
+
+                $item->update([
+                    'proof_of_purchase_path' => $path,
+                    'proof_of_purchase_filename' => $file->getClientOriginalName(),
+                    'proof_of_purchase_mime_type' => $file->getClientMimeType(),
+                    'proof_of_purchase_size' => $file->getSize(),
+                    'proof_of_purchase_url' => $url,
+                ]);
+            }
+
+            // Handle Product Image Upload
+            if ($request->hasFile('product_image')) {
+                $imgFile = $request->file('product_image');
+                $imgStoragePath = "users/{$userName}-{$user->id}/orders/{$order->order_number}/items/{$item->id}/image";
+
+                $imgExt = $imgFile->getClientOriginalExtension();
+                $imgFilename = "product-" . time() . ".{$imgExt}";
+
+                $imgPath = Storage::disk('spaces')->putFileAs($imgStoragePath, $imgFile, $imgFilename, 'public');
+                $imgUrl = config('filesystems.disks.spaces.url') . '/' . $imgPath;
+
+                $item->update([
+                    'product_image_path' => $imgPath,
+                    'product_image_filename' => $imgFile->getClientOriginalName(),
+                    'product_image_mime_type' => $imgFile->getClientMimeType(),
+                    'product_image_size' => $imgFile->getSize(),
+                    'product_image_url' => $imgUrl,
+                ]);
+            }
+
             $item->save();
 
             // Recalculate order totals
-            if ($item->weight) {
-                $order->update([
-                    'total_weight' => $order->calculateTotalWeight()
-                ]);
-            }
-            
-            if ($item->declared_value) {
-                $order->update([
-                    'declared_value' => $order->calculateTotalDeclaredValue(),
-                    'iva_amount' => $order->calculateIVA()
-                ]);
-            }
+            $order->update([
+                'total_weight' => $order->calculateTotalWeight(),
+                'declared_value' => $order->calculateTotalDeclaredValue(),
+                'iva_amount' => $order->calculateIVA()
+            ]);
 
             DB::commit();
 
@@ -462,6 +521,8 @@ class AdminOrderManagementController extends Controller
                 'order_id' => $order->id,
                 'item_id' => $item->id,
                 'admin_id' => $request->user()->id,
+                'has_proof' => $request->hasFile('proof_of_purchase'),
+                'has_image' => $request->hasFile('product_image'),
             ]);
 
             return response()->json([
@@ -475,7 +536,13 @@ class AdminOrderManagementController extends Controller
 
         } catch (\Exception $e) {
             DB::rollBack();
-            
+
+            Log::error('Admin failed to add item', [
+                'order_id' => $order->id,
+                'admin_id' => $request->user()->id,
+                'error' => $e->getMessage(),
+            ]);
+
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to add item',
@@ -486,6 +553,7 @@ class AdminOrderManagementController extends Controller
 
     /**
      * Update any item (admin override)
+     * Supports file uploads/removal for proof_of_purchase and product_image
      */
     public function updateItem(Request $request, Order $order, OrderItem $item)
     {
@@ -502,19 +570,121 @@ class AdminOrderManagementController extends Controller
             'quantity' => 'nullable|integer|min:1|max:999',
             'declared_value' => 'nullable|numeric|min:0|max:99999.99',
             'tracking_number' => 'nullable|string|max:255',
+            'tracking_url' => 'nullable|url|max:1000',
             'carrier' => 'nullable|string|in:' . implode(',', array_keys(OrderItem::CARRIERS)),
+            'merchant_order_id' => 'nullable|string|max:255',
+            'estimated_delivery_date' => 'nullable|date',
             'arrived' => 'nullable|boolean',
+            'arrived_at' => 'nullable|date',
             'weight' => 'nullable|numeric|min:0.01|max:999.99',
+            'dimensions' => 'nullable|array',
+            'dimensions.length' => 'nullable|numeric|min:0|max:999',
+            'dimensions.width' => 'nullable|numeric|min:0|max:999',
+            'dimensions.height' => 'nullable|numeric|min:0|max:999',
+            'product_image_url' => 'nullable|url|max:1000',
+            // File uploads
+            'proof_of_purchase' => 'nullable|file|mimes:pdf,jpg,jpeg,png|max:10240',
+            'product_image' => 'nullable|file|mimes:jpg,jpeg,png,gif,webp|max:5120',
+            // File removal flags
+            'remove_proof_of_purchase' => 'nullable|boolean',
+            'remove_product_image' => 'nullable|boolean',
         ]);
 
         DB::beginTransaction();
 
         try {
-            $item->update($request->all());
-            
-            if ($request->has('arrived') && $request->arrived && !$item->arrived_at) {
-                $item->arrived_at = now();
+            $user = $order->user;
+            $userName = Str::slug($user->name);
+
+            // Get update data excluding file fields and removal flags
+            $updateData = $request->except([
+                'proof_of_purchase', 'product_image',
+                'remove_proof_of_purchase', 'remove_product_image'
+            ]);
+
+            // Convert empty strings to null for nullable fields
+            $nullableFields = [
+                'product_url', 'merchant_order_id', 'tracking_number',
+                'tracking_url', 'carrier', 'estimated_delivery_date',
+                'declared_value', 'product_image_url'
+            ];
+
+            foreach ($nullableFields as $field) {
+                if (array_key_exists($field, $updateData) && ($updateData[$field] === '' || $updateData[$field] === null)) {
+                    $updateData[$field] = null;
+                }
+            }
+
+            // Update basic fields
+            $item->update($updateData);
+
+            // Handle arrival status
+            if ($request->has('arrived')) {
+                if ($request->boolean('arrived') && !$item->arrived_at) {
+                    $item->arrived_at = $request->arrived_at ?? now();
+                } elseif (!$request->boolean('arrived')) {
+                    $item->arrived_at = null;
+                }
                 $item->save();
+            }
+
+            // Re-detect carrier if tracking number changed but carrier not provided
+            if ($request->has('tracking_number') && !$request->has('carrier')) {
+                $item->carrier = $item->detectCarrier();
+                $item->save();
+            }
+
+            // Handle Proof of Purchase Deletion
+            if ($request->boolean('remove_proof_of_purchase')) {
+                $item->deleteProofOfPurchase();
+            }
+
+            // Handle Product Image Deletion
+            if ($request->boolean('remove_product_image')) {
+                $item->deleteProductImage();
+                $item->update(['product_image_url' => null]);
+            }
+
+            // Handle Proof of Purchase Upload/Replacement
+            if ($request->hasFile('proof_of_purchase')) {
+                // Delete existing file first
+                $item->deleteProofOfPurchase();
+
+                $file = $request->file('proof_of_purchase');
+                $storagePath = "users/{$userName}-{$user->id}/orders/{$order->order_number}/items/{$item->id}/proof";
+                $filename = "proof-" . time() . "." . $file->getClientOriginalExtension();
+
+                $path = Storage::disk('spaces')->putFileAs($storagePath, $file, $filename, 'public');
+                $url = config('filesystems.disks.spaces.url') . '/' . $path;
+
+                $item->update([
+                    'proof_of_purchase_path' => $path,
+                    'proof_of_purchase_filename' => $file->getClientOriginalName(),
+                    'proof_of_purchase_mime_type' => $file->getClientMimeType(),
+                    'proof_of_purchase_size' => $file->getSize(),
+                    'proof_of_purchase_url' => $url,
+                ]);
+            }
+
+            // Handle Product Image Upload/Replacement
+            if ($request->hasFile('product_image')) {
+                // Delete existing file first
+                $item->deleteProductImage();
+
+                $imgFile = $request->file('product_image');
+                $imgStoragePath = "users/{$userName}-{$user->id}/orders/{$order->order_number}/items/{$item->id}/image";
+                $imgFilename = "product-" . time() . "." . $imgFile->getClientOriginalExtension();
+
+                $imgPath = Storage::disk('spaces')->putFileAs($imgStoragePath, $imgFile, $imgFilename, 'public');
+                $imgUrl = config('filesystems.disks.spaces.url') . '/' . $imgPath;
+
+                $item->update([
+                    'product_image_path' => $imgPath,
+                    'product_image_filename' => $imgFile->getClientOriginalName(),
+                    'product_image_mime_type' => $imgFile->getClientMimeType(),
+                    'product_image_size' => $imgFile->getSize(),
+                    'product_image_url' => $imgUrl,
+                ]);
             }
 
             // Recalculate order totals
@@ -524,12 +694,16 @@ class AdminOrderManagementController extends Controller
                 'iva_amount' => $order->calculateIVA()
             ]);
 
+            // Check and update order status if needed
+            $order->checkAndUpdatePackageStatus();
+
             DB::commit();
 
             Log::info('Admin updated item', [
                 'order_id' => $order->id,
                 'item_id' => $item->id,
                 'admin_id' => $request->user()->id,
+                'fields_updated' => array_keys($request->all()),
             ]);
 
             return response()->json([
@@ -543,7 +717,14 @@ class AdminOrderManagementController extends Controller
 
         } catch (\Exception $e) {
             DB::rollBack();
-            
+
+            Log::error('Admin failed to update item', [
+                'order_id' => $order->id,
+                'item_id' => $item->id,
+                'admin_id' => $request->user()->id,
+                'error' => $e->getMessage(),
+            ]);
+
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to update item',
