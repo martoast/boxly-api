@@ -72,6 +72,8 @@ class PaymentReceived extends Mailable implements ShouldQueue
      */
     public function content(): Content
     {
+        $isCrossingOnly = $this->order->isCrossingOnly();
+
         return new Content(
             view: 'emails.orders.payment-received',
             with: [
@@ -89,6 +91,8 @@ class PaymentReceived extends Mailable implements ShouldQueue
                 'frontendUrl' => config('app.frontend_url'),
                 'supportEmail' => 'contact@boxly.mx',
                 'supportPhone' => '+52 (664) 123-4567',
+                'isCrossingOnly' => $isCrossingOnly,
+                'pickupLocation' => $isCrossingOnly ? $this->getPickupLocation() : null,
             ]
         );
     }
@@ -231,8 +235,28 @@ class PaymentReceived extends Mailable implements ShouldQueue
     public function shouldSend(): bool
     {
         // Only send if order is actually paid
-        return $this->order->isPaid() && 
+        return $this->order->isPaid() &&
                !empty($this->order->amount_paid) &&
                $this->order->amount_paid > 0;
+    }
+
+    /**
+     * Get pickup location for crossing orders
+     *
+     * @return array
+     */
+    private function getPickupLocation(): array
+    {
+        $locale = $this->order->user->preferred_language ?? 'es';
+
+        return [
+            'name' => 'Colectivo Las Ferias La Cacho',
+            'address' => 'Tijuana, Baja California',
+            'phone' => '+1 619 559-1920',
+            'hours' => $locale === 'es'
+                ? 'Lunes a Viernes: 9:00 AM - 6:00 PM'
+                : 'Monday to Friday: 9:00 AM - 6:00 PM',
+            'mapsLink' => 'https://maps.app.goo.gl/4SsEVjy2D4noFM9n8',
+        ];
     }
 }

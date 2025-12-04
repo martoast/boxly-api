@@ -21,6 +21,7 @@ class Order extends Model
         'order_number',
         'tracking_number',
         'status',
+        'order_type',
         'box_size',
         'box_price',
         'declared_value',
@@ -315,6 +316,23 @@ class Order extends Model
     public function isDepositPaid(): bool
     {
         return !is_null($this->deposit_paid_at);
+    }
+
+    /**
+     * Check if this is a crossing-only order (no shipping delivery).
+     */
+    public function isCrossingOnly(): bool
+    {
+        return $this->order_type === 'crossing';
+    }
+
+    /**
+     * Check if this is a shipping order (includes delivery).
+     * Treats null order_type as shipping for legacy compatibility.
+     */
+    public function isShipping(): bool
+    {
+        return $this->order_type === 'shipping' || $this->order_type === null;
     }
 
     /**

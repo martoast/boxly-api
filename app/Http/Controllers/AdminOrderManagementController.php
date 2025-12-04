@@ -21,24 +21,25 @@ class AdminOrderManagementController extends Controller
         $request->validate([
             'user_id' => 'required|exists:users,id',
             'status' => 'nullable|string|in:' . implode(',', array_keys(Order::getStatuses())),
-            
-            // Allow either full_address OR individual fields
-            'delivery_address' => 'required|array',
+            'order_type' => 'nullable|string|in:shipping,crossing',
+
+            // Delivery address required only for shipping orders
+            'delivery_address' => 'required_if:order_type,shipping|nullable|array',
             'delivery_address.full_address' => 'nullable|string|max:1000',
-            
-            // Individual fields only required if full_address is not provided
-            'delivery_address.street' => 'required_without:delivery_address.full_address|nullable|string|max:255',
-            'delivery_address.exterior_number' => 'required_without:delivery_address.full_address|nullable|string|max:20',
+
+            // Individual fields only required if full_address is not provided AND order_type is shipping
+            'delivery_address.street' => 'required_if:order_type,shipping,delivery_address.full_address,null|nullable|string|max:255',
+            'delivery_address.exterior_number' => 'required_if:order_type,shipping,delivery_address.full_address,null|nullable|string|max:20',
             'delivery_address.interior_number' => 'nullable|string|max:20',
-            'delivery_address.colonia' => 'required_without:delivery_address.full_address|nullable|string|max:100',
-            'delivery_address.municipio' => 'required_without:delivery_address.full_address|nullable|string|max:100',
-            'delivery_address.estado' => 'required_without:delivery_address.full_address|nullable|string|max:100',
-            'delivery_address.postal_code' => 'required_without:delivery_address.full_address|nullable|regex:/^\d{5}$/',
+            'delivery_address.colonia' => 'required_if:order_type,shipping,delivery_address.full_address,null|nullable|string|max:100',
+            'delivery_address.municipio' => 'required_if:order_type,shipping,delivery_address.full_address,null|nullable|string|max:100',
+            'delivery_address.estado' => 'required_if:order_type,shipping,delivery_address.full_address,null|nullable|string|max:100',
+            'delivery_address.postal_code' => 'required_if:order_type,shipping,delivery_address.full_address,null|nullable|regex:/^\d{5}$/',
             'delivery_address.referencias' => 'nullable|string|max:500',
-            
+
             'is_rural' => 'boolean',
             'notes' => 'nullable|string|max:2000',
-            
+
             // Boxes support for creation
             'boxes' => 'nullable|array',
             'boxes.*.stripe_price_id' => 'required_with:boxes|string|max:255',
@@ -49,18 +50,29 @@ class AdminOrderManagementController extends Controller
 
         try {
             $user = User::find($request->user_id);
-            
-            // Create the order
-            $order = new Order([
+
+            // Prepare order data
+            $orderData = [
                 'user_id' => $user->id,
                 'order_number' => Order::generateOrderNumber(),
                 'tracking_number' => Order::generateTrackingNumber(),
                 'status' => $request->status ?? Order::STATUS_COLLECTING,
-                'is_rural' => $request->is_rural ?? false,
-                'delivery_address' => $request->delivery_address,
+                'order_type' => $request->order_type ?? 'shipping',
                 'currency' => 'mxn',
                 'notes' => $request->notes,
-            ]);
+            ];
+
+            // For crossing-only orders, force no delivery address and no rural surcharge
+            if ($request->order_type === 'crossing') {
+                $orderData['delivery_address'] = null;
+                $orderData['is_rural'] = false;
+            } else {
+                $orderData['delivery_address'] = $request->delivery_address;
+                $orderData['is_rural'] = $request->is_rural ?? false;
+            }
+
+            // Create the order
+            $order = new Order($orderData);
 
             // Skip email notifications for admin-created orders
             $order->skipEmailNotifications = true;
@@ -113,13 +125,14 @@ class AdminOrderManagementController extends Controller
         $request->validate([
             'user_id' => 'nullable|exists:users,id',
             'status' => 'nullable|string|in:' . implode(',', array_keys(Order::getStatuses())),
+            'order_type' => 'nullable|string|in:shipping,crossing',
             'box_size' => 'nullable|string|in:extra-small,small,medium,large,extra-large',
             'box_price' => 'nullable|numeric|min:0|max:99999.99',
             'declared_value' => 'nullable|numeric|min:0|max:999999.99',
             'iva_amount' => 'nullable|numeric|min:0|max:99999.99',
             'is_rural' => 'nullable|boolean',
             'rural_surcharge' => 'nullable|numeric|min:0|max:9999.99',
-            
+
             // Allow either full_address OR individual fields for updates
             'delivery_address' => 'nullable|array',
             'delivery_address.full_address' => 'nullable|string|max:1000',
@@ -131,7 +144,7 @@ class AdminOrderManagementController extends Controller
             'delivery_address.estado' => 'nullable|string|max:100',
             'delivery_address.postal_code' => 'nullable|regex:/^\d{5}$/',
             'delivery_address.referencias' => 'nullable|string|max:500',
-            
+
             'total_weight' => 'nullable|numeric|min:0|max:999.99',
             'actual_weight' => 'nullable|numeric|min:0|max:999.99',
             'shipping_cost' => 'nullable|numeric|min:0|max:99999.99',
@@ -158,7 +171,7 @@ class AdminOrderManagementController extends Controller
             'deposit_invoice_id' => 'nullable|string|max:255',
             'payment_link' => 'nullable|url|max:500',
             'deposit_payment_link' => 'nullable|url|max:500',
-            
+
             // Boxes support - only need stripe_price_id and quantity, we fetch the rest from Stripe
             'boxes' => 'nullable|array',
             'boxes.*.id' => 'nullable|integer',
@@ -171,9 +184,15 @@ class AdminOrderManagementController extends Controller
         try {
             // Skip email notifications for admin manual updates
             $order->skipEmailNotifications = true;
-            
+
             // Separate boxes from other update data
             $updateData = $request->except(['boxes']);
+
+            // If order_type is being changed to 'crossing', clear delivery address and force is_rural to false
+            if ($request->has('order_type') && $request->order_type === 'crossing') {
+                $updateData['delivery_address'] = null;
+                $updateData['is_rural'] = false;
+            }
             
             // Handle boxes array if provided
             if ($request->has('boxes')) {
@@ -277,6 +296,7 @@ class AdminOrderManagementController extends Controller
                 'stripe_price_id' => $stripePrice->id,
                 'stripe_product_id' => $stripePrice->product->id,
                 'box_size' => $stripePrice->product->metadata->type ?? null,
+                'shipping' => $stripePrice->product->metadata->shipping ?? null,
                 'box_name' => $stripePrice->product->name,
                 'box_price' => $stripePrice->unit_amount / 100,
                 'currency' => strtolower($stripePrice->currency),

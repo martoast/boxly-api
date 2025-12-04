@@ -41,14 +41,15 @@ class OrderController extends Controller
     public function create(Request $request)
     {
         $request->validate([
-            'delivery_address' => 'required|array',
-            'delivery_address.street' => 'required|string|max:255',
-            'delivery_address.exterior_number' => 'required|string|max:20',
+            'order_type' => 'nullable|string|in:shipping,crossing',
+            'delivery_address' => 'required_if:order_type,shipping|nullable|array',
+            'delivery_address.street' => 'required_if:order_type,shipping|nullable|string|max:255',
+            'delivery_address.exterior_number' => 'required_if:order_type,shipping|nullable|string|max:20',
             'delivery_address.interior_number' => 'nullable|string|max:20',
-            'delivery_address.colonia' => 'required|string|max:100',
-            'delivery_address.municipio' => 'required|string|max:100',
-            'delivery_address.estado' => 'required|string|max:100',
-            'delivery_address.postal_code' => 'required|regex:/^\d{5}$/',
+            'delivery_address.colonia' => 'required_if:order_type,shipping|nullable|string|max:100',
+            'delivery_address.municipio' => 'required_if:order_type,shipping|nullable|string|max:100',
+            'delivery_address.estado' => 'required_if:order_type,shipping|nullable|string|max:100',
+            'delivery_address.postal_code' => 'required_if:order_type,shipping|nullable|regex:/^\d{5}$/',
             'delivery_address.referencias' => 'nullable|string|max:500',
             'is_rural' => 'boolean',
             'notes' => 'nullable|string|max:1000',
@@ -56,18 +57,18 @@ class OrderController extends Controller
         ]);
 
         $user = $request->user();
-        
+
         DB::beginTransaction();
-        
+
         try {
-            $order = Order::create([
+            // Prepare order data
+            $orderData = [
                 'user_id' => $user->id,
                 'order_number' => Order::generateOrderNumber(),
                 'tracking_number' => Order::generateTrackingNumber(),
                 'status' => Order::STATUS_COLLECTING,
+                'order_type' => $request->order_type ?? 'shipping',
                 'box_size' => null,
-                'is_rural' => $request->is_rural ?? false,
-                'delivery_address' => $request->delivery_address,
                 'currency' => 'mxn',
                 'declared_value' => $request->declared_value ?? null,
                 'iva_amount' => null,
@@ -78,9 +79,23 @@ class OrderController extends Controller
                 'stripe_invoice_id' => null,
                 'box_price' => null,
                 'notes' => $request->notes,
-            ]);
+            ];
+
+            // For crossing-only orders, force no delivery address and no rural surcharge
+            if ($request->order_type === 'crossing') {
+                $orderData['delivery_address'] = null;
+                $orderData['is_rural'] = false;
+            } else {
+                $orderData['delivery_address'] = $request->delivery_address;
+                $orderData['is_rural'] = $request->is_rural ?? false;
+            }
+
+            $order = Order::create($orderData);
 
             DB::commit();
+
+            // Note: Email is automatically sent via OrderStatusChanged event when status is set to 'collecting'
+            // The status-changed.blade.php template handles both shipping and crossing-only orders
 
             // Notify admins about new order (optional - uncomment when ready)
             // $admins = User::where('role', 'admin')->get();
@@ -94,19 +109,29 @@ class OrderController extends Controller
                 'tracking_number' => $order->tracking_number,
                 'user_id' => $user->id,
                 'user_email' => $user->email,
+                'order_type' => $order->order_type,
                 'is_rural' => $order->is_rural,
                 'declared_value' => $request->declared_value,
             ]);
 
+            $responseData = [
+                'order' => $order->load('items'),
+                'next_steps' => $this->getNextSteps($user->preferred_language ?? 'es'),
+                'important_notes' => $this->getImportantNotes($user->preferred_language ?? 'es'),
+            ];
+
+            // Only include warehouse address and standard message for shipping orders
+            if ($order->isShipping()) {
+                $responseData['warehouse_address'] = $this->getWarehouseAddress($order);
+                $message = 'Order created successfully. You can now add items and ship them to our warehouse.';
+            } else {
+                $message = 'Crossing-only order created successfully. You can now add items to import.';
+            }
+
             return response()->json([
                 'success' => true,
-                'message' => 'Order created successfully. You can now add items and ship them to our warehouse.',
-                'data' => [
-                    'order' => $order->load('items'),
-                    'warehouse_address' => $this->getWarehouseAddress($order),
-                    'next_steps' => $this->getNextSteps($user->preferred_language ?? 'es'),
-                    'important_notes' => $this->getImportantNotes($user->preferred_language ?? 'es'),
-                ]
+                'message' => $message,
+                'data' => $responseData
             ], 201);
 
         } catch (\Exception $e) {

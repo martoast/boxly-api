@@ -76,8 +76,8 @@ class StripeWebhookController extends Controller
             return;
         }
 
-        // 2. Handle Final Order Payment (Remaining 50% + Extras)
-        if (($type === 'final_invoice' || $type === 'order_invoice') && isset($metadata['order_id'])) {
+        // 2. Handle Final Order Payment (Remaining 50% + Extras) OR Full Payment (Crossing Orders)
+        if (($type === 'final_invoice' || $type === 'order_invoice' || $type === 'full_payment') && isset($metadata['order_id'])) {
             $this->handleOrderPaid($invoice, $metadata);
             return;
         }
@@ -93,30 +93,49 @@ class StripeWebhookController extends Controller
     {
         $order = Order::find($metadata['order_id']);
 
-        if (!$order || $order->isPaid()) return;
+        if (!$order) {
+            Log::warning('Order not found for payment webhook', ['order_id' => $metadata['order_id'] ?? 'unknown']);
+            return;
+        }
+
+        $newAmount = $invoice->amount_paid / 100;
+
+        // Only skip if order is already paid AND amount_paid is set
+        // This ensures we still update amount_paid even if order was manually marked as paid
+        if ($order->isPaid() && !empty($order->amount_paid) && $order->amount_paid > 0) {
+            Log::info('Order already fully paid, skipping webhook update', [
+                'order_id' => $order->id,
+                'existing_amount_paid' => $order->amount_paid,
+            ]);
+            return;
+        }
 
         try {
-            $newAmount = $invoice->amount_paid / 100;
             $boxCount = $metadata['box_count'] ?? 1;
 
             $order->update([
                 'status' => Order::STATUS_PAID,
                 'amount_paid' => ($order->amount_paid ?? 0) + $newAmount,
-                'paid_at' => now(),
+                'paid_at' => $order->paid_at ?? now(), // Keep existing paid_at if already set
                 'stripe_payment_intent_id' => $invoice->payment_intent
             ]);
 
             Log::info('Order fully paid', [
                 'order_id' => $order->id,
                 'amount' => $newAmount,
+                'total_amount_paid' => $order->fresh()->amount_paid,
                 'box_count' => $boxCount,
                 'total_box_price' => $metadata['total_box_price'] ?? null,
+                'order_type' => $order->order_type ?? 'shipping',
             ]);
 
             Mail::to($order->user)->send(new PaymentReceived($order));
 
         } catch (\Exception $e) {
-            Log::error('Order paid handling failed', ['error' => $e->getMessage()]);
+            Log::error('Order paid handling failed', [
+                'order_id' => $order->id,
+                'error' => $e->getMessage(),
+            ]);
         }
     }
 

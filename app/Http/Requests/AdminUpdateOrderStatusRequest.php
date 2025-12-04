@@ -15,16 +15,16 @@ class AdminUpdateOrderStatusRequest extends FormRequest
 
     public function rules(): array
     {
-        return [
+        $order = $this->route('order');
+
+        // For crossing-only orders, estimated_delivery_date is not required
+        // since they are picked up at warehouse, not shipped via carrier
+        $isShipping = !($order && $order->isCrossingOnly());
+
+        $rules = [
             'status' => [
                 'required',
                 Rule::in(array_keys(Order::getStatuses()))
-            ],
-            'estimated_delivery_date' => [
-                'required_if:status,' . Order::STATUS_SHIPPED,
-                'nullable',
-                'date',
-                // Removed 'after:today' to allow admins to set any date
             ],
             'notes' => [
                 'nullable',
@@ -32,6 +32,24 @@ class AdminUpdateOrderStatusRequest extends FormRequest
                 'max:500'
             ],
         ];
+
+        // Only require estimated_delivery_date for shipping orders
+        if ($isShipping) {
+            $rules['estimated_delivery_date'] = [
+                'required_if:status,' . Order::STATUS_SHIPPED,
+                'nullable',
+                'date',
+                // Removed 'after:today' to allow admins to set any date
+            ];
+        } else {
+            // For crossing orders, make it optional
+            $rules['estimated_delivery_date'] = [
+                'nullable',
+                'date',
+            ];
+        }
+
+        return $rules;
     }
 
     /**

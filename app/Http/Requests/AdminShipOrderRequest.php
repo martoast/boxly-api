@@ -13,26 +13,10 @@ class AdminShipOrderRequest extends FormRequest
 
     public function rules(): array
     {
-        return [
-            'guia_number' => [
-                'required',
-                'string',
-                'regex:/^[0-9\s]+$/',
-                'min:10',
-                'max:30'
-            ],
-            'gia_file' => [
-                'required',
-                'file',
-                'mimes:pdf',
-                'max:10240'
-            ],
-            'estimated_delivery_date' => [
-                'required',
-                'date',
-                'after:today'
-            ],
+        $order = $this->route('order');
+        $isCrossing = $order && $order->isCrossingOnly();
 
+        $rules = [
             // NEW: Support for multiple boxes
             // Admin can send either a single stripe_price_id OR an array of boxes
             'boxes' => [
@@ -65,6 +49,35 @@ class AdminShipOrderRequest extends FormRequest
                 'max:1000'
             ]
         ];
+
+        // For SHIPPING orders: guia, gia_file, and estimated_delivery_date are required
+        // For CROSSING orders: these are all optional (no physical shipping/delivery)
+        if ($isCrossing) {
+            $rules['guia_number'] = ['nullable', 'string'];
+            $rules['gia_file'] = ['nullable', 'file', 'mimes:pdf', 'max:10240'];
+            $rules['estimated_delivery_date'] = ['nullable', 'date'];
+        } else {
+            $rules['guia_number'] = [
+                'required',
+                'string',
+                'regex:/^[0-9\s]+$/',
+                'min:10',
+                'max:30'
+            ];
+            $rules['gia_file'] = [
+                'required',
+                'file',
+                'mimes:pdf',
+                'max:10240'
+            ];
+            $rules['estimated_delivery_date'] = [
+                'required',
+                'date',
+                'after:today'
+            ];
+        }
+
+        return $rules;
     }
 
     public function messages(): array

@@ -98,6 +98,7 @@ class ProductController extends Controller
             'max_height' => $product->metadata->max_height ?? null,
             'max_width' => $product->metadata->max_width ?? null,
             'consolidated' => $product->metadata->consolidated ?? null,
+            'shipping' => $product->metadata->shipping ?? null,
         ];
     }
 }

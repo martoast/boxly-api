@@ -123,7 +123,10 @@ class AdminOrderController extends Controller
                 }
                 break;
             case Order::STATUS_SHIPPED:
-                $data['estimated_delivery_date'] = $request->estimated_delivery_date;
+                // Only set estimated_delivery_date if provided (required for shipping orders, optional for crossing)
+                if ($request->has('estimated_delivery_date')) {
+                    $data['estimated_delivery_date'] = $request->estimated_delivery_date;
+                }
                 $data['shipped_at'] = now();
                 break;
             case Order::STATUS_DELIVERED:
@@ -137,7 +140,6 @@ class AdminOrderController extends Controller
                 break;
         }
 
-        $order->skipEmailNotifications = true;
         $order->update($data);
 
         Log::info('Admin manually updated order status', [
@@ -216,8 +218,10 @@ class AdminOrderController extends Controller
                 $boxDescriptions[] = $desc;
             }
 
-            // 2. Calculate 50% Deposit
-            $depositAmount = round($totalBoxPrice * 0.5, 2);
+            // 2. Calculate payment amount (100% for crossing, 50% deposit for shipping)
+            $isCrossing = $order->isCrossingOnly();
+            $paymentPercentage = $isCrossing ? 1.0 : 0.5;
+            $depositAmount = round($totalBoxPrice * $paymentPercentage, 2);
 
             // 3. Handle GIA File Upload
             $uploadedPath = null;
@@ -242,11 +246,12 @@ class AdminOrderController extends Controller
                 $user->createAsStripeCustomer();
             }
 
-            // 5. Create Stripe Invoice for 50% Deposit
+            // 5. Create Stripe Invoice (Full Payment for crossing, 50% Deposit for shipping)
             $boxCount = count($boxEntries);
+            $paymentLabel = $isCrossing ? "Full Payment" : "Deposit (50%)";
             $invoiceDescription = $boxCount > 1
-                ? "Deposit (50%) for Order {$order->order_number} - {$boxCount} boxes"
-                : "Deposit (50%) for Order {$order->order_number}";
+                ? "{$paymentLabel} for Order {$order->order_number} - {$boxCount} boxes"
+                : "{$paymentLabel} for Order {$order->order_number}";
 
             $stripeInvoice = $stripe->invoices->create([
                 'customer' => $user->stripe_id,
@@ -255,22 +260,25 @@ class AdminOrderController extends Controller
                 'days_until_due' => 3,
                 'description' => $invoiceDescription,
                 'metadata' => [
-                    'type' => 'deposit',
+                    'type' => $isCrossing ? 'full_payment' : 'deposit',
+                    'order_type' => $order->order_type ?? 'shipping',
                     'order_id' => (string) $order->id,
                     'order_number' => $order->order_number,
                     'box_count' => (string) $boxCount,
                     'total_box_price' => (string) $totalBoxPrice,
+                    'payment_percentage' => $isCrossing ? '100' : '50',
                 ],
                 'auto_advance' => false,
             ]);
 
             // Create line items for each box type
             foreach ($boxEntries as $entry) {
+                $linePrefix = $isCrossing ? "Full Payment" : "50% Deposit";
                 $lineDescription = $entry['quantity'] > 1
-                    ? "50% Deposit: {$entry['quantity']}x {$entry['box_name']} @ \${$entry['box_price']} each"
-                    : "50% Deposit: {$entry['box_name']} (\${$entry['box_price']})";
+                    ? "{$linePrefix}: {$entry['quantity']}x {$entry['box_name']} @ \${$entry['box_price']} each"
+                    : "{$linePrefix}: {$entry['box_name']} (\${$entry['box_price']})";
 
-                $lineAmount = round(($entry['box_price'] * $entry['quantity']) * 0.5, 2);
+                $lineAmount = round(($entry['box_price'] * $entry['quantity']) * $paymentPercentage, 2);
 
                 $stripe->invoiceItems->create([
                     'customer' => $user->stripe_id,
@@ -335,25 +343,31 @@ class AdminOrderController extends Controller
                 Mail::to($user)->queue(new OrderShippedWithDeposit($order));
                 Log::info('Order shipped email queued', [
                     'order_id' => $order->id,
+                    'order_type' => $order->order_type ?? 'shipping',
                     'box_count' => $boxCount,
                     'total_box_price' => $totalBoxPrice,
-                    'deposit_amount' => $depositAmount,
+                    'payment_amount' => $depositAmount,
+                    'payment_type' => $isCrossing ? 'full_payment' : 'deposit',
                 ]);
             } catch (\Exception $e) {
                 Log::error('Failed to queue email', ['error' => $e->getMessage()]);
             }
 
+            $invoiceType = $isCrossing ? 'full payment' : 'deposit';
             return response()->json([
                 'success' => true,
                 'message' => $boxCount > 1
-                    ? "Order shipped with {$boxCount} boxes. Deposit invoice generated."
-                    : 'Order shipped and deposit invoice generated successfully',
+                    ? "Order shipped with {$boxCount} boxes. " . ucfirst($invoiceType) . " invoice generated."
+                    : "Order shipped and {$invoiceType} invoice generated successfully",
                 'data' => [
                     'order' => $order->fresh()->load(['user', 'items', 'boxes']),
-                    'deposit_link' => $order->deposit_payment_link,
+                    'payment_link' => $order->deposit_payment_link,
+                    'deposit_link' => $order->deposit_payment_link, // Legacy compatibility
                     'boxes' => $boxEntries,
                     'total_box_price' => $totalBoxPrice,
-                    'deposit_amount' => $depositAmount,
+                    'payment_amount' => $depositAmount,
+                    'payment_type' => $isCrossing ? 'full_payment' : 'deposit',
+                    'payment_percentage' => $isCrossing ? 100 : 50,
                 ]
             ]);
 

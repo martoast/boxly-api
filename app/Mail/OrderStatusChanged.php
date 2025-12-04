@@ -84,6 +84,11 @@ class OrderStatusChanged extends Mailable implements ShouldQueue
                 'previousStatusLabel' => $this->getStatusLabel($this->previousStatus),
                 'statusMessage' => $this->getStatusMessage(),
                 'locale' => $this->order->user->preferred_language ?? 'es',
+                'isCrossingOnly' => $this->order->isCrossingOnly(),
+                'warehouseAddress' => $this->getWarehouseAddress(),
+                'pickupLocation' => $this->getPickupLocation(),
+                'deliveryAddress' => $this->formatDeliveryAddress(),
+                'mapsLink' => 'https://maps.app.goo.gl/Qeq2cdHjXtfVnFwZA',
             ]
         );
     }
@@ -182,5 +187,95 @@ class OrderStatusChanged extends Mailable implements ShouldQueue
         ];
 
         return $messages[$locale][$this->order->status] ?? '';
+    }
+
+    /**
+     * Get the warehouse address for receiving items
+     */
+    private function getWarehouseAddress(): array
+    {
+        return [
+            'name' => $this->order->user->name,
+            'user_id' => $this->order->user->id,
+            'reference' => 'ID: ' . $this->order->user->id,
+            'street' => '2220 Otay Lakes Rd.',
+            'suite' => 'Suite 502 #95',
+            'city' => 'Chula Vista',
+            'state' => 'CA',
+            'zip' => '91915',
+            'country' => 'United States',
+            'phone' => '+1 (619) 559-1920',
+        ];
+    }
+
+    /**
+     * Get the warehouse pickup location for crossing-only orders
+     */
+    private function getPickupLocation(): array
+    {
+        return [
+            'name' => 'Bodega Boxly - Tijuana',
+            'street' => 'Av. Jalisco 2850',
+            'suite' => 'Local 5',
+            'colonia' => 'Col. Madero (Cacho)',
+            'city' => 'Tijuana',
+            'state' => 'Baja California',
+            'zip' => '22040',
+            'country' => 'México',
+            'phone' => '+1 619 559 1910',
+            'hours' => 'Lunes - Viernes: 9:00 AM - 6:00 PM',
+            'google_maps_url' => 'https://maps.app.goo.gl/4SsEVjy2D4noFM9n8',
+            'instructions' => 'Ubicado en Colectivo Las Ferias La Cacho. Por favor llame antes para programar su recolección.',
+        ];
+    }
+
+    /**
+     * Format the delivery address for display
+     */
+    private function formatDeliveryAddress(): array
+    {
+        $address = $this->order->delivery_address ?? [];
+
+        return [
+            'street' => $address['street'] ?? '',
+            'exterior_number' => $address['exterior_number'] ?? '',
+            'interior_number' => $address['interior_number'] ?? null,
+            'colonia' => $address['colonia'] ?? '',
+            'municipio' => $address['municipio'] ?? '',
+            'estado' => $address['estado'] ?? '',
+            'postal_code' => $address['postal_code'] ?? '',
+            'referencias' => $address['referencias'] ?? null,
+            'full_address' => $this->buildFullAddress($address),
+        ];
+    }
+
+    /**
+     * Build full address string from components
+     */
+    private function buildFullAddress(array $address): string
+    {
+        $parts = [];
+
+        if (!empty($address['street']) && !empty($address['exterior_number'])) {
+            $street = $address['street'] . ' ' . $address['exterior_number'];
+            if (!empty($address['interior_number'])) {
+                $street .= ' Int. ' . $address['interior_number'];
+            }
+            $parts[] = $street;
+        }
+
+        if (!empty($address['colonia'])) {
+            $parts[] = $address['colonia'];
+        }
+
+        if (!empty($address['municipio']) && !empty($address['estado'])) {
+            $parts[] = $address['municipio'] . ', ' . $address['estado'];
+        }
+
+        if (!empty($address['postal_code'])) {
+            $parts[] = 'C.P. ' . $address['postal_code'];
+        }
+
+        return implode(', ', $parts);
     }
 }
