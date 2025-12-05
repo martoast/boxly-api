@@ -416,6 +416,44 @@ class AdminOrderItemController extends Controller
     }
 
     /**
+     * Mark ALL items in an order as arrived at once
+     */
+    public function markAllArrived(Request $request, Order $order)
+    {
+        // Check if order is in collecting status
+        if ($order->status === Order::STATUS_COLLECTING) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cannot mark items as arrived. The user has not completed the order yet.'
+            ], 422);
+        }
+
+        $items = $order->items()->where('arrived', false)->get();
+
+        if ($items->isEmpty()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'All items are already marked as arrived'
+            ], 400);
+        }
+
+        foreach ($items as $item) {
+            $item->markAsArrived();
+        }
+
+        // Update order's total weight
+        $order->update([
+            'total_weight' => $order->calculateTotalWeight()
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => $items->count() . ' items marked as arrived',
+            'data' => $order->fresh()->load(['items', 'user'])
+        ]);
+    }
+
+    /**
      * Recalculate order IVA based on all items' declared values
      */
     private function recalculateOrderIVA(Order $order)
