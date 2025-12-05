@@ -33,6 +33,7 @@ class PurchaseRequestController extends Controller
     public function store(Request $request)
     {
         $request->validate([
+            'currency' => 'nullable|in:usd,mxn',
             'items' => 'required|array|min:1',
             'items.*.product_name' => 'required|string|max:255',
             'items.*.product_url' => 'required|string|max:2000',
@@ -53,7 +54,7 @@ class PurchaseRequestController extends Controller
                 'user_id' => $user->id,
                 'request_number' => PurchaseRequest::generateRequestNumber(),
                 'status' => PurchaseRequest::STATUS_PENDING_REVIEW,
-                'currency' => 'usd',
+                'currency' => $request->input('currency', 'usd'),
             ]);
 
             // 2. Process Items
@@ -177,6 +178,7 @@ class PurchaseRequestController extends Controller
 
         // Validation
         $request->validate([
+            'currency' => 'nullable|in:usd,mxn',
             'items' => 'required|array|min:1',
             'items.*.product_name' => 'required|string|max:255',
             'items.*.product_url' => 'required|string|max:2000',
@@ -195,6 +197,11 @@ class PurchaseRequestController extends Controller
         try {
             $user = $request->user();
             $itemsInput = $request->input('items');
+
+            // Update currency if provided
+            if ($request->has('currency')) {
+                $purchaseRequest->update(['currency' => $request->input('currency')]);
+            }
             
             // Track existing item IDs to handle deletions
             $updatedItemIds = [];

@@ -57,6 +57,7 @@ class AdminPurchaseRequestController extends Controller
     {
         $request->validate([
             'user_id' => 'required|exists:users,id',
+            'currency' => 'nullable|in:usd,mxn',
             'items' => 'required|array|min:1',
             'items.*.product_name' => 'required|string|max:255',
             'items.*.product_url' => 'required|string|max:2000',
@@ -80,7 +81,7 @@ class AdminPurchaseRequestController extends Controller
                 'user_id' => $user->id,
                 'request_number' => PurchaseRequest::generateRequestNumber(),
                 'status' => $request->status ?? PurchaseRequest::STATUS_PENDING_REVIEW,
-                'currency' => 'usd',
+                'currency' => $request->input('currency', 'usd'),
                 'payment_method' => $request->payment_method ?? PurchaseRequest::PAYMENT_METHOD_STRIPE,
                 'admin_notes' => $request->admin_notes,
             ]);
@@ -172,6 +173,7 @@ class AdminPurchaseRequestController extends Controller
     {
         $validated = $request->validate([
             'status' => 'nullable|in:pending_review,quoted,paid,purchased,rejected,cancelled',
+            'currency' => 'nullable|in:usd,mxn',
             'items_total' => 'nullable|numeric',
             'shipping_cost' => 'nullable|numeric',
             'sales_tax' => 'nullable|numeric',
