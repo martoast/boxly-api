@@ -419,35 +419,29 @@ class UnifiedAdminDashboardController extends Controller
         // --- PURCHASE REQUEST METRICS ---
         $purchaseRequestsCount = PurchaseRequest::whereBetween('created_at', [$start, $end])->count();
 
+        // Count items from purchased requests created in this period
         $purchasedItemsCount = PurchaseRequestItem::whereHas('purchaseRequest', function ($q) use ($start, $end) {
             $q->where('status', 'purchased')
-                ->where(function ($query) use ($start, $end) {
-                    $query->whereBetween('purchased_at', [$start, $end])
-                        ->orWhere(function ($sub) use ($start, $end) {
-                            $sub->whereNull('purchased_at')
-                                ->whereBetween('updated_at', [$start, $end]);
-                        });
-                });
+                ->whereBetween('created_at', [$start, $end]);
         })->sum('quantity');
 
         // Service Fee Revenue (processing_fee is our profit from assisted shopping)
         // Handle both Stripe payments (paid_at set) and manual payments (status=purchased but paid_at null)
-        $serviceFeeUSD = PurchaseRequest::whereIn('status', ['paid', 'purchased'])
+        // Respect currency field: USD fees get converted to MXN, MXN fees stay as-is
+        $serviceFeeBaseQuery = PurchaseRequest::whereIn('status', ['paid', 'purchased'])
             ->where(function ($query) use ($start, $end) {
-                // Option 1: paid_at is set (Stripe payment)
                 $query->whereBetween('paid_at', [$start, $end])
-                    // Option 2: purchased_at is set (marked as purchased)
                     ->orWhereBetween('purchased_at', [$start, $end])
-                    // Option 3: Manual payment - status is purchased but no date set, use updated_at
                     ->orWhere(function ($sub) use ($start, $end) {
                         $sub->where('status', 'purchased')
                             ->whereNull('paid_at')
                             ->whereNull('purchased_at')
                             ->whereBetween('updated_at', [$start, $end]);
                     });
-            })
-            ->sum('processing_fee');
-        $serviceFeeMXN = round($serviceFeeUSD * 18.00, 2);
+            });
+        $serviceFeeUSD = (clone $serviceFeeBaseQuery)->where('currency', 'usd')->sum('processing_fee');
+        $serviceFeeMXNDirect = (clone $serviceFeeBaseQuery)->where('currency', 'mxn')->sum('processing_fee');
+        $serviceFeeMXN = round(($serviceFeeUSD * 18.00) + $serviceFeeMXNDirect, 2);
 
         // --- SHIPPING METRICS ---
         // Revenue from fully paid orders (includes crossing orders with 100% payment)
@@ -497,8 +491,9 @@ class UnifiedAdminDashboardController extends Controller
                 ->whereNull('paid_at')
                 ->sum('deposit_amount');
             $allShippingRevenue = $allPaidOrdersRevenue + $allPendingDepositRevenue;
-            $allServiceFeeUSD = PurchaseRequest::whereIn('status', ['paid', 'purchased'])->sum('processing_fee');
-            $allServiceFeeMXN = $allServiceFeeUSD * 18.00;
+            $allServiceFeeUSD = PurchaseRequest::whereIn('status', ['paid', 'purchased'])->where('currency', 'usd')->sum('processing_fee');
+            $allServiceFeeMXNDirect = PurchaseRequest::whereIn('status', ['paid', 'purchased'])->where('currency', 'mxn')->sum('processing_fee');
+            $allServiceFeeMXN = ($allServiceFeeUSD * 18.00) + $allServiceFeeMXNDirect;
             $allCalculatedRevenue = $allShippingRevenue + $allServiceFeeMXN;
 
             $totalRevenue = $manualRevenue + $allCalculatedRevenue;
@@ -599,8 +594,9 @@ class UnifiedAdminDashboardController extends Controller
 
         // Period Breakdowns (always calculated from DB)
         // Helper to get processing fees with fallback dates for manual payments
+        // Respects currency: USD fees converted to MXN, MXN fees stay as-is
         $getPurchaseRequestFees = function ($dateCallback) {
-            return PurchaseRequest::whereIn('status', ['paid', 'purchased'])
+            $baseQuery = PurchaseRequest::whereIn('status', ['paid', 'purchased'])
                 ->where(function ($query) use ($dateCallback) {
                     $query->where(function ($q) use ($dateCallback) {
                         $dateCallback($q, 'paid_at');
@@ -614,8 +610,10 @@ class UnifiedAdminDashboardController extends Controller
                             ->whereNull('purchased_at');
                         $dateCallback($q, 'updated_at');
                     });
-                })
-                ->sum('processing_fee') * 18;
+                });
+            $usdFees = (clone $baseQuery)->where('currency', 'usd')->sum('processing_fee');
+            $mxnFees = (clone $baseQuery)->where('currency', 'mxn')->sum('processing_fee');
+            return ($usdFees * 18) + $mxnFees;
         };
 
         $todayShipping = Order::whereDate('paid_at', today())->sum('amount_paid');
@@ -634,7 +632,9 @@ class UnifiedAdminDashboardController extends Controller
         $monthFees = $getPurchaseRequestFees(fn($q, $col) => $q->whereMonth($col, $currentMonth)->whereYear($col, $currentYear));
         $monthRevenue = $monthShipping + $monthFees;
 
-        $totalRevenueAllTime = Order::sum('amount_paid') + (PurchaseRequest::whereIn('status', ['paid', 'purchased'])->sum('processing_fee') * 18);
+        $allTimeUsdFees = PurchaseRequest::whereIn('status', ['paid', 'purchased'])->where('currency', 'usd')->sum('processing_fee');
+        $allTimeMxnFees = PurchaseRequest::whereIn('status', ['paid', 'purchased'])->where('currency', 'mxn')->sum('processing_fee');
+        $totalRevenueAllTime = Order::sum('amount_paid') + ($allTimeUsdFees * 18) + $allTimeMxnFees;
 
         // Build expenses response - show manual total if financial is manual, but always include calculated breakdown
         $expensesResponse = $calculatedExpensesByCategory;
