@@ -22,6 +22,7 @@ return [
         'orders',
         'orders/*',
         'admin/*',
+        'admin/customers',
         'profile',
         'profile/*',
         'products',

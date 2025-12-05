@@ -85,6 +85,7 @@ class OrderShippedWithDeposit extends Mailable implements ShouldQueue
 
     /**
      * Get the attachments for the message.
+     * Attaches GIA files for each box in the order.
      */
     public function attachments(): array
     {
@@ -93,16 +94,34 @@ class OrderShippedWithDeposit extends Mailable implements ShouldQueue
             return [];
         }
 
-        // If for some reason the path is missing, return empty array
-        if (! $this->order->gia_path) {
-            return [];
+        $attachments = [];
+        $boxes = $this->order->boxes;
+
+        // Attach each box's GIA file
+        foreach ($boxes as $index => $box) {
+            if ($box->gia_path) {
+                // Create a descriptive filename for each box's GIA
+                $boxNumber = $index + 1;
+                $filename = $box->gia_filename ?? "guia-box-{$boxNumber}.pdf";
+
+                // If multiple boxes, prefix with box number for clarity
+                if ($boxes->count() > 1) {
+                    $filename = "Box{$boxNumber}-{$filename}";
+                }
+
+                $attachments[] = Attachment::fromStorageDisk('spaces', $box->gia_path)
+                    ->as($filename)
+                    ->withMime($box->gia_mime_type ?? 'application/pdf');
+            }
         }
 
-        // This pulls the file directly from your 'spaces' disk
-        return [
-            Attachment::fromStorageDisk('spaces', $this->order->gia_path)
+        // Fallback: If no box-level GIAs but order has legacy GIA, use that
+        if (empty($attachments) && $this->order->gia_path) {
+            $attachments[] = Attachment::fromStorageDisk('spaces', $this->order->gia_path)
                 ->as($this->order->gia_filename ?? 'guia.pdf')
-                ->withMime($this->order->gia_mime_type ?? 'application/pdf'),
-        ];
+                ->withMime($this->order->gia_mime_type ?? 'application/pdf');
+        }
+
+        return $attachments;
     }
 }

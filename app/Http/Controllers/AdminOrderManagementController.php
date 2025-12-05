@@ -20,23 +20,28 @@ class AdminOrderManagementController extends Controller
      */
     public function createOrder(Request $request)
     {
+        $isShipping = $request->order_type === 'shipping' || $request->order_type === null;
+        $hasFullAddress = !empty($request->input('delivery_address.full_address'));
+
         $request->validate([
             'user_id' => 'required|exists:users,id',
             'status' => 'nullable|string|in:' . implode(',', array_keys(Order::getStatuses())),
             'order_type' => 'nullable|string|in:shipping,crossing',
 
             // Delivery address required only for shipping orders
-            'delivery_address' => 'required_if:order_type,shipping|nullable|array',
+            'delivery_address' => $isShipping ? 'required|array' : 'nullable|array',
+
+            // Option 1: Simple full_address string (admin convenience)
             'delivery_address.full_address' => 'nullable|string|max:1000',
 
-            // Individual fields only required if full_address is not provided AND order_type is shipping
-            'delivery_address.street' => 'required_if:order_type,shipping,delivery_address.full_address,null|nullable|string|max:255',
-            'delivery_address.exterior_number' => 'required_if:order_type,shipping,delivery_address.full_address,null|nullable|string|max:20',
+            // Option 2: Individual fields (only required if full_address not provided AND shipping)
+            'delivery_address.street' => ($isShipping && !$hasFullAddress) ? 'required|string|max:255' : 'nullable|string|max:255',
+            'delivery_address.exterior_number' => ($isShipping && !$hasFullAddress) ? 'required|string|max:20' : 'nullable|string|max:20',
             'delivery_address.interior_number' => 'nullable|string|max:20',
-            'delivery_address.colonia' => 'required_if:order_type,shipping,delivery_address.full_address,null|nullable|string|max:100',
-            'delivery_address.municipio' => 'required_if:order_type,shipping,delivery_address.full_address,null|nullable|string|max:100',
-            'delivery_address.estado' => 'required_if:order_type,shipping,delivery_address.full_address,null|nullable|string|max:100',
-            'delivery_address.postal_code' => 'required_if:order_type,shipping,delivery_address.full_address,null|nullable|regex:/^\d{5}$/',
+            'delivery_address.colonia' => ($isShipping && !$hasFullAddress) ? 'required|string|max:100' : 'nullable|string|max:100',
+            'delivery_address.municipio' => ($isShipping && !$hasFullAddress) ? 'required|string|max:100' : 'nullable|string|max:100',
+            'delivery_address.estado' => ($isShipping && !$hasFullAddress) ? 'required|string|max:100' : 'nullable|string|max:100',
+            'delivery_address.postal_code' => ($isShipping && !$hasFullAddress) ? 'required|regex:/^\d{5}$/' : 'nullable|regex:/^\d{5}$/',
             'delivery_address.referencias' => 'nullable|string|max:500',
 
             'is_rural' => 'boolean',
@@ -174,11 +179,14 @@ class AdminOrderManagementController extends Controller
             'payment_link' => 'nullable|url|max:500',
             'deposit_payment_link' => 'nullable|url|max:500',
 
-            // Boxes support - only need stripe_price_id and quantity, we fetch the rest from Stripe
+            // Boxes support with per-box GIA fields
             'boxes' => 'nullable|array',
-            'boxes.*.id' => 'nullable|integer',
+            'boxes.*.id' => 'nullable|integer|exists:order_boxes,id',
             'boxes.*.stripe_price_id' => 'required_with:boxes|string|max:255',
             'boxes.*.quantity' => 'nullable|integer|min:1|max:99',
+            // Per-box GIA fields
+            'boxes.*.guia_number' => 'nullable|string|max:50',
+            'boxes.*.gia_file' => 'nullable|file|mimes:pdf|max:10240',
         ]);
 
         DB::beginTransaction();
@@ -195,28 +203,27 @@ class AdminOrderManagementController extends Controller
                 $updateData['delivery_address'] = null;
                 $updateData['is_rural'] = false;
             }
-            
+
             // Handle boxes array if provided
             if ($request->has('boxes')) {
                 $boxes = $request->input('boxes');
-                
-                // Delete existing boxes
-                $order->boxes()->delete();
-                
+                $giaFiles = $request->file('boxes', []);
+
                 if (is_array($boxes) && count($boxes) > 0) {
-                    // Fetch full details from Stripe and save
-                    $boxEntries = $this->fetchBoxDetailsFromStripe($boxes);
-                    $totalBoxPrice = $this->saveBoxEntries($order, $boxEntries);
-                    
+                    $totalBoxPrice = $this->updateBoxesWithGia($order, $boxes, $giaFiles);
+
                     // Update order's box_price with total
                     $updateData['box_price'] = $totalBoxPrice;
-                    
+
+                    // Refresh boxes to get updated count
+                    $order->load('boxes');
+
                     // If single box, set legacy fields for backwards compatibility
-                    if (count($boxEntries) === 1) {
-                        $singleBox = $boxEntries[0];
-                        $updateData['box_size'] = $singleBox['box_size'];
-                        $updateData['stripe_price_id'] = $singleBox['stripe_price_id'];
-                        $updateData['stripe_product_id'] = $singleBox['stripe_product_id'];
+                    if ($order->boxes->count() === 1) {
+                        $singleBox = $order->boxes->first();
+                        $updateData['box_size'] = $singleBox->box_size;
+                        $updateData['stripe_price_id'] = $singleBox->stripe_price_id;
+                        $updateData['stripe_product_id'] = $singleBox->stripe_product_id;
                     } else {
                         // Multiple boxes - clear legacy single-box fields
                         $updateData['box_size'] = null;
@@ -224,14 +231,21 @@ class AdminOrderManagementController extends Controller
                         $updateData['stripe_product_id'] = null;
                     }
                 } else {
-                    // Empty boxes array - clear all box-related fields
+                    // Empty boxes array - delete all boxes and clear fields
+                    foreach ($order->boxes as $box) {
+                        if ($box->hasGia()) {
+                            $box->deleteGia();
+                        }
+                    }
+                    $order->boxes()->delete();
+
                     $updateData['box_price'] = null;
                     $updateData['box_size'] = null;
                     $updateData['stripe_price_id'] = null;
                     $updateData['stripe_product_id'] = null;
                 }
             }
-            
+
             // Update the order with processed data
             $order->update($updateData);
 
@@ -355,6 +369,146 @@ class AdminOrderManagementController extends Controller
     }
 
     /**
+     * Update boxes with per-box GIA support
+     * Handles updating existing boxes, creating new ones, and uploading GIA files
+     *
+     * @param Order $order The order to update boxes for
+     * @param array $boxes Array of box data from request
+     * @param array $giaFiles Array of uploaded GIA files
+     * @return float Total box price
+     */
+    private function updateBoxesWithGia(Order $order, array $boxes, array $giaFiles): float
+    {
+        $stripe = Cashier::stripe();
+        $user = $order->user;
+        $userName = Str::slug($user->name);
+
+        $totalBoxPrice = 0;
+        $existingBoxIds = $order->boxes->pluck('id')->toArray();
+        $updatedBoxIds = [];
+
+        foreach ($boxes as $index => $boxInput) {
+            $boxId = $boxInput['id'] ?? null;
+            $stripePriceId = $boxInput['stripe_price_id'];
+            $quantity = $boxInput['quantity'] ?? 1;
+            $guiaNumber = $boxInput['guia_number'] ?? null;
+
+            // Get the GIA file for this box if uploaded
+            $giaFile = $giaFiles[$index]['gia_file'] ?? null;
+
+            if ($boxId && in_array($boxId, $existingBoxIds)) {
+                // Update existing box
+                $box = OrderBox::find($boxId);
+
+                // Check if stripe_price_id changed - if so, fetch new details
+                if ($box->stripe_price_id !== $stripePriceId) {
+                    try {
+                        $stripePrice = $stripe->prices->retrieve($stripePriceId, ['expand' => ['product']]);
+                        $box->update([
+                            'stripe_price_id' => $stripePrice->id,
+                            'stripe_product_id' => $stripePrice->product->id,
+                            'box_size' => $stripePrice->product->metadata->type ?? null,
+                            'box_name' => $stripePrice->product->name,
+                            'box_price' => $stripePrice->unit_amount / 100,
+                            'currency' => strtolower($stripePrice->currency),
+                            'quantity' => $quantity,
+                        ]);
+                    } catch (\Exception $e) {
+                        throw new \Exception("Invalid Stripe Price ID: {$stripePriceId}");
+                    }
+                } else {
+                    // Just update quantity
+                    $box->update(['quantity' => $quantity]);
+                }
+
+                // Update guia_number if provided
+                if ($guiaNumber !== null) {
+                    $box->update(['guia_number' => $guiaNumber]);
+                }
+
+                // Handle GIA file upload
+                if ($giaFile) {
+                    // Delete existing GIA file if present
+                    if ($box->hasGia()) {
+                        $box->deleteGia();
+                    }
+
+                    $storagePath = "users/{$userName}-{$user->id}/orders/{$order->order_number}/boxes/{$box->id}";
+                    $filename = "gia-" . time() . ".pdf";
+
+                    $path = Storage::disk('spaces')->putFileAs($storagePath, $giaFile, $filename, 'public');
+                    $url = config('filesystems.disks.spaces.url') . '/' . $path;
+
+                    $box->update([
+                        'gia_path' => $path,
+                        'gia_filename' => $giaFile->getClientOriginalName(),
+                        'gia_mime_type' => $giaFile->getClientMimeType(),
+                        'gia_size' => $giaFile->getSize(),
+                        'gia_url' => $url,
+                    ]);
+                }
+
+                $totalBoxPrice += $box->box_price * $box->quantity;
+                $updatedBoxIds[] = $boxId;
+
+            } else {
+                // Create new box - fetch details from Stripe
+                try {
+                    $stripePrice = $stripe->prices->retrieve($stripePriceId, ['expand' => ['product']]);
+                } catch (\Exception $e) {
+                    throw new \Exception("Invalid Stripe Price ID: {$stripePriceId}");
+                }
+
+                $newBox = OrderBox::create([
+                    'order_id' => $order->id,
+                    'stripe_price_id' => $stripePrice->id,
+                    'stripe_product_id' => $stripePrice->product->id,
+                    'box_size' => $stripePrice->product->metadata->type ?? null,
+                    'box_name' => $stripePrice->product->name,
+                    'box_price' => $stripePrice->unit_amount / 100,
+                    'currency' => strtolower($stripePrice->currency),
+                    'quantity' => $quantity,
+                    'guia_number' => $guiaNumber,
+                ]);
+
+                // Handle GIA file upload for new box
+                if ($giaFile) {
+                    $storagePath = "users/{$userName}-{$user->id}/orders/{$order->order_number}/boxes/{$newBox->id}";
+                    $filename = "gia-" . time() . ".pdf";
+
+                    $path = Storage::disk('spaces')->putFileAs($storagePath, $giaFile, $filename, 'public');
+                    $url = config('filesystems.disks.spaces.url') . '/' . $path;
+
+                    $newBox->update([
+                        'gia_path' => $path,
+                        'gia_filename' => $giaFile->getClientOriginalName(),
+                        'gia_mime_type' => $giaFile->getClientMimeType(),
+                        'gia_size' => $giaFile->getSize(),
+                        'gia_url' => $url,
+                    ]);
+                }
+
+                $totalBoxPrice += $newBox->box_price * $newBox->quantity;
+                $updatedBoxIds[] = $newBox->id;
+            }
+        }
+
+        // Delete boxes that were not in the update request
+        $boxesToDelete = array_diff($existingBoxIds, $updatedBoxIds);
+        foreach ($boxesToDelete as $deleteId) {
+            $box = OrderBox::find($deleteId);
+            if ($box) {
+                if ($box->hasGia()) {
+                    $box->deleteGia();
+                }
+                $box->delete();
+            }
+        }
+
+        return $totalBoxPrice;
+    }
+
+    /**
      * Delete an order completely (admin only)
      */
     public function deleteOrder(Request $request, Order $order)
@@ -364,20 +518,25 @@ class AdminOrderManagementController extends Controller
         try {
             $orderNumber = $order->order_number;
             $userId = $order->user_id;
-            
-            // Delete all boxes
-            $order->boxes()->delete();
-            
-            // Delete all items first (this will trigger model events to delete files)
+
+            // Delete all box GIA files first, then delete boxes
+            foreach ($order->boxes as $box) {
+                if ($box->hasGia()) {
+                    $box->deleteGia();
+                }
+                $box->delete();
+            }
+
+            // Delete all items (this will trigger model events to delete files)
             $order->items()->each(function ($item) {
                 $item->delete();
             });
-            
-            // Delete GIA file if exists
+
+            // Delete order-level GIA file if exists (legacy)
             if ($order->gia_path) {
                 $order->deleteGia();
             }
-            
+
             // Delete the order
             $order->delete();
 

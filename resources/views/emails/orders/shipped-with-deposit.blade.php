@@ -121,7 +121,7 @@
         </ol>
 
     @else
-        {{-- SHIPPING ORDER: Standard flow with guia --}}
+        {{-- SHIPPING ORDER: Standard flow with guia (per-box) --}}
         <h2>
             {{ $locale === 'es' ? '¡Tu orden ha sido enviada!' : 'Your order has been shipped!' }}
         </h2>
@@ -132,22 +132,48 @@
 
         <p>
             @if($locale === 'es')
-                Tu paquete está en camino. Aquí tienes tu número de guía para rastrearlo:
+                Tu paquete está en camino. {{ $boxes->count() > 1 ? 'Aquí tienes los números de guía para rastrear cada caja:' : 'Aquí tienes tu número de guía para rastrearlo:' }}
             @else
-                Your package is on its way. Here is your waybill number to track it:
+                Your package is on its way. {{ $boxes->count() > 1 ? 'Here are the waybill numbers to track each box:' : 'Here is your waybill number to track it:' }}
             @endif
         </p>
 
-        <p style="text-align: center; font-size: 18px; margin: 20px 0;">
-            {{ $order->guia_number }}
-        </p>
-
-        @if($giaUrl)
-        <div style="text-align: center; margin-bottom: 20px;">
-            <a href="{{ $giaUrl }}" target="_blank" style="color: #2E6BB7; text-decoration: none;">
-                {{ $locale === 'es' ? '📄 Ver/Descargar Guía (PDF)' : '📄 View/Download Waybill (PDF)' }}
-            </a>
+        {{-- Show per-box guia numbers --}}
+        @if(isset($boxes) && $boxes->count() > 0)
+        <div style="background-color: #e8f4f8; border-radius: 8px; padding: 15px; margin: 20px 0; border-left: 4px solid #2E6BB7;">
+            @foreach($boxes as $index => $box)
+            <div style="margin-bottom: {{ !$loop->last ? '15px' : '0' }}; {{ !$loop->last ? 'border-bottom: 1px solid #cde4ed; padding-bottom: 15px;' : '' }}">
+                <p style="margin: 0 0 5px 0; font-weight: bold;">
+                    📦 {{ $boxes->count() > 1 ? ($locale === 'es' ? 'Caja' : 'Box') . ' ' . ($index + 1) . ': ' : '' }}{{ $box->box_name }}
+                </p>
+                @if($box->guia_number)
+                <p style="margin: 5px 0; font-size: 16px;">
+                    <strong>{{ $locale === 'es' ? 'Guía:' : 'Waybill:' }}</strong>
+                    <span style="font-family: monospace; background: #fff; padding: 2px 8px; border-radius: 4px;">{{ $box->guia_number }}</span>
+                </p>
+                @endif
+                @if($box->gia_full_url)
+                <p style="margin: 5px 0;">
+                    <a href="{{ $box->gia_full_url }}" target="_blank" style="color: #2E6BB7; text-decoration: none; font-size: 14px;">
+                        📄 {{ $locale === 'es' ? 'Ver/Descargar Guía (PDF)' : 'View/Download Waybill (PDF)' }}
+                    </a>
+                </p>
+                @endif
+            </div>
+            @endforeach
         </div>
+        @else
+            {{-- Fallback to order-level guia for legacy orders --}}
+            <p style="text-align: center; font-size: 18px; margin: 20px 0;">
+                {{ $order->guia_number }}
+            </p>
+            @if($giaUrl)
+            <div style="text-align: center; margin-bottom: 20px;">
+                <a href="{{ $giaUrl }}" target="_blank" style="color: #2E6BB7; text-decoration: none;">
+                    {{ $locale === 'es' ? '📄 Ver/Descargar Guía (PDF)' : '📄 View/Download Waybill (PDF)' }}
+                </a>
+            </div>
+            @endif
         @endif
 
         <div style="text-align: center; margin-bottom: 30px;">
@@ -162,7 +188,7 @@
             {{ $locale === 'es' ? 'Depósito Requerido' : 'Deposit Required' }}
         </h2>
 
-        {{-- Show box details if available --}}
+        {{-- Show box details with pricing --}}
         @if(isset($boxes) && $boxes->count() > 0)
         <div style="background-color: #f9f9f9; border-radius: 8px; padding: 15px; margin-bottom: 20px;">
             <p style="margin: 0 0 10px 0; font-weight: bold;">

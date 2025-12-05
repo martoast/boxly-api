@@ -156,12 +156,14 @@ class AdminOrderController extends Controller
     }
 
     /**
-     * Ship order: Supports multiple boxes per order.
+     * Ship order: Supports multiple boxes per order, each with its own GIA file.
      * Creates OrderBox entries, calculates 50% deposit of total box price, creates invoice.
      *
-     * Request can contain:
-     * - boxes: array of [{stripe_price_id, quantity}] for multiple boxes
-     * - stripe_price_id: single price ID (backwards compatible, converted to boxes array)
+     * Request contains:
+     * - boxes: array of [{stripe_price_id, quantity, guia_number, gia_file}] for each physical box
+     * - estimated_delivery_date: required for shipping orders
+     *
+     * Each box entry represents one physical box that needs its own GIA.
      */
     public function shipOrder(AdminShipOrderRequest $request, Order $order)
     {
@@ -173,15 +175,18 @@ class AdminOrderController extends Controller
 
         try {
             $user = $order->user;
+            $userName = Str::slug($user->name);
             $stripe = Cashier::stripe();
+            $isCrossing = $order->isCrossingOnly();
 
             // 1. Fetch all box details from Stripe and calculate totals
+            // Also collect guia numbers for shipping orders
             $boxEntries = [];
             $totalBoxPrice = 0;
             $currency = 'mxn';
             $boxDescriptions = [];
 
-            foreach ($request->boxes as $boxInput) {
+            foreach ($request->boxes as $boxIndex => $boxInput) {
                 try {
                     $stripePrice = $stripe->prices->retrieve($boxInput['stripe_price_id'], [
                         'expand' => ['product']
@@ -200,7 +205,7 @@ class AdminOrderController extends Controller
                 $boxSize = $stripePrice->product->metadata->type ?? null;
                 $currency = strtolower($stripePrice->currency);
 
-                $boxEntries[] = [
+                $boxEntry = [
                     'stripe_price_id' => $stripePrice->id,
                     'stripe_product_id' => $stripePrice->product->id,
                     'box_size' => $boxSize,
@@ -208,7 +213,12 @@ class AdminOrderController extends Controller
                     'box_price' => $boxPrice,
                     'currency' => $currency,
                     'quantity' => $quantity,
+                    // Per-box GIA fields (for shipping orders)
+                    'guia_number' => $boxInput['guia_number'] ?? null,
+                    'box_index' => $boxIndex, // Track index for file matching
                 ];
+
+                $boxEntries[] = $boxEntry;
 
                 $lineTotal = $boxPrice * $quantity;
                 $totalBoxPrice += $lineTotal;
@@ -219,26 +229,42 @@ class AdminOrderController extends Controller
             }
 
             // 2. Calculate payment amount (100% for crossing, 50% deposit for shipping)
-            $isCrossing = $order->isCrossingOnly();
             $paymentPercentage = $isCrossing ? 1.0 : 0.5;
             $depositAmount = round($totalBoxPrice * $paymentPercentage, 2);
 
-            // 3. Handle GIA File Upload
-            $uploadedPath = null;
-            if ($request->hasFile('gia_file')) {
-                $file = $request->file('gia_file');
-                $userName = Str::slug($user->name);
-                $storagePath = "users/{$userName}-{$user->id}/orders/{$order->order_number}/shipping";
-                $filename = "gia-" . time() . ".pdf";
+            // 3. Handle per-box GIA File Uploads (for shipping orders)
+            // Each box gets its own GIA file uploaded
+            $giaFiles = $request->file('boxes.*.gia_file', []);
 
-                $uploadedPath = Storage::disk('spaces')->putFileAs($storagePath, $file, $filename, 'public');
-                $url = config('filesystems.disks.spaces.url') . '/' . $uploadedPath;
+            foreach ($boxEntries as &$boxEntry) {
+                $boxIndex = $boxEntry['box_index'];
 
-                $order->gia_path = $uploadedPath;
-                $order->gia_filename = $file->getClientOriginalName();
-                $order->gia_mime_type = $file->getClientMimeType();
-                $order->gia_size = $file->getSize();
-                $order->gia_url = $url;
+                // Check if there's a GIA file for this box
+                if (isset($giaFiles[$boxIndex]) && $giaFiles[$boxIndex]) {
+                    $file = $giaFiles[$boxIndex];
+                    $storagePath = "users/{$userName}-{$user->id}/orders/{$order->order_number}/boxes/{$boxIndex}";
+                    $filename = "gia-" . time() . "-" . $boxIndex . ".pdf";
+
+                    $uploadedPath = Storage::disk('spaces')->putFileAs($storagePath, $file, $filename, 'public');
+                    $url = config('filesystems.disks.spaces.url') . '/' . $uploadedPath;
+
+                    $boxEntry['gia_path'] = $uploadedPath;
+                    $boxEntry['gia_filename'] = $file->getClientOriginalName();
+                    $boxEntry['gia_mime_type'] = $file->getClientMimeType();
+                    $boxEntry['gia_size'] = $file->getSize();
+                    $boxEntry['gia_url'] = $url;
+                }
+            }
+            unset($boxEntry); // Break reference
+
+            // For backwards compatibility, store first box's GIA in order-level fields
+            $firstBoxWithGia = collect($boxEntries)->first(fn($b) => !empty($b['gia_path']));
+            if ($firstBoxWithGia) {
+                $order->gia_path = $firstBoxWithGia['gia_path'];
+                $order->gia_filename = $firstBoxWithGia['gia_filename'];
+                $order->gia_mime_type = $firstBoxWithGia['gia_mime_type'];
+                $order->gia_size = $firstBoxWithGia['gia_size'];
+                $order->gia_url = $firstBoxWithGia['gia_url'];
             }
 
             // 4. Create Stripe Customer if needed
@@ -292,7 +318,7 @@ class AdminOrderController extends Controller
             $stripe->invoices->finalizeInvoice($stripeInvoice->id);
             $sentInvoice = $stripe->invoices->sendInvoice($stripeInvoice->id);
 
-            // 6. Clear any existing boxes and create new OrderBox entries
+            // 6. Clear any existing boxes and create new OrderBox entries with GIA info
             $order->boxes()->delete();
             foreach ($boxEntries as $entry) {
                 OrderBox::create([
@@ -304,6 +330,13 @@ class AdminOrderController extends Controller
                     'box_price' => $entry['box_price'],
                     'currency' => $entry['currency'],
                     'quantity' => $entry['quantity'],
+                    // Per-box GIA fields
+                    'guia_number' => $entry['guia_number'] ?? null,
+                    'gia_path' => $entry['gia_path'] ?? null,
+                    'gia_filename' => $entry['gia_filename'] ?? null,
+                    'gia_mime_type' => $entry['gia_mime_type'] ?? null,
+                    'gia_size' => $entry['gia_size'] ?? null,
+                    'gia_url' => $entry['gia_url'] ?? null,
                 ]);
             }
 
@@ -313,7 +346,8 @@ class AdminOrderController extends Controller
             $primaryBox = $boxEntries[0];
 
             $order->status = Order::STATUS_SHIPPED;
-            $order->guia_number = $request->guia_number;
+            // Use first box's guia_number for order-level backwards compatibility
+            $order->guia_number = $primaryBox['guia_number'] ?? null;
             $order->estimated_delivery_date = $request->estimated_delivery_date;
             $order->shipped_at = now();
 

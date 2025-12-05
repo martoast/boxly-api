@@ -512,6 +512,7 @@ class Order extends Model
 
     public function deleteGia(): void
     {
+        // Delete order-level GIA (legacy/backwards compatibility)
         if ($this->gia_path) {
             \Illuminate\Support\Facades\Storage::disk('spaces')->delete($this->gia_path);
             $this->update([
@@ -522,6 +523,9 @@ class Order extends Model
                 'gia_url' => null,
             ]);
         }
+
+        // Also delete all box-level GIAs
+        $this->deleteAllBoxGias();
     }
 
     public function getFormattedGuiaAttribute(): ?string
@@ -532,5 +536,50 @@ class Order extends Model
             return substr($clean, 0, 2) . ' ' . substr($clean, 2, 4) . ' ' . substr($clean, 6, 4);
         }
         return $this->guia_number;
+    }
+
+    /**
+     * Get all boxes that have GIA files uploaded.
+     */
+    public function getBoxesWithGia()
+    {
+        return $this->boxes()->whereNotNull('gia_path')->get();
+    }
+
+    /**
+     * Delete all GIA files from boxes.
+     */
+    public function deleteAllBoxGias(): void
+    {
+        foreach ($this->boxes as $box) {
+            if ($box->hasGia()) {
+                $box->deleteGia();
+            }
+        }
+    }
+
+    /**
+     * Check if all boxes have GIA files (for shipping orders).
+     */
+    public function allBoxesHaveGia(): bool
+    {
+        if ($this->isCrossingOnly()) {
+            return true; // Crossing orders don't need GIAs
+        }
+
+        $boxes = $this->boxes;
+        if ($boxes->isEmpty()) {
+            return false;
+        }
+
+        return $boxes->every(fn($box) => $box->hasGia());
+    }
+
+    /**
+     * Get count of boxes with GIA files.
+     */
+    public function getBoxesWithGiaCountAttribute(): int
+    {
+        return $this->boxes->filter(fn($box) => $box->hasGia())->count();
     }
 }
