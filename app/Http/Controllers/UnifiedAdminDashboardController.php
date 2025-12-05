@@ -430,9 +430,22 @@ class UnifiedAdminDashboardController extends Controller
                 });
         })->sum('quantity');
 
-        // Service Fee Revenue
-        $serviceFeeUSD = PurchaseRequest::whereBetween('paid_at', [$start, $end])
-            ->whereIn('status', ['paid', 'purchased'])
+        // Service Fee Revenue (processing_fee is our profit from assisted shopping)
+        // Handle both Stripe payments (paid_at set) and manual payments (status=purchased but paid_at null)
+        $serviceFeeUSD = PurchaseRequest::whereIn('status', ['paid', 'purchased'])
+            ->where(function ($query) use ($start, $end) {
+                // Option 1: paid_at is set (Stripe payment)
+                $query->whereBetween('paid_at', [$start, $end])
+                    // Option 2: purchased_at is set (marked as purchased)
+                    ->orWhereBetween('purchased_at', [$start, $end])
+                    // Option 3: Manual payment - status is purchased but no date set, use updated_at
+                    ->orWhere(function ($sub) use ($start, $end) {
+                        $sub->where('status', 'purchased')
+                            ->whereNull('paid_at')
+                            ->whereNull('purchased_at')
+                            ->whereBetween('updated_at', [$start, $end]);
+                    });
+            })
             ->sum('processing_fee');
         $serviceFeeMXN = round($serviceFeeUSD * 18.00, 2);
 
@@ -585,16 +598,40 @@ class UnifiedAdminDashboardController extends Controller
         }
 
         // Period Breakdowns (always calculated from DB)
+        // Helper to get processing fees with fallback dates for manual payments
+        $getPurchaseRequestFees = function ($dateCallback) {
+            return PurchaseRequest::whereIn('status', ['paid', 'purchased'])
+                ->where(function ($query) use ($dateCallback) {
+                    $query->where(function ($q) use ($dateCallback) {
+                        $dateCallback($q, 'paid_at');
+                    })
+                    ->orWhere(function ($q) use ($dateCallback) {
+                        $dateCallback($q, 'purchased_at');
+                    })
+                    ->orWhere(function ($q) use ($dateCallback) {
+                        $q->where('status', 'purchased')
+                            ->whereNull('paid_at')
+                            ->whereNull('purchased_at');
+                        $dateCallback($q, 'updated_at');
+                    });
+                })
+                ->sum('processing_fee') * 18;
+        };
+
         $todayShipping = Order::whereDate('paid_at', today())->sum('amount_paid');
-        $todayFees = PurchaseRequest::whereDate('paid_at', today())->whereIn('status', ['paid', 'purchased'])->sum('processing_fee') * 18;
+        $todayFees = $getPurchaseRequestFees(fn($q, $col) => $q->whereDate($col, today()));
         $todayRevenue = $todayShipping + $todayFees;
 
-        $weekShipping = Order::whereBetween('paid_at', [now()->startOfWeek(), now()->endOfWeek()])->sum('amount_paid');
-        $weekFees = PurchaseRequest::whereBetween('paid_at', [now()->startOfWeek(), now()->endOfWeek()])->whereIn('status', ['paid', 'purchased'])->sum('processing_fee') * 18;
+        $weekStart = now()->startOfWeek();
+        $weekEnd = now()->endOfWeek();
+        $weekShipping = Order::whereBetween('paid_at', [$weekStart, $weekEnd])->sum('amount_paid');
+        $weekFees = $getPurchaseRequestFees(fn($q, $col) => $q->whereBetween($col, [$weekStart, $weekEnd]));
         $weekRevenue = $weekShipping + $weekFees;
 
-        $monthShipping = Order::whereMonth('paid_at', now()->month)->whereYear('paid_at', now()->year)->sum('amount_paid');
-        $monthFees = PurchaseRequest::whereMonth('paid_at', now()->month)->whereYear('paid_at', now()->year)->whereIn('status', ['paid', 'purchased'])->sum('processing_fee') * 18;
+        $currentMonth = now()->month;
+        $currentYear = now()->year;
+        $monthShipping = Order::whereMonth('paid_at', $currentMonth)->whereYear('paid_at', $currentYear)->sum('amount_paid');
+        $monthFees = $getPurchaseRequestFees(fn($q, $col) => $q->whereMonth($col, $currentMonth)->whereYear($col, $currentYear));
         $monthRevenue = $monthShipping + $monthFees;
 
         $totalRevenueAllTime = Order::sum('amount_paid') + (PurchaseRequest::whereIn('status', ['paid', 'purchased'])->sum('processing_fee') * 18);
