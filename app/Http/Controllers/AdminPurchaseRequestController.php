@@ -174,6 +174,7 @@ class AdminPurchaseRequestController extends Controller
         $validated = $request->validate([
             'status' => 'nullable|in:pending_review,quoted,paid,purchased,rejected,cancelled',
             'currency' => 'nullable|in:usd,mxn',
+            'payment_method' => 'nullable|in:stripe,manual_deposit',
             'items_total' => 'nullable|numeric',
             'shipping_cost' => 'nullable|numeric',
             'sales_tax' => 'nullable|numeric',
