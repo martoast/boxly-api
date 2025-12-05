@@ -426,19 +426,10 @@ class UnifiedAdminDashboardController extends Controller
         })->sum('quantity');
 
         // Service Fee Revenue (processing_fee is our profit from assisted shopping)
-        // Handle both Stripe payments (paid_at set) and manual payments (status=purchased but paid_at null)
+        // Use created_at to stay in sync with purchase_requests_count and purchased_items_count
         // Respect currency field: USD fees get converted to MXN, MXN fees stay as-is
         $serviceFeeBaseQuery = PurchaseRequest::whereIn('status', ['paid', 'purchased'])
-            ->where(function ($query) use ($start, $end) {
-                $query->whereBetween('paid_at', [$start, $end])
-                    ->orWhereBetween('purchased_at', [$start, $end])
-                    ->orWhere(function ($sub) use ($start, $end) {
-                        $sub->where('status', 'purchased')
-                            ->whereNull('paid_at')
-                            ->whereNull('purchased_at')
-                            ->whereBetween('updated_at', [$start, $end]);
-                    });
-            });
+            ->whereBetween('created_at', [$start, $end]);
         $serviceFeeUSD = (clone $serviceFeeBaseQuery)->where('currency', 'usd')->sum('processing_fee');
         $serviceFeeMXNDirect = (clone $serviceFeeBaseQuery)->where('currency', 'mxn')->sum('processing_fee');
         $serviceFeeMXN = round(($serviceFeeUSD * 18.00) + $serviceFeeMXNDirect, 2);
@@ -593,24 +584,11 @@ class UnifiedAdminDashboardController extends Controller
         }
 
         // Period Breakdowns (always calculated from DB)
-        // Helper to get processing fees with fallback dates for manual payments
+        // Helper to get processing fees using created_at for consistency
         // Respects currency: USD fees converted to MXN, MXN fees stay as-is
         $getPurchaseRequestFees = function ($dateCallback) {
-            $baseQuery = PurchaseRequest::whereIn('status', ['paid', 'purchased'])
-                ->where(function ($query) use ($dateCallback) {
-                    $query->where(function ($q) use ($dateCallback) {
-                        $dateCallback($q, 'paid_at');
-                    })
-                    ->orWhere(function ($q) use ($dateCallback) {
-                        $dateCallback($q, 'purchased_at');
-                    })
-                    ->orWhere(function ($q) use ($dateCallback) {
-                        $q->where('status', 'purchased')
-                            ->whereNull('paid_at')
-                            ->whereNull('purchased_at');
-                        $dateCallback($q, 'updated_at');
-                    });
-                });
+            $baseQuery = PurchaseRequest::whereIn('status', ['paid', 'purchased']);
+            $dateCallback($baseQuery, 'created_at');
             $usdFees = (clone $baseQuery)->where('currency', 'usd')->sum('processing_fee');
             $mxnFees = (clone $baseQuery)->where('currency', 'mxn')->sum('processing_fee');
             return ($usdFees * 18) + $mxnFees;
