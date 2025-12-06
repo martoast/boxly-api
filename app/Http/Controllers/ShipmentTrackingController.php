@@ -20,13 +20,15 @@ class ShipmentTrackingController extends Controller
 
     /**
      * Track a single package
+     * Use refresh=true to bypass cache and get fresh data from carrier
      */
     public function track(TrackPackageRequest $request): JsonResponse
     {
         $trackingNumber = $request->input('tracking_number');
         $carrier = $request->input('carrier');
+        $refresh = $request->boolean('refresh', false);
 
-        $result = $this->afterShip->trackPackage($trackingNumber, $carrier);
+        $result = $this->afterShip->trackPackage($trackingNumber, $carrier, $refresh);
 
         if (!$result['success']) {
             return response()->json([

@@ -54,8 +54,13 @@ class AfterShipService
     public function createTracking(string $trackingNumber, ?string $slug = null): bool
     {
         try {
-            $payload = ['tracking_number' => $trackingNumber];
-            
+            $payload = [
+                'tracking_number' => $trackingNumber,
+                // Mexico-specific context to help AfterShip with tracking
+                'origin_country_region' => 'MEX',
+                'destination_country_region' => 'MEX',
+            ];
+
             if ($slug) {
                 $payload['slug'] = $slug;
             }
@@ -99,23 +104,29 @@ class AfterShipService
     /**
      * Get tracking information for a single tracking number
      */
-    public function getTracking(string $trackingNumber): array
+    public function getTracking(string $trackingNumber, ?string $slug = 'estafeta'): array
     {
         try {
             $cacheKey = "aftership_tracking_{$trackingNumber}";
-            
+
             if (Cache::has($cacheKey)) {
                 return Cache::get($cacheKey);
             }
 
+            // Use slug-based endpoint for more reliable results
             $response = Http::withHeaders([
                 'as-api-key' => $this->apiKey,
                 'Content-Type' => 'application/json',
-            ])->get("{$this->baseUrl}/trackings", [
-                'tracking_numbers' => $trackingNumber,
-            ]);
+            ])->get("{$this->baseUrl}/trackings/{$slug}/{$trackingNumber}");
 
             if ($response->failed()) {
+                Log::warning('AfterShip get tracking failed', [
+                    'tracking_number' => $trackingNumber,
+                    'slug' => $slug,
+                    'status' => $response->status(),
+                    'response' => $response->json(),
+                ]);
+
                 return [
                     'success' => false,
                     'error' => 'Failed to get tracking information',
@@ -125,7 +136,7 @@ class AfterShipService
 
             $data = $response->json();
 
-            if (empty($data['data']['trackings'])) {
+            if (empty($data['data'])) {
                 return [
                     'success' => false,
                     'error' => 'No tracking information found',
@@ -134,7 +145,7 @@ class AfterShipService
 
             $result = [
                 'success' => true,
-                'data' => $data['data']['trackings'][0],
+                'data' => $data['data'],
                 'meta' => $data['meta'] ?? [],
             ];
 
@@ -154,36 +165,44 @@ class AfterShipService
 
     /**
      * MAIN TRACK METHOD
-     * Uses prediction with auto-detect fallback
+     * Optimized to minimize API calls:
+     * - Cached data: 0 requests (unless refresh=true)
+     * - Already registered: 1 request (GET)
+     * - New tracking: 2-3 requests (GET → POST → GET)
+     *
+     * @param bool $refresh Force fresh data from API (bypasses cache)
      */
-    public function trackPackage(string $trackingNumber, ?string $inputSlug = null): array
+    public function trackPackage(string $trackingNumber, ?string $inputSlug = null, bool $refresh = false): array
     {
-        // 1. Predict slug
-        $predictedSlug = $inputSlug ?? $this->predictSlug($trackingNumber);
+        $slug = $inputSlug ?? $this->predictSlug($trackingNumber);
+        $cacheKey = "aftership_tracking_{$trackingNumber}";
 
-        // 2. Try to create with prediction
-        $creationSuccess = false;
-        if ($predictedSlug) {
-            $creationSuccess = $this->createTracking($trackingNumber, $predictedSlug);
+        // 1. Check cache first (0 API calls) - unless refresh requested
+        if (!$refresh && Cache::has($cacheKey)) {
+            $cached = Cache::get($cacheKey);
+            if ($cached['success'] ?? false) {
+                return $cached;
+            }
         }
 
-        // 3. Fallback: If prediction failed (or was null), try Auto-Detect
-        if (!$creationSuccess) {
-            $this->createTracking($trackingNumber, null);
+        // 2. Clear cache if refreshing
+        if ($refresh) {
+            Cache::forget($cacheKey);
         }
 
-        // 4. Retrieve Data (with retry if newly registered)
-        $result = $this->getTracking($trackingNumber);
+        // 3. Try to GET tracking (1 API call)
+        $result = $this->getTracking($trackingNumber, $slug);
 
-        // 5. If no data found, wait and retry once (AfterShip may need time to fetch from carrier)
-        if (!$result['success'] || empty($result['data'])) {
-            sleep(2);
-            // Clear cache before retry so we get fresh data
-            Cache::forget("aftership_tracking_{$trackingNumber}");
-            $result = $this->getTracking($trackingNumber);
+        if ($result['success'] && !empty($result['data'])) {
+            return $result;
         }
 
-        return $result;
+        // 4. Tracking doesn't exist - create it (1 more API call)
+        $this->createTracking($trackingNumber, $slug);
+
+        // 5. Wait briefly for AfterShip to fetch from carrier, then get data
+        sleep(2);
+        return $this->getTracking($trackingNumber, $slug);
     }
 
     /**
