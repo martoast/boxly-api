@@ -103,6 +103,7 @@ class AfterShipService
 
     /**
      * Get tracking information for a single tracking number
+     * Uses the list endpoint with tracking_numbers filter (works in API v2025-07)
      */
     public function getTracking(string $trackingNumber, ?string $slug = 'estafeta'): array
     {
@@ -113,16 +114,17 @@ class AfterShipService
                 return Cache::get($cacheKey);
             }
 
-            // Use slug-based endpoint for more reliable results
+            // Use list endpoint with tracking_numbers filter (slug/{number} doesn't work in v2025-07)
             $response = Http::withHeaders([
                 'as-api-key' => $this->apiKey,
                 'Content-Type' => 'application/json',
-            ])->get("{$this->baseUrl}/trackings/{$slug}/{$trackingNumber}");
+            ])->get("{$this->baseUrl}/trackings", [
+                'tracking_numbers' => $trackingNumber,
+            ]);
 
             if ($response->failed()) {
                 Log::warning('AfterShip get tracking failed', [
                     'tracking_number' => $trackingNumber,
-                    'slug' => $slug,
                     'status' => $response->status(),
                     'response' => $response->json(),
                 ]);
@@ -136,7 +138,8 @@ class AfterShipService
 
             $data = $response->json();
 
-            if (empty($data['data'])) {
+            // Response format: { data: { trackings: [...] } }
+            if (empty($data['data']['trackings'])) {
                 return [
                     'success' => false,
                     'error' => 'No tracking information found',
@@ -145,7 +148,7 @@ class AfterShipService
 
             $result = [
                 'success' => true,
-                'data' => $data['data'],
+                'data' => $data['data']['trackings'][0],
                 'meta' => $data['meta'] ?? [],
             ];
 
