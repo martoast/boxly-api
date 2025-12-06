@@ -43,7 +43,8 @@ class AfterShipService
             return 'estafeta';
         }
 
-        return null;
+        // Default to estafeta since we ship with them 99% of the time
+        return 'estafeta';
     }
 
     /**
