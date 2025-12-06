@@ -22,6 +22,7 @@ use App\Http\Controllers\UnifiedAdminDashboardController;
 use App\Http\Controllers\ShipmentTrackingController;
 use App\Http\Controllers\PurchaseRequestController;
 use App\Http\Controllers\AdminPurchaseRequestController;
+use App\Http\Controllers\AdminOrderBoxController;
 
 /*
 |--------------------------------------------------------------------------
@@ -244,6 +245,11 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/{expense}', [AdminBusinessExpenseController::class, 'show']);
             Route::put('/{expense}', [AdminBusinessExpenseController::class, 'update']);
             Route::delete('/{expense}', [AdminBusinessExpenseController::class, 'destroy']);
+        });
+
+        Route::prefix('boxes')->group(function () {
+            Route::get('/', [AdminOrderBoxController::class, 'index']);
+            Route::get('/{box}', [AdminOrderBoxController::class, 'show']);
         });
     });
 });

@@ -172,8 +172,18 @@ class AfterShipService
             $this->createTracking($trackingNumber, null);
         }
 
-        // 4. Retrieve Data
-        return $this->getTracking($trackingNumber);
+        // 4. Retrieve Data (with retry if newly registered)
+        $result = $this->getTracking($trackingNumber);
+
+        // 5. If no data found, wait and retry once (AfterShip may need time to fetch from carrier)
+        if (!$result['success'] || empty($result['data'])) {
+            sleep(2);
+            // Clear cache before retry so we get fresh data
+            Cache::forget("aftership_tracking_{$trackingNumber}");
+            $result = $this->getTracking($trackingNumber);
+        }
+
+        return $result;
     }
 
     /**
