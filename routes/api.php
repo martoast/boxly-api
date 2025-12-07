@@ -71,7 +71,6 @@ Route::get('/track', [TrackingController::class, 'form']);
 
 Route::prefix('shipment-tracking')->group(function () {
     Route::post('/track', [ShipmentTrackingController::class, 'track']);
-    Route::post('/track/bulk', [ShipmentTrackingController::class, 'trackBulk']);
     Route::get('/carriers', [ShipmentTrackingController::class, 'carriers']);
     Route::get('/carriers/search', [ShipmentTrackingController::class, 'searchCarrier']);
 });
