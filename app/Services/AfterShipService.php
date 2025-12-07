@@ -19,20 +19,48 @@ class AfterShipService
     /**
      * Track a package - simple flow:
      * 1. Try to get existing tracking
-     * 2. If not found, create it and return the response
+     * 2. If carrier mismatch, delete and recreate
+     * 3. If not found, create it
      */
     public function trackPackage(string $trackingNumber, ?string $slug = null): array
     {
-        $slug = $slug ?? 'estafeta'; // Default to estafeta for Mexico
+        $slug = $slug ?? 'estafeta'; // Default to estafeta
 
         // 1. Try to get existing tracking
         $existing = $this->getTracking($trackingNumber);
+
         if ($existing['success']) {
-            return $existing;
+            $existingSlug = $existing['data']['slug'] ?? null;
+
+            // If carrier matches, return existing
+            if ($existingSlug === $slug) {
+                return $existing;
+            }
+
+            // Carrier mismatch - delete and recreate
+            $this->deleteTracking($existing['data']['id']);
         }
 
-        // 2. Not found - create new tracking (response includes tracking data)
+        // 2. Create new tracking with correct carrier
         return $this->createTracking($trackingNumber, $slug);
+    }
+
+    /**
+     * Delete a tracking by ID
+     */
+    public function deleteTracking(string $trackingId): bool
+    {
+        try {
+            $response = Http::withHeaders([
+                'as-api-key' => $this->apiKey,
+                'Content-Type' => 'application/json',
+            ])->delete("{$this->baseUrl}/trackings/{$trackingId}");
+
+            return $response->successful();
+        } catch (\Exception $e) {
+            Log::error('AfterShip delete exception', ['error' => $e->getMessage()]);
+            return false;
+        }
     }
 
     /**
@@ -48,8 +76,6 @@ class AfterShipService
             ])->post("{$this->baseUrl}/trackings", [
                 'tracking_number' => $trackingNumber,
                 'slug' => $slug,
-                'origin_country_region' => 'MEX',
-                'destination_country_region' => 'MEX',
             ]);
 
             $data = $response->json();
