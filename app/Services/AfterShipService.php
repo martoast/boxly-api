@@ -104,17 +104,11 @@ class AfterShipService
     /**
      * Get tracking information for a single tracking number
      * Uses the list endpoint with tracking_numbers filter (works in API v2025-07)
+     * Always fetches fresh data from API (no caching)
      */
     public function getTracking(string $trackingNumber, ?string $slug = 'estafeta'): array
     {
         try {
-            $cacheKey = "aftership_tracking_{$trackingNumber}";
-
-            if (Cache::has($cacheKey)) {
-                return Cache::get($cacheKey);
-            }
-
-            // Use list endpoint with tracking_numbers filter (slug/{number} doesn't work in v2025-07)
             $response = Http::withHeaders([
                 'as-api-key' => $this->apiKey,
                 'Content-Type' => 'application/json',
@@ -138,7 +132,6 @@ class AfterShipService
 
             $data = $response->json();
 
-            // Response format: { data: { trackings: [...] } }
             if (empty($data['data']['trackings'])) {
                 return [
                     'success' => false,
@@ -146,16 +139,11 @@ class AfterShipService
                 ];
             }
 
-            $result = [
+            return [
                 'success' => true,
                 'data' => $data['data']['trackings'][0],
                 'meta' => $data['meta'] ?? [],
             ];
-
-            // Cache for 15 minutes
-            Cache::put($cacheKey, $result, now()->addMinutes(15));
-
-            return $result;
 
         } catch (\Exception $e) {
             Log::error('AfterShip get tracking exception', ['error' => $e->getMessage()]);
@@ -168,42 +156,25 @@ class AfterShipService
 
     /**
      * MAIN TRACK METHOD
-     * Optimized to minimize API calls:
-     * - Cached data: 0 requests (unless refresh=true)
+     * Always fetches fresh data from AfterShip API
      * - Already registered: 1 request (GET)
-     * - New tracking: 2-3 requests (GET → POST → GET)
-     *
-     * @param bool $refresh Force fresh data from API (bypasses cache)
+     * - New tracking: 3 requests (GET → POST → GET)
      */
-    public function trackPackage(string $trackingNumber, ?string $inputSlug = null, bool $refresh = false): array
+    public function trackPackage(string $trackingNumber, ?string $inputSlug = null): array
     {
         $slug = $inputSlug ?? $this->predictSlug($trackingNumber);
-        $cacheKey = "aftership_tracking_{$trackingNumber}";
 
-        // 1. Check cache first (0 API calls) - unless refresh requested
-        if (!$refresh && Cache::has($cacheKey)) {
-            $cached = Cache::get($cacheKey);
-            if ($cached['success'] ?? false) {
-                return $cached;
-            }
-        }
-
-        // 2. Clear cache if refreshing
-        if ($refresh) {
-            Cache::forget($cacheKey);
-        }
-
-        // 3. Try to GET tracking (1 API call)
+        // 1. Try to GET tracking (1 API call)
         $result = $this->getTracking($trackingNumber, $slug);
 
         if ($result['success'] && !empty($result['data'])) {
             return $result;
         }
 
-        // 4. Tracking doesn't exist - create it (1 more API call)
+        // 2. Tracking doesn't exist - create it (1 more API call)
         $this->createTracking($trackingNumber, $slug);
 
-        // 5. Wait briefly for AfterShip to fetch from carrier, then get data
+        // 3. Wait briefly for AfterShip to fetch from carrier, then get data
         sleep(2);
         return $this->getTracking($trackingNumber, $slug);
     }
