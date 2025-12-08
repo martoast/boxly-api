@@ -17,31 +17,20 @@ class AfterShipService
     }
 
     /**
-     * Track a package - simple flow:
-     * 1. Try to get existing tracking
-     * 2. If carrier mismatch, delete and recreate
-     * 3. If not found, create it
+     * Track a package - always creates fresh tracking
+     * Deletes existing tracking first to ensure clean data
      */
     public function trackPackage(string $trackingNumber, ?string $slug = null): array
     {
         $slug = $slug ?? 'estafeta'; // Default to estafeta
 
-        // 1. Try to get existing tracking
+        // Delete any existing tracking to ensure fresh data
         $existing = $this->getTracking($trackingNumber);
-
-        if ($existing['success']) {
-            $existingSlug = $existing['data']['slug'] ?? null;
-
-            // If carrier matches, return existing
-            if ($existingSlug === $slug) {
-                return $existing;
-            }
-
-            // Carrier mismatch - delete and recreate
+        if ($existing['success'] && !empty($existing['data']['id'])) {
             $this->deleteTracking($existing['data']['id']);
         }
 
-        // 2. Create new tracking with correct carrier
+        // Create fresh tracking
         return $this->createTracking($trackingNumber, $slug);
     }
 
