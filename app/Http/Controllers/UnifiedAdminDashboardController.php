@@ -304,7 +304,7 @@ class UnifiedAdminDashboardController extends Controller
                 ->whereMonth('created_at', now()->month)
                 ->whereYear('created_at', now()->year)
                 ->count(),
-            'total_orders' => Order::whereBetween('created_at', [$start, $end])->count(),
+            'total_orders' => Order::whereNotNull('paid_at')->whereBetween('paid_at', [$start, $end])->count(),
             'active_orders' => Order::whereBetween('created_at', [$start, $end])
                 ->whereIn('status', [
                     Order::STATUS_COLLECTING,
@@ -558,7 +558,7 @@ class UnifiedAdminDashboardController extends Controller
         // Determine which revenue and expenses to use
         $revenueToUse = $isFinancialManual ? $manualMetric->total_revenue : $calculatedTotalRevenue;
         $expensesToUse = $isFinancialManual ? $manualMetric->total_expenses : $calculatedTotalExpenses;
-        $ordersToUse = $isOrdersManual ? $manualMetric->total_orders : Order::whereBetween('created_at', [$start, $end])->count();
+        $ordersToUse = $isOrdersManual ? $manualMetric->total_orders : Order::whereNotNull('paid_at')->whereBetween('paid_at', [$start, $end])->count();
 
         // Conversations always come from manual metric if it exists
         $conversations = $manualMetric ? $manualMetric->total_conversations : 0;
@@ -645,7 +645,7 @@ class UnifiedAdminDashboardController extends Controller
             'metrics' => [
                 'total_orders' => $ordersToUse,
                 'total_orders_is_manual' => $isOrdersManual,
-                'total_orders_calculated' => Order::whereBetween('created_at', [$start, $end])->count(),
+                'total_orders_calculated' => Order::whereNotNull('paid_at')->whereBetween('paid_at', [$start, $end])->count(),
                 'new_customers' => $newCustomers,
                 'total_conversations' => $conversations,
                 'cac' => $cac,
@@ -748,10 +748,11 @@ class UnifiedAdminDashboardController extends Controller
         ];
 
         $ordersWithNewBoxes = OrderBox::whereHas('order', function ($q) use ($start, $end) {
-            $q->whereBetween('created_at', [$start, $end]);
+            $q->whereNotNull('paid_at')->whereBetween('paid_at', [$start, $end]);
         })->distinct('order_id')->pluck('order_id');
 
-        $notSelected = Order::whereBetween('created_at', [$start, $end])
+        $notSelected = Order::whereNotNull('paid_at')
+            ->whereBetween('paid_at', [$start, $end])
             ->whereNull('box_size')
             ->whereNotIn('id', $ordersWithNewBoxes)
             ->count();
@@ -802,7 +803,7 @@ class UnifiedAdminDashboardController extends Controller
 
         if ($start && $end) {
             $query->whereHas('order', function ($q) use ($start, $end) {
-                $q->whereBetween('created_at', [$start, $end]);
+                $q->whereNotNull('paid_at')->whereBetween('paid_at', [$start, $end]);
             });
         }
 
@@ -833,7 +834,7 @@ class UnifiedAdminDashboardController extends Controller
             ->whereNotIn('id', $ordersWithNewBoxes);
 
         if ($start && $end) {
-            $query->whereBetween('created_at', [$start, $end]);
+            $query->whereNotNull('paid_at')->whereBetween('paid_at', [$start, $end]);
         }
 
         $counts = $query->select('box_size', DB::raw('COUNT(*) as total'))

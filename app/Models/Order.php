@@ -64,6 +64,9 @@ class Order extends Model
         'deposit_paid_at', // New
         'deposit_invoice_id', // New
         'deposit_payment_link', // New
+        'consolidation_invoice_id',
+        'consolidation_payment_link',
+        'consolidation_paid_at',
     ];
 
     protected $casts = [
@@ -84,6 +87,7 @@ class Order extends Model
         'deposit_amount' => 'decimal:2',
         'paid_at' => 'datetime',
         'deposit_paid_at' => 'datetime',
+        'consolidation_paid_at' => 'datetime',
         'estimated_delivery_date' => 'date',
         'actual_delivery_date' => 'date',
         'completed_at' => 'datetime',
@@ -129,6 +133,22 @@ class Order extends Model
             }
 
             if ($order->isDirty('status') && isset($order->previousStatus)) {
+                // Skip email for PACKAGES_COMPLETE - the consolidation step sends its own email with invoice
+                if ($order->status === self::STATUS_PACKAGES_COMPLETE) {
+                    Log::info('Skipping packages_complete email - consolidation will send invoice email', [
+                        'order_id' => $order->id,
+                    ]);
+                    return;
+                }
+
+                // Skip email for PAID - PaymentReceived email is sent separately
+                if ($order->status === self::STATUS_PAID) {
+                    Log::info('Skipping paid status email - PaymentReceived email handles this', [
+                        'order_id' => $order->id,
+                    ]);
+                    return;
+                }
+
                 $order->load('user', 'items');
 
                 Log::info('Order status changed', [
@@ -155,11 +175,11 @@ class Order extends Model
             self::STATUS_COLLECTING => 'Collecting Items',
             self::STATUS_AWAITING_PACKAGES => 'Awaiting Packages',
             self::STATUS_PACKAGES_COMPLETE => 'Packages Complete',
-            self::STATUS_PROCESSING => 'Processing',
+            self::STATUS_AWAITING_PAYMENT => 'Awaiting Payment',
+            self::STATUS_PAID => 'Paid',
+            self::STATUS_PROCESSING => 'Processing (Legacy)',
             self::STATUS_SHIPPED => 'Shipped',
             self::STATUS_DELIVERED => 'Delivered',
-            self::STATUS_AWAITING_PAYMENT => 'Awaiting Final Payment',
-            self::STATUS_PAID => 'Paid',
             self::STATUS_CANCELLED => 'Cancelled',
         ];
     }
@@ -316,6 +336,16 @@ class Order extends Model
     public function isDepositPaid(): bool
     {
         return !is_null($this->deposit_paid_at);
+    }
+
+    public function isConsolidationPaid(): bool
+    {
+        // In the new flow, we use paid_at instead of consolidation_paid_at
+        return !is_null($this->paid_at) || in_array($this->status, [
+            self::STATUS_PAID,
+            self::STATUS_SHIPPED,
+            self::STATUS_DELIVERED,
+        ]);
     }
 
     /**
@@ -582,4 +612,5 @@ class Order extends Model
     {
         return $this->boxes->filter(fn($box) => $box->hasGia())->count();
     }
+
 }

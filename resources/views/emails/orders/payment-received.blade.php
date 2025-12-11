@@ -76,7 +76,32 @@
         </table>
     </div>
 
-    @if($isCrossingOnly)
+    @if($isConsolidationPayment ?? false)
+        {{-- CONSOLIDATION PAYMENT: Processing begins --}}
+        <div style="background-color: #d4edda; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #28a745;">
+            <p style="margin: 0; font-size: 16px;">
+                @if($locale === 'es')
+                    🚀 <strong>¡Tu orden ahora está siendo procesada!</strong> Prepararemos tu paquete y te enviaremos la información de rastreo una vez que sea enviado.
+                @else
+                    🚀 <strong>Your order is now being processed!</strong> We'll prepare your package and send you tracking information once it ships.
+                @endif
+            </p>
+        </div>
+
+        <h3>{{ $locale === 'es' ? 'Próximos Pasos' : 'Next Steps' }}</h3>
+        <ol>
+            @if($locale === 'es')
+                <li>Estamos preparando tu paquete para envío</li>
+                <li>Recibirás un correo con tu número de guía cuando sea enviado</li>
+                <li>Podrás rastrear tu paquete hasta que llegue a tu puerta</li>
+            @else
+                <li>We're preparing your package for shipping</li>
+                <li>You'll receive an email with your tracking number when it ships</li>
+                <li>You'll be able to track your package until it arrives at your door</li>
+            @endif
+        </ol>
+
+    @elseif($isCrossingOnly)
         {{-- CROSSING ORDER: Pickup Instructions --}}
         <h3>{{ $locale === 'es' ? 'Información de Recogida' : 'Pickup Information' }}</h3>
 
@@ -122,7 +147,7 @@
         </ol>
 
     @else
-        {{-- SHIPPING ORDER: Delivery Information --}}
+        {{-- SHIPPING ORDER: Delivery Information (for legacy final payment) --}}
         <h3>{{ $locale === 'es' ? 'Información de Entrega' : 'Delivery Information' }}</h3>
 
         @if($order->guia_number)

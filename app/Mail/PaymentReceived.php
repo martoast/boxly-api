@@ -10,7 +10,6 @@ use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
 use Illuminate\Mail\Mailables\Address;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Carbon;
 
 class PaymentReceived extends Mailable implements ShouldQueue
 {
@@ -74,6 +73,9 @@ class PaymentReceived extends Mailable implements ShouldQueue
     {
         $isCrossingOnly = $this->order->isCrossingOnly();
 
+        // All orders now go through consolidation payment - if status is PAID, payment was just received
+        $isConsolidationPayment = $this->order->status === Order::STATUS_PAID;
+
         return new Content(
             view: 'emails.orders.payment-received',
             with: [
@@ -82,7 +84,7 @@ class PaymentReceived extends Mailable implements ShouldQueue
                 'locale' => $this->order->user->preferred_language ?? 'es',
                 'amountPaid' => $this->order->amount_paid,
                 'currency' => strtoupper($this->order->currency ?? 'mxn'),
-                'paidAt' => $this->order->paid_at ? Carbon::parse($this->order->paid_at) : now(),
+                'paidAt' => $this->order->paid_at ?? now(),
                 'stripeInvoiceId' => $this->order->stripe_invoice_id,
                 'deliveryAddress' => $this->formatDeliveryAddress(),
                 'itemCount' => $this->order->items()->count(),
@@ -93,6 +95,7 @@ class PaymentReceived extends Mailable implements ShouldQueue
                 'supportPhone' => '+52 (664) 123-4567',
                 'isCrossingOnly' => $isCrossingOnly,
                 'pickupLocation' => $isCrossingOnly ? $this->getPickupLocation() : null,
+                'isConsolidationPayment' => $isConsolidationPayment,
             ]
         );
     }
@@ -124,25 +127,6 @@ class PaymentReceived extends Mailable implements ShouldQueue
         ];
     }
 
-    /**
-     * Get the metadata that should be assigned to the message.
-     *
-     * @return array<string, string>
-     */
-    public function metadata(): array
-    {
-        return [
-            'order_id' => (string) $this->order->id,
-            'order_number' => $this->order->order_number,
-            'user_id' => (string) $this->order->user_id,
-            'user_email' => $this->order->user->email,
-            'amount_paid' => (string) $this->order->amount_paid,
-            'currency' => $this->order->currency ?? 'mxn',
-            'stripe_invoice_id' => $this->order->stripe_invoice_id ?? '',
-            'stripe_payment_intent_id' => $this->order->stripe_payment_intent_id ?? '',
-            'paid_at' => $this->order->paid_at ? $this->order->paid_at->toIso8601String() : now()->toIso8601String(),
-        ];
-    }
 
     /**
      * Format the delivery address for display
@@ -234,8 +218,9 @@ class PaymentReceived extends Mailable implements ShouldQueue
      */
     public function shouldSend(): bool
     {
-        // Only send if order is actually paid
-        return $this->order->isPaid() &&
+        // In the new flow, PAID = payment received, ready to ship
+        // DELIVERED is the final status
+        return $this->order->status === Order::STATUS_PAID &&
                !empty($this->order->amount_paid) &&
                $this->order->amount_paid > 0;
     }

@@ -49,4 +49,10 @@ return [
         'usd_to_mxn' => env('EXCHANGE_RATE_USD_TO_MXN', 18.00),
     ],
 
+    'nu_bank' => [
+        'beneficiary_name' => env('NU_BENEFICIARY_NAME'),
+        'bank_name' => env('NU_BANK_NAME'),
+        'account_number' => env('NU_ACCOUNT_NUMBER'),
+    ],
+
 ];

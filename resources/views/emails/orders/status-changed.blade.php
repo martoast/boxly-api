@@ -256,25 +256,19 @@ app()->setLocale($locale);
     @break
 
     @case('paid')
+        {{-- Legacy status - new orders use DELIVERED as final status --}}
         <p>
             @if($locale === 'es')
-                ¡Gracias por tu pago!
+                Tu orden {{ $order->tracking_number }} está completa.
             @else
-                Thank you for your payment!
+                Your order {{ $order->tracking_number }} is complete.
             @endif
         </p>
         <p>
             @if($locale === 'es')
-                Tu orden {{ $order->tracking_number }} está completamente pagada y finalizada.
+                ¡Gracias por confiar en Boxly! Esperamos verte pronto.
             @else
-                Your order {{ $order->tracking_number }} is fully paid and complete.
-            @endif
-        </p>
-        <p>
-            @if($locale === 'es')
-                Agradecemos tu confianza en Boxly. ¡Esperamos verte pronto!
-            @else
-                We appreciate you trusting Boxly. We hope to see you again soon!
+                Thank you for trusting Boxly! We hope to see you again soon.
             @endif
         </p>
     @break
@@ -350,31 +344,42 @@ app()->setLocale($locale);
             {{-- SHIPPING ORDER SHIPPED --}}
             <p>
                 @if($locale === 'es')
-                    Tu orden {{ $order->tracking_number }} ha sido enviada.
+                    ¡Tu orden {{ $order->tracking_number }} ha sido enviada! 🚚
                 @else
-                    Your order {{ $order->tracking_number }} has been shipped.
+                    Your order {{ $order->tracking_number }} has been shipped! 🚚
                 @endif
             </p>
             @if($order->guia_number)
-            <p>
-                @if($locale === 'es')
-                    Número de guía: {{ $order->guia_number }}
-                    @if($order->estimated_delivery_date)
-                        <br>Fecha estimada de entrega: {{ $order->estimated_delivery_date->format('d/m/Y') }}
+            <div style="background-color: #e8f4f8; border-radius: 8px; padding: 15px; margin: 20px 0; border-left: 4px solid #2E6BB7;">
+                <p style="margin: 0;">
+                    @if($locale === 'es')
+                        <strong>Número de guía:</strong> <span style="font-family: monospace;">{{ $order->guia_number }}</span>
+                        @if($order->estimated_delivery_date)
+                            <br><strong>Fecha estimada de entrega:</strong> {{ $order->estimated_delivery_date->format('d/m/Y') }}
+                        @endif
+                    @else
+                        <strong>Tracking number:</strong> <span style="font-family: monospace;">{{ $order->guia_number }}</span>
+                        @if($order->estimated_delivery_date)
+                            <br><strong>Estimated delivery:</strong> {{ $order->estimated_delivery_date->format('m/d/Y') }}
+                        @endif
                     @endif
-                @else
-                    Waybill number: {{ $order->guia_number }}
-                    @if($order->estimated_delivery_date)
-                        <br>Estimated delivery date: {{ $order->estimated_delivery_date->format('m/d/Y') }}
+                </p>
+            </div>
+            <div style="text-align: center; margin: 20px 0;">
+                <a href="https://www.estafeta.com/rastrear-envio" target="_blank" style="background-color: #2E6BB7; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; font-weight: bold; display: inline-block;">
+                    @if($locale === 'es')
+                        Rastrear en Estafeta
+                    @else
+                        Track on Estafeta
                     @endif
-                @endif
-            </p>
+                </a>
+            </div>
             @endif
             <p>
                 @if($locale === 'es')
-                    Una vez que tu paquete sea entregado, te enviaremos la factura final.
+                    Te notificaremos cuando tu paquete haya sido entregado.
                 @else
-                    Once your package is delivered, we will send you the final invoice.
+                    We'll notify you when your package has been delivered.
                 @endif
             </p>
         @endif
@@ -397,11 +402,29 @@ app()->setLocale($locale);
         </p>
         <p>
             @if($locale === 'es')
-                En breve, recibirás un correo electrónico con la factura final y el enlace para realizar tu pago.
+                ¡Gracias por confiar en Boxly! Esperamos que hayas tenido una excelente experiencia.
             @else
-                Shortly, you will receive an email with the final invoice and a link to make your payment.
+                Thank you for trusting Boxly! We hope you had a great experience.
             @endif
         </p>
+
+        {{-- Trustpilot Review Request --}}
+        <div style="background-color: #f0f9ff; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #00b67a; text-align: center;">
+            <p style="margin: 0 0 15px 0;">
+                @if($locale === 'es')
+                    ⭐ ¿Te gustó nuestro servicio? ¡Tu opinión nos ayuda a mejorar!
+                @else
+                    ⭐ Did you enjoy our service? Your feedback helps us improve!
+                @endif
+            </p>
+            <a href="https://www.trustpilot.com/evaluate/boxly.mx" style="background-color: #00b67a; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; font-weight: bold; display: inline-block;">
+                @if($locale === 'es')
+                    Dejar una Reseña
+                @else
+                    Leave a Review
+                @endif
+            </a>
+        </div>
     @break
 
     @case('cancelled')

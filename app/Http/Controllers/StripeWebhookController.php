@@ -47,7 +47,42 @@ class StripeWebhookController extends Controller
 
         $type = $metadata['type'] ?? null;
 
-        // 1. Handle Deposit Payment (First 50%) - supports multiple boxes
+        // 1. Handle Box Payment (100% at consolidation) - NEW FLOW
+        if ($type === 'box_payment' && isset($metadata['order_id'])) {
+            $order = Order::find($metadata['order_id']);
+            if ($order) {
+                $newAmount = $invoice->amount_paid / 100;
+                $boxCount = $metadata['box_count'] ?? 1;
+
+                $order->update([
+                    'paid_at' => now(),
+                    'amount_paid' => ($order->amount_paid ?? 0) + $newAmount,
+                    'status' => Order::STATUS_PAID, // Payment received, ready to ship
+                ]);
+
+                // Refresh order to get updated values for the email
+                $order->refresh();
+
+                Log::info('Order box payment received', [
+                    'order_id' => $order->id,
+                    'amount' => $newAmount,
+                    'box_count' => $boxCount,
+                    'total_box_price' => $metadata['total_box_price'] ?? null,
+                    'status' => $order->status,
+                ]);
+
+                // Send payment confirmation email
+                try {
+                    Mail::to($order->user)->queue(new PaymentReceived($order));
+                    Log::info('Payment received email queued', ['order_id' => $order->id]);
+                } catch (\Exception $e) {
+                    Log::error('Failed to queue box payment email', ['error' => $e->getMessage()]);
+                }
+            }
+            return;
+        }
+
+        // 2. Handle Deposit Payment (First 50%) - LEGACY supports multiple boxes
         if ($type === 'deposit' && isset($metadata['order_id'])) {
             $order = Order::find($metadata['order_id']);
             if ($order) {
@@ -76,13 +111,13 @@ class StripeWebhookController extends Controller
             return;
         }
 
-        // 2. Handle Final Order Payment (Remaining 50% + Extras) OR Full Payment (Crossing Orders)
+        // 3. Handle Final Order Payment (Remaining 50% + Extras) OR Full Payment (Crossing Orders) - LEGACY
         if (($type === 'final_invoice' || $type === 'order_invoice' || $type === 'full_payment') && isset($metadata['order_id'])) {
             $this->handleOrderPaid($invoice, $metadata);
             return;
         }
 
-        // 3. Handle Purchase Request
+        // 4. Handle Purchase Request
         if (isset($metadata['purchase_request_id']) && $type === 'purchase_request_invoice') {
             $this->handlePurchaseRequestPaid($invoice, $metadata);
             return;
@@ -120,16 +155,21 @@ class StripeWebhookController extends Controller
                 'stripe_payment_intent_id' => $invoice->payment_intent
             ]);
 
+            // Refresh order to get updated values for the email
+            $order->refresh();
+
             Log::info('Order fully paid', [
                 'order_id' => $order->id,
                 'amount' => $newAmount,
-                'total_amount_paid' => $order->fresh()->amount_paid,
+                'total_amount_paid' => $order->amount_paid,
                 'box_count' => $boxCount,
                 'total_box_price' => $metadata['total_box_price'] ?? null,
                 'order_type' => $order->order_type ?? 'shipping',
+                'status' => $order->status,
             ]);
 
-            Mail::to($order->user)->send(new PaymentReceived($order));
+            Mail::to($order->user)->queue(new PaymentReceived($order));
+            Log::info('Payment received email queued', ['order_id' => $order->id]);
 
         } catch (\Exception $e) {
             Log::error('Order paid handling failed', [

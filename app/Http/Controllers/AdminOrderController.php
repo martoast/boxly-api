@@ -2,12 +2,12 @@
 namespace App\Http\Controllers;
 
 use App\Http\Requests\AdminUpdateOrderStatusRequest;
-use App\Http\Requests\AdminShipOrderRequest;
 use App\Models\Order;
 use App\Models\OrderBox;
 use App\Models\OrderItem;
 use App\Models\User;
-use App\Mail\OrderShippedWithDeposit;
+use App\Mail\OrderShipped;
+use App\Mail\OrderConsolidatedInvoice;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -23,6 +23,8 @@ class AdminOrderController extends Controller
         $request->validate([
             'per_page' => 'nullable|integer|min:1|max:500',
             'limit' => 'nullable|integer|min:1|max:500',
+            'from_date' => 'nullable|date',
+            'to_date' => 'nullable|date',
         ]);
 
         $perPage = $request->input('per_page') ?? $request->input('limit') ?? 20;
@@ -57,6 +59,14 @@ class AdminOrderController extends Controller
             });
         }
 
+        // Filter by date range
+        if ($request->has('from_date')) {
+            $query->whereDate('created_at', '>=', $request->from_date);
+        }
+        if ($request->has('to_date')) {
+            $query->whereDate('created_at', '<=', $request->to_date);
+        }
+
         $total = $query->count();
         $orders = $query->latest()->paginate($perPage);
 
@@ -79,8 +89,8 @@ class AdminOrderController extends Controller
     {
         $perPage = $request->input('per_page') ?? 20;
         $query = Order::with(['user', 'items', 'boxes'])
-            ->status(Order::STATUS_PROCESSING)
-            ->oldest('processing_started_at');
+            ->status(Order::STATUS_PAID)
+            ->oldest('paid_at');
 
         return response()->json([
             'success' => true,
@@ -103,8 +113,256 @@ class AdminOrderController extends Controller
         ]);
     }
 
+    /**
+     * Consolidate order: Select boxes and create invoice for 100% payment.
+     * This happens when all items have arrived, BEFORE shipping.
+     *
+     * Request contains:
+     * - boxes: array of [{stripe_price_id, quantity}] for each box type
+     * - payment_method: 'stripe' (default) or 'manual_transfer'
+     *
+     * NO GIA files at this step - those come at shipping time.
+     */
+    public function consolidateOrder(Request $request, Order $order)
+    {
+        $request->validate([
+            'boxes' => 'required|array|min:1',
+            'boxes.*.stripe_price_id' => 'required|string',
+            'boxes.*.quantity' => 'nullable|integer|min:1',
+            'payment_method' => 'nullable|in:stripe,manual_transfer',
+        ]);
+
+        $paymentMethod = $request->payment_method ?? 'stripe';
+
+        if ($order->status !== Order::STATUS_PACKAGES_COMPLETE) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Order must be in packages_complete status to consolidate'
+            ], 400);
+        }
+
+        DB::beginTransaction();
+
+        try {
+            $user = $order->user;
+            $stripe = Cashier::stripe();
+
+            // 1. Fetch all box details from Stripe and calculate totals
+            $boxEntries = [];
+            $totalBoxPrice = 0;
+            $currency = 'mxn';
+
+            foreach ($request->boxes as $boxInput) {
+                try {
+                    $stripePrice = $stripe->prices->retrieve($boxInput['stripe_price_id'], [
+                        'expand' => ['product']
+                    ]);
+                } catch (\Exception $e) {
+                    DB::rollBack();
+                    return response()->json([
+                        'success' => false,
+                        'message' => "Invalid Stripe Price ID: {$boxInput['stripe_price_id']}"
+                    ], 422);
+                }
+
+                $quantity = $boxInput['quantity'] ?? 1;
+                $boxPrice = $stripePrice->unit_amount / 100;
+                $boxName = $stripePrice->product->name;
+                $boxSize = $stripePrice->product->metadata->type ?? null;
+                $currency = strtolower($stripePrice->currency);
+
+                $boxEntries[] = [
+                    'stripe_price_id' => $stripePrice->id,
+                    'stripe_product_id' => $stripePrice->product->id,
+                    'box_size' => $boxSize,
+                    'box_name' => $boxName,
+                    'box_price' => $boxPrice,
+                    'currency' => $currency,
+                    'quantity' => $quantity,
+                ];
+
+                $totalBoxPrice += ($boxPrice * $quantity);
+            }
+
+            $boxCount = count($boxEntries);
+            $stripeInvoiceId = null;
+            $paymentLink = null;
+
+            // 2. Create Stripe Invoice OR skip for manual transfer
+            if ($paymentMethod === 'stripe') {
+                // Create Stripe Customer if needed
+                if (!$user->stripe_id) {
+                    $user->createAsStripeCustomer();
+                }
+
+                $invoiceDescription = $boxCount > 1
+                    ? "Box Payment for Order {$order->order_number} - {$boxCount} boxes"
+                    : "Box Payment for Order {$order->order_number}";
+
+                $stripeInvoice = $stripe->invoices->create([
+                    'customer' => $user->stripe_id,
+                    'currency' => $currency,
+                    'collection_method' => 'send_invoice',
+                    'days_until_due' => 3,
+                    'description' => $invoiceDescription,
+                    'metadata' => [
+                        'type' => 'box_payment',
+                        'order_type' => $order->order_type ?? 'shipping',
+                        'order_id' => (string) $order->id,
+                        'order_number' => $order->order_number,
+                        'box_count' => (string) $boxCount,
+                        'total_box_price' => (string) $totalBoxPrice,
+                    ],
+                    'auto_advance' => false,
+                ]);
+
+                // Create line items for each box type
+                foreach ($boxEntries as $entry) {
+                    $lineDescription = $entry['quantity'] > 1
+                        ? "{$entry['quantity']}x {$entry['box_name']} @ \${$entry['box_price']} each"
+                        : "{$entry['box_name']} (\${$entry['box_price']})";
+
+                    $lineAmount = round($entry['box_price'] * $entry['quantity'], 2);
+
+                    $stripe->invoiceItems->create([
+                        'customer' => $user->stripe_id,
+                        'invoice' => $stripeInvoice->id,
+                        'amount' => intval($lineAmount * 100),
+                        'currency' => $currency,
+                        'description' => $lineDescription,
+                    ]);
+                }
+
+                $stripe->invoices->finalizeInvoice($stripeInvoice->id);
+                $sentInvoice = $stripe->invoices->sendInvoice($stripeInvoice->id);
+
+                $stripeInvoiceId = $stripeInvoice->id;
+                $paymentLink = $sentInvoice->hosted_invoice_url;
+            }
+
+            // 3. Clear any existing boxes and create new OrderBox entries (no GIA yet)
+            $order->boxes()->delete();
+            foreach ($boxEntries as $entry) {
+                OrderBox::create([
+                    'order_id' => $order->id,
+                    'stripe_price_id' => $entry['stripe_price_id'],
+                    'stripe_product_id' => $entry['stripe_product_id'],
+                    'box_size' => $entry['box_size'],
+                    'box_name' => $entry['box_name'],
+                    'box_price' => $entry['box_price'],
+                    'currency' => $entry['currency'],
+                    'quantity' => $entry['quantity'],
+                ]);
+            }
+
+            // 4. Update Order with consolidation info
+            $primaryBox = $boxEntries[0];
+            $order->box_price = $totalBoxPrice;
+            $order->currency = $currency;
+            $order->box_size = count($boxEntries) === 1 ? $primaryBox['box_size'] : null;
+            $order->stripe_price_id = count($boxEntries) === 1 ? $primaryBox['stripe_price_id'] : null;
+            $order->stripe_product_id = count($boxEntries) === 1 ? $primaryBox['stripe_product_id'] : null;
+
+            // Consolidation payment info
+            $order->stripe_invoice_id = $stripeInvoiceId; // null for manual transfer
+            $order->payment_link = $paymentLink; // null for manual transfer
+
+            // Change status to awaiting payment
+            $order->status = Order::STATUS_AWAITING_PAYMENT;
+
+            $order->skipEmailNotifications = true;
+            $order->save();
+
+            DB::commit();
+
+            // 5. Send consolidation email
+            try {
+                Mail::to($user)->queue(new OrderConsolidatedInvoice($order, $paymentMethod));
+                Log::info('Order consolidated email queued', [
+                    'order_id' => $order->id,
+                    'box_count' => $boxCount,
+                    'total_box_price' => $totalBoxPrice,
+                    'payment_method' => $paymentMethod,
+                ]);
+            } catch (\Exception $e) {
+                Log::error('Failed to queue consolidation email', ['error' => $e->getMessage()]);
+            }
+
+            $message = $paymentMethod === 'manual_transfer'
+                ? "Order consolidated. Bank transfer details sent to customer."
+                : ($boxCount > 1
+                    ? "Order consolidated with {$boxCount} boxes. Invoice sent to customer."
+                    : "Order consolidated. Invoice sent to customer.");
+
+            return response()->json([
+                'success' => true,
+                'message' => $message,
+                'data' => [
+                    'order' => $order->fresh()->load(['user', 'items', 'boxes']),
+                    'payment_method' => $paymentMethod,
+                    'payment_link' => $paymentLink,
+                    'boxes' => $boxEntries,
+                    'total_box_price' => $totalBoxPrice,
+                ]
+            ]);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Failed to consolidate order', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * Manually mark consolidation as paid (for manual bank transfers).
+     */
+    public function markConsolidationPaid(Request $request, Order $order)
+    {
+        if ($order->status !== Order::STATUS_AWAITING_PAYMENT) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Order must be in awaiting_payment status'
+            ], 400);
+        }
+
+        if ($order->isConsolidationPaid()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Consolidation is already marked as paid'
+            ], 400);
+        }
+
+        $order->update([
+            'paid_at' => now(),
+            'amount_paid' => ($order->amount_paid ?? 0) + $order->box_price,
+            'status' => Order::STATUS_PAID,
+        ]);
+
+        // Refresh order to get updated values for the email
+        $order->refresh();
+
+        Log::info('Consolidation manually marked as paid', [
+            'order_id' => $order->id,
+            'amount' => $order->box_price,
+            'amount_paid' => $order->amount_paid,
+            'status' => $order->status,
+            'admin_id' => $request->user()->id,
+        ]);
+
+        // Queue payment confirmation email
+        Mail::to($order->user)->queue(new \App\Mail\PaymentReceived($order));
+        Log::info('Payment received email queued', ['order_id' => $order->id]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Consolidation marked as paid. Order moved to processing.',
+            'data' => $order->fresh()->load(['user', 'items', 'boxes'])
+        ]);
+    }
+
     public function updateStatus(AdminUpdateOrderStatusRequest $request, Order $order)
     {
+        $previousStatus = $order->status;
         $data = ['status' => $request->status];
 
         switch ($request->status) {
@@ -120,6 +378,10 @@ class AdminOrderController extends Controller
             case Order::STATUS_PAID:
                 if (!$order->paid_at) {
                     $data['paid_at'] = now();
+                }
+                // Set amount_paid to box_price if not already set
+                if (empty($order->amount_paid) && $order->box_price) {
+                    $data['amount_paid'] = $order->box_price;
                 }
                 break;
             case Order::STATUS_SHIPPED:
@@ -144,9 +406,17 @@ class AdminOrderController extends Controller
 
         Log::info('Admin manually updated order status', [
             'order_id' => $order->id,
+            'previous_status' => $previousStatus,
             'new_status' => $request->status,
             'admin_id' => $request->user()->id,
         ]);
+
+        // Send PaymentReceived email when status changes to PAID
+        if ($request->status === Order::STATUS_PAID && $previousStatus !== Order::STATUS_PAID) {
+            $order->refresh();
+            Mail::to($order->user)->queue(new \App\Mail\PaymentReceived($order));
+            Log::info('Payment received email queued via status update', ['order_id' => $order->id]);
+        }
 
         return response()->json([
             'success' => true,
@@ -156,19 +426,39 @@ class AdminOrderController extends Controller
     }
 
     /**
-     * Ship order: Supports multiple boxes per order, each with its own GIA file.
-     * Creates OrderBox entries, calculates 50% deposit of total box price, creates invoice.
+     * Ship order: Updates existing boxes with guia numbers and GIA files.
+     * Boxes are already created during consolidation step (consolidateOrder).
+     * Payment is already collected at consolidation.
      *
      * Request contains:
-     * - boxes: array of [{stripe_price_id, quantity, guia_number, gia_file}] for each physical box
+     * - boxes: array of [{box_id, guia_number, gia_file}] for each box
      * - estimated_delivery_date: required for shipping orders
-     *
-     * Each box entry represents one physical box that needs its own GIA.
      */
-    public function shipOrder(AdminShipOrderRequest $request, Order $order)
+    public function shipOrder(Request $request, Order $order)
     {
-        if ($order->status !== Order::STATUS_PROCESSING) {
-            return response()->json(['success' => false, 'message' => 'Only orders in processing can be shipped'], 400);
+        // Validate request
+        $request->validate([
+            'boxes' => 'required|array|min:1',
+            'boxes.*.box_id' => 'required|integer|exists:order_boxes,id',
+            'boxes.*.guia_number' => 'nullable|string',
+            'estimated_delivery_date' => $order->isCrossingOnly() ? 'nullable|date' : 'required|date',
+        ]);
+
+        if ($order->status !== Order::STATUS_PAID) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Only paid orders can be shipped'
+            ], 400);
+        }
+
+        // Verify boxes belong to this order
+        $boxIds = collect($request->boxes)->pluck('box_id');
+        $orderBoxIds = $order->boxes->pluck('id');
+        if ($boxIds->diff($orderBoxIds)->isNotEmpty()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'One or more boxes do not belong to this order'
+            ], 400);
         }
 
         DB::beginTransaction();
@@ -176,192 +466,63 @@ class AdminOrderController extends Controller
         try {
             $user = $order->user;
             $userName = Str::slug($user->name);
-            $stripe = Cashier::stripe();
             $isCrossing = $order->isCrossingOnly();
 
-            // 1. Fetch all box details from Stripe and calculate totals
-            // Also collect guia numbers for shipping orders
-            $boxEntries = [];
-            $totalBoxPrice = 0;
-            $currency = 'mxn';
-            $boxDescriptions = [];
-
+            // 1. Update each box with guia_number and GIA file
             foreach ($request->boxes as $boxIndex => $boxInput) {
-                try {
-                    $stripePrice = $stripe->prices->retrieve($boxInput['stripe_price_id'], [
-                        'expand' => ['product']
-                    ]);
-                } catch (\Exception $e) {
-                    DB::rollBack();
-                    return response()->json([
-                        'success' => false,
-                        'message' => "Invalid Stripe Price ID: {$boxInput['stripe_price_id']}"
-                    ], 422);
+                $box = OrderBox::find($boxInput['box_id']);
+
+                // Update guia number
+                if (isset($boxInput['guia_number'])) {
+                    $box->guia_number = $boxInput['guia_number'];
                 }
 
-                $quantity = $boxInput['quantity'] ?? 1;
-                $boxPrice = $stripePrice->unit_amount / 100;
-                $boxName = $stripePrice->product->name;
-                $boxSize = $stripePrice->product->metadata->type ?? null;
-                $currency = strtolower($stripePrice->currency);
-
-                $boxEntry = [
-                    'stripe_price_id' => $stripePrice->id,
-                    'stripe_product_id' => $stripePrice->product->id,
-                    'box_size' => $boxSize,
-                    'box_name' => $boxName,
-                    'box_price' => $boxPrice,
-                    'currency' => $currency,
-                    'quantity' => $quantity,
-                    // Per-box GIA fields (for shipping orders)
-                    'guia_number' => $boxInput['guia_number'] ?? null,
-                    'box_index' => $boxIndex, // Track index for file matching
-                ];
-
-                $boxEntries[] = $boxEntry;
-
-                $lineTotal = $boxPrice * $quantity;
-                $totalBoxPrice += $lineTotal;
-
-                // Build description for invoice line item
-                $desc = $quantity > 1 ? "{$quantity}x {$boxName}" : $boxName;
-                $boxDescriptions[] = $desc;
-            }
-
-            // 2. Calculate payment amount (100% for crossing, 50% deposit for shipping)
-            $paymentPercentage = $isCrossing ? 1.0 : 0.5;
-            $depositAmount = round($totalBoxPrice * $paymentPercentage, 2);
-
-            // 3. Handle per-box GIA File Uploads (for shipping orders)
-            // Each box gets its own GIA file uploaded
-            $giaFiles = $request->file('boxes.*.gia_file', []);
-
-            foreach ($boxEntries as &$boxEntry) {
-                $boxIndex = $boxEntry['box_index'];
-
-                // Check if there's a GIA file for this box
-                if (isset($giaFiles[$boxIndex]) && $giaFiles[$boxIndex]) {
-                    $file = $giaFiles[$boxIndex];
+                // Handle GIA file upload (shipping orders only)
+                $giaFile = $request->file("boxes.{$boxIndex}.gia_file");
+                if ($giaFile && !$isCrossing) {
                     $storagePath = "users/{$userName}-{$user->id}/orders/{$order->order_number}/boxes/{$boxIndex}";
                     $filename = "gia-" . time() . "-" . $boxIndex . ".pdf";
 
-                    $uploadedPath = Storage::disk('spaces')->putFileAs($storagePath, $file, $filename, 'public');
+                    $uploadedPath = Storage::disk('spaces')->putFileAs($storagePath, $giaFile, $filename, 'public');
                     $url = config('filesystems.disks.spaces.url') . '/' . $uploadedPath;
 
-                    $boxEntry['gia_path'] = $uploadedPath;
-                    $boxEntry['gia_filename'] = $file->getClientOriginalName();
-                    $boxEntry['gia_mime_type'] = $file->getClientMimeType();
-                    $boxEntry['gia_size'] = $file->getSize();
-                    $boxEntry['gia_url'] = $url;
+                    $box->gia_path = $uploadedPath;
+                    $box->gia_filename = $giaFile->getClientOriginalName();
+                    $box->gia_mime_type = $giaFile->getClientMimeType();
+                    $box->gia_size = $giaFile->getSize();
+                    $box->gia_url = $url;
                 }
-            }
-            unset($boxEntry); // Break reference
 
-            // For backwards compatibility, store first box's GIA in order-level fields
-            $firstBoxWithGia = collect($boxEntries)->first(fn($b) => !empty($b['gia_path']));
+                $box->save();
+            }
+
+            // 2. For backwards compatibility, store first box's GIA in order-level fields
+            $firstBoxWithGia = $order->boxes()->whereNotNull('gia_path')->first();
             if ($firstBoxWithGia) {
-                $order->gia_path = $firstBoxWithGia['gia_path'];
-                $order->gia_filename = $firstBoxWithGia['gia_filename'];
-                $order->gia_mime_type = $firstBoxWithGia['gia_mime_type'];
-                $order->gia_size = $firstBoxWithGia['gia_size'];
-                $order->gia_url = $firstBoxWithGia['gia_url'];
+                $order->gia_path = $firstBoxWithGia->gia_path;
+                $order->gia_filename = $firstBoxWithGia->gia_filename;
+                $order->gia_mime_type = $firstBoxWithGia->gia_mime_type;
+                $order->gia_size = $firstBoxWithGia->gia_size;
+                $order->gia_url = $firstBoxWithGia->gia_url;
             }
 
-            // 4. Create Stripe Customer if needed
-            if (!$user->stripe_id) {
-                $user->createAsStripeCustomer();
+            // Store first box's guia for backwards compatibility
+            $firstBoxWithGuia = $order->boxes()->whereNotNull('guia_number')->first();
+            if ($firstBoxWithGuia) {
+                $order->guia_number = $firstBoxWithGuia->guia_number;
             }
 
-            // 5. Create Stripe Invoice (Full Payment for crossing, 50% Deposit for shipping)
-            $boxCount = count($boxEntries);
-            $paymentLabel = $isCrossing ? "Full Payment" : "Deposit (50%)";
-            $invoiceDescription = $boxCount > 1
-                ? "{$paymentLabel} for Order {$order->order_number} - {$boxCount} boxes"
-                : "{$paymentLabel} for Order {$order->order_number}";
-
-            $stripeInvoice = $stripe->invoices->create([
-                'customer' => $user->stripe_id,
-                'currency' => $currency,
-                'collection_method' => 'send_invoice',
-                'days_until_due' => 3,
-                'description' => $invoiceDescription,
-                'metadata' => [
-                    'type' => $isCrossing ? 'full_payment' : 'deposit',
-                    'order_type' => $order->order_type ?? 'shipping',
-                    'order_id' => (string) $order->id,
-                    'order_number' => $order->order_number,
-                    'box_count' => (string) $boxCount,
-                    'total_box_price' => (string) $totalBoxPrice,
-                    'payment_percentage' => $isCrossing ? '100' : '50',
-                ],
-                'auto_advance' => false,
-            ]);
-
-            // Create line items for each box type
-            foreach ($boxEntries as $entry) {
-                $linePrefix = $isCrossing ? "Full Payment" : "50% Deposit";
-                $lineDescription = $entry['quantity'] > 1
-                    ? "{$linePrefix}: {$entry['quantity']}x {$entry['box_name']} @ \${$entry['box_price']} each"
-                    : "{$linePrefix}: {$entry['box_name']} (\${$entry['box_price']})";
-
-                $lineAmount = round(($entry['box_price'] * $entry['quantity']) * $paymentPercentage, 2);
-
-                $stripe->invoiceItems->create([
-                    'customer' => $user->stripe_id,
-                    'invoice' => $stripeInvoice->id,
-                    'amount' => intval($lineAmount * 100),
-                    'currency' => $currency,
-                    'description' => $lineDescription,
-                ]);
-            }
-
-            $stripe->invoices->finalizeInvoice($stripeInvoice->id);
-            $sentInvoice = $stripe->invoices->sendInvoice($stripeInvoice->id);
-
-            // 6. Clear any existing boxes and create new OrderBox entries with GIA info
-            $order->boxes()->delete();
-            foreach ($boxEntries as $entry) {
-                OrderBox::create([
-                    'order_id' => $order->id,
-                    'stripe_price_id' => $entry['stripe_price_id'],
-                    'stripe_product_id' => $entry['stripe_product_id'],
-                    'box_size' => $entry['box_size'],
-                    'box_name' => $entry['box_name'],
-                    'box_price' => $entry['box_price'],
-                    'currency' => $entry['currency'],
-                    'quantity' => $entry['quantity'],
-                    // Per-box GIA fields
-                    'guia_number' => $entry['guia_number'] ?? null,
-                    'gia_path' => $entry['gia_path'] ?? null,
-                    'gia_filename' => $entry['gia_filename'] ?? null,
-                    'gia_mime_type' => $entry['gia_mime_type'] ?? null,
-                    'gia_size' => $entry['gia_size'] ?? null,
-                    'gia_url' => $entry['gia_url'] ?? null,
-                ]);
-            }
-
-            // 7. Update Order Data
-            // For backwards compatibility, also set the legacy single-box fields
-            // using the first/primary box if there's only one
-            $primaryBox = $boxEntries[0];
-
-            $order->status = Order::STATUS_SHIPPED;
-            // Use first box's guia_number for order-level backwards compatibility
-            $order->guia_number = $primaryBox['guia_number'] ?? null;
-            $order->estimated_delivery_date = $request->estimated_delivery_date;
+            // 3. Update order status
+            // New flow: crossing orders go directly to DELIVERED (pickup complete)
+            // Shipping orders go to SHIPPED (in transit)
+            $order->status = $isCrossing ? Order::STATUS_DELIVERED : Order::STATUS_SHIPPED;
             $order->shipped_at = now();
-
-            // Legacy single-box fields (for backwards compatibility)
-            $order->box_size = count($boxEntries) === 1 ? $primaryBox['box_size'] : null;
-            $order->box_price = $totalBoxPrice; // Store total for easy access
-            $order->stripe_price_id = count($boxEntries) === 1 ? $primaryBox['stripe_price_id'] : null;
-            $order->stripe_product_id = count($boxEntries) === 1 ? $primaryBox['stripe_product_id'] : null;
-            $order->currency = $currency;
-
-            // Deposit Info
-            $order->deposit_amount = $depositAmount;
-            $order->deposit_invoice_id = $stripeInvoice->id;
-            $order->deposit_payment_link = $sentInvoice->hosted_invoice_url;
+            if ($request->estimated_delivery_date) {
+                $order->estimated_delivery_date = $request->estimated_delivery_date;
+            }
+            if ($isCrossing) {
+                $order->delivered_at = now();
+            }
 
             if ($request->has('notes')) {
                 $order->notes = ($order->notes ? $order->notes . "\n" : '') . "Shipped: " . $request->notes;
@@ -372,42 +533,33 @@ class AdminOrderController extends Controller
 
             DB::commit();
 
-            // 8. Send Email
+            // 4. Send shipped email
+            $boxCount = $order->boxes->count();
             try {
-                Mail::to($user)->queue(new OrderShippedWithDeposit($order));
+                Mail::to($user)->queue(new OrderShipped($order));
                 Log::info('Order shipped email queued', [
                     'order_id' => $order->id,
                     'order_type' => $order->order_type ?? 'shipping',
                     'box_count' => $boxCount,
-                    'total_box_price' => $totalBoxPrice,
-                    'payment_amount' => $depositAmount,
-                    'payment_type' => $isCrossing ? 'full_payment' : 'deposit',
+                    'is_crossing' => $isCrossing,
                 ]);
             } catch (\Exception $e) {
-                Log::error('Failed to queue email', ['error' => $e->getMessage()]);
+                Log::error('Failed to queue shipped email', ['error' => $e->getMessage()]);
             }
 
-            $invoiceType = $isCrossing ? 'full payment' : 'deposit';
             return response()->json([
                 'success' => true,
-                'message' => $boxCount > 1
-                    ? "Order shipped with {$boxCount} boxes. " . ucfirst($invoiceType) . " invoice generated."
-                    : "Order shipped and {$invoiceType} invoice generated successfully",
+                'message' => $isCrossing
+                    ? "Crossing order completed. Customer notified for pickup."
+                    : "Order shipped successfully. Tracking info sent to customer.",
                 'data' => [
                     'order' => $order->fresh()->load(['user', 'items', 'boxes']),
-                    'payment_link' => $order->deposit_payment_link,
-                    'deposit_link' => $order->deposit_payment_link, // Legacy compatibility
-                    'boxes' => $boxEntries,
-                    'total_box_price' => $totalBoxPrice,
-                    'payment_amount' => $depositAmount,
-                    'payment_type' => $isCrossing ? 'full_payment' : 'deposit',
-                    'payment_percentage' => $isCrossing ? 100 : 50,
+                    'boxes' => $order->boxes,
                 ]
             ]);
 
         } catch (\Exception $e) {
             DB::rollBack();
-            if (isset($uploadedPath)) Storage::disk('spaces')->delete($uploadedPath);
             Log::error('Failed to ship order', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }

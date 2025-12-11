@@ -207,6 +207,8 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/{order}/cancel-invoice', [AdminQuoteController::class, 'cancelInvoice']);
             Route::post('/{order}/cancel-quote', [AdminQuoteController::class, 'cancelInvoice']);
 
+            Route::post('/{order}/consolidate', [AdminOrderController::class, 'consolidateOrder']);
+            Route::post('/{order}/mark-consolidation-paid', [AdminOrderController::class, 'markConsolidationPaid']);
             Route::post('/{order}/ship', [AdminOrderController::class, 'shipOrder']);
             Route::get('/{order}/gia', [AdminOrderController::class, 'viewGia']);
             
