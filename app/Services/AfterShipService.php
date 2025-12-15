@@ -17,20 +17,20 @@ class AfterShipService
     }
 
     /**
-     * Track a package - always creates fresh tracking
-     * Deletes existing tracking first to ensure clean data
+     * Track a package - returns existing tracking or creates new one
+     * AfterShip fetches carrier data asynchronously, so we reuse existing trackings
      */
     public function trackPackage(string $trackingNumber, ?string $slug = null): array
     {
         $slug = $slug ?? 'estafeta'; // Default to estafeta
 
-        // Delete any existing tracking to ensure fresh data
+        // First try to get existing tracking (which has checkpoint data)
         $existing = $this->getTracking($trackingNumber);
-        if ($existing['success'] && !empty($existing['data']['id'])) {
-            $this->deleteTracking($existing['data']['id']);
+        if ($existing['success']) {
+            return $existing;
         }
 
-        // Create fresh tracking
+        // Not found - create new tracking
         return $this->createTracking($trackingNumber, $slug);
     }
 

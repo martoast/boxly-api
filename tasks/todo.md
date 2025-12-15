@@ -1,63 +1,59 @@
-# Dashboard: Switch from `created_at` to `paid_at` for Order Attribution
+# AfterShip Tracking Endpoint Fix
 
-## Context
-Since orders now have a single payment (100% at consolidation) instead of deposit + final payment, we need to attribute orders to months based on when they were **paid**, not when they were created.
+## Problem
+The tracking endpoint always returns empty/pending data because it **deletes existing tracking and creates a fresh one every time**. AfterShip needs time to fetch carrier data after creating a tracking - the immediate response is empty.
 
-This affects:
-- Revenue calculations (already using `paid_at` - correct)
-- Order counts in financial metrics
-- Box distribution counts
+## Root Cause
+In `AfterShipService.php`, the `trackPackage()` method:
+1. Deletes any existing tracking
+2. Creates a brand new tracking
+3. Returns the empty/pending response from creation
 
-## Changes Required
+This is wrong because:
+- AfterShip fetches carrier data asynchronously after tracking is created
+- Deleting and recreating loses all accumulated checkpoint data
+- We should REUSE existing trackings, not delete them
 
-### 1. `getFinancialData()` - Order Counts
-- [ ] Line 561: Change `Order::whereBetween('created_at', ...)` to `paid_at`
-- [ ] Line 648: Change `total_orders_calculated` query from `created_at` to `paid_at`
+## Solution
+Fix the tracking flow to:
+1. First try to GET existing tracking with checkpoint data
+2. Only CREATE new tracking if it doesn't exist
+3. NEVER delete existing trackings in normal flow
 
-### 2. `getBoxDistribution()` - Box Counts by Month
-- [ ] Line 750-752: Change OrderBox query to use order's `paid_at`
-- [ ] Line 754-757: Change not_selected Order query to use `paid_at`
-- [ ] Update `getBoxCountsFromOrderBoxes()` helper to use `paid_at`
-- [ ] Update `getLegacyBoxCounts()` helper to use `paid_at`
+## Todo List
 
-### 3. `getOrdersData()` - Orders by Status
-This is for **operational tracking** (collecting, awaiting_packages, etc.) - orders might not have `paid_at` yet.
-**Decision**: Keep using `created_at` since it's for operational visibility of orders in various stages.
+- [x] Fix `trackPackage()` method to get existing tracking first, only create if not found
+- [x] Remove the delete-before-create logic
+- [x] Test the endpoint with the tracking number `3707864185` to verify checkpoints are returned
+- [x] Verify the formatted response includes all checkpoint data
 
-### 4. `getOverview()` - Overview Metrics
-- [ ] Line 307: `total_orders` should use `paid_at` for consistency with financial
-- [ ] Line 308-315: `active_orders` - keep `created_at` (operational metric)
-
-## Notes
-- Only PAID orders have a `paid_at` date
-- Revenue is already correctly using `paid_at`
-- This change aligns order counts and box distribution with revenue attribution
+## Files Modified
+- `app/Services/AfterShipService.php` - Fixed the `trackPackage()` method logic (lines 19-35)
 
 ## Review
 
-### Changes Made
-All changes in `UnifiedAdminDashboardController.php`:
+### Change Made
+Simple fix to `trackPackage()` method in `AfterShipService.php`:
 
-1. **`getOverview()`** - Line 307
-   - `total_orders` now uses `whereNotNull('paid_at')->whereBetween('paid_at', ...)`
-   - `active_orders` kept using `created_at` (operational metric)
+**Before:** Delete existing tracking → Create new tracking → Return empty response
+**After:** Get existing tracking → If found, return it → If not found, create new
 
-2. **`getFinancialData()`** - Lines 561, 648
-   - `ordersToUse` now uses `paid_at` instead of `created_at`
-   - `total_orders_calculated` now uses `paid_at` instead of `created_at`
+### Lines Changed
+Only 6 lines changed in one file.
 
-3. **`getBoxDistribution()`** - Lines 750-758
-   - OrderBox query now filters by order's `paid_at`
-   - `notSelected` query now filters by `paid_at`
+### Test Result
+```
+curl -X POST http://localhost:8001/shipment-tracking/track \
+  -d '{"tracking_number": "3707864185", "carrier": "estafeta"}'
 
-4. **`getBoxCountsFromOrderBoxes()`** - Lines 804-807
-   - Now uses order's `paid_at` instead of `created_at`
+Response:
+- status: "Delivered" ✓ (was "Pending")
+- checkpoints: 2 entries with timestamps and locations ✓ (was empty [])
+- message: "Entregado" ✓
+```
 
-5. **`getLegacyBoxCounts()`** - Lines 836-838
-   - Now uses `paid_at` instead of `created_at`
-
-### What This Means
-- Orders are now attributed to months based on when they were **paid**, not created
-- Box distribution follows the same logic - boxes count toward the month payment was received
-- Revenue and order counts are now aligned
-- Operational metrics (active_orders, orders by status) still use `created_at`
+### How It Works Now
+1. User requests tracking → we check if AfterShip already has it
+2. If exists → return the full data with all checkpoints
+3. If not → create new tracking (first request will be pending, subsequent requests will have data)
+4. Users can keep calling the endpoint to get latest updates as AfterShip polls the carrier
