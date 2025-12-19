@@ -6,6 +6,7 @@ use App\Models\Order;
 use App\Models\OrderBox;
 use App\Models\OrderItem;
 use App\Models\User;
+use App\Models\AffiliateConversion;
 use App\Mail\OrderShipped;
 use App\Mail\OrderConsolidatedInvoice;
 use Illuminate\Http\Request;
@@ -353,6 +354,9 @@ class AdminOrderController extends Controller
         Mail::to($order->user)->queue(new \App\Mail\PaymentReceived($order));
         Log::info('Payment received email queued', ['order_id' => $order->id]);
 
+        // Track affiliate conversion
+        $this->trackAffiliateConversion($order);
+
         return response()->json([
             'success' => true,
             'message' => 'Consolidation marked as paid. Order moved to processing.',
@@ -416,6 +420,9 @@ class AdminOrderController extends Controller
             $order->refresh();
             Mail::to($order->user)->queue(new \App\Mail\PaymentReceived($order));
             Log::info('Payment received email queued via status update', ['order_id' => $order->id]);
+
+            // Track affiliate conversion
+            $this->trackAffiliateConversion($order);
         }
 
         return response()->json([
@@ -607,6 +614,73 @@ class AdminOrderController extends Controller
         } catch (\Exception $e) {
             DB::rollBack();
             return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * Track affiliate conversion when an order is marked as paid.
+     * Creates a conversion record if the user was referred by an affiliate.
+     */
+    protected function trackAffiliateConversion(Order $order): void
+    {
+        try {
+            $user = $order->user;
+
+            // Check if user was referred by an affiliate
+            $referral = $user->affiliateReferral;
+            if (!$referral) {
+                return;
+            }
+
+            // Check if conversion already exists for this order
+            if (AffiliateConversion::where('order_id', $order->id)->exists()) {
+                Log::info('Affiliate conversion already exists', ['order_id' => $order->id]);
+                return;
+            }
+
+            $affiliate = $referral->affiliate;
+
+            // Only track for active affiliates
+            if (!$affiliate->isActive()) {
+                Log::info('Affiliate is not active, skipping conversion', [
+                    'affiliate_id' => $affiliate->id,
+                    'order_id' => $order->id,
+                ]);
+                return;
+            }
+
+            // Calculate commission based on total box price
+            $boxPrice = $order->calculateTotalBoxPrice();
+            $commissionAmount = $affiliate->calculateCommission($boxPrice);
+
+            DB::transaction(function () use ($affiliate, $referral, $order, $boxPrice, $commissionAmount) {
+                // Create conversion record
+                AffiliateConversion::create([
+                    'affiliate_id' => $affiliate->id,
+                    'referral_id' => $referral->id,
+                    'order_id' => $order->id,
+                    'order_amount' => $boxPrice,
+                    'commission_amount' => $commissionAmount,
+                    'status' => AffiliateConversion::STATUS_APPROVED,
+                ]);
+
+                // Update affiliate's total earnings
+                $affiliate->increment('total_earnings', $commissionAmount);
+            });
+
+            Log::info('Affiliate conversion tracked (admin)', [
+                'affiliate_id' => $affiliate->id,
+                'affiliate_code' => $affiliate->affiliate_code,
+                'order_id' => $order->id,
+                'box_price' => $boxPrice,
+                'commission_amount' => $commissionAmount,
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Failed to track affiliate conversion', [
+                'order_id' => $order->id,
+                'error' => $e->getMessage(),
+            ]);
         }
     }
 }

@@ -241,4 +241,36 @@ class User extends Authenticatable
                $this->estado &&
                $this->postal_code;
     }
+
+    /**
+     * Get the user's affiliate account (if they are an affiliate).
+     */
+    public function affiliate()
+    {
+        return $this->hasOne(Affiliate::class);
+    }
+
+    /**
+     * Get the affiliate referral for this user (if they were referred by an affiliate).
+     */
+    public function affiliateReferral()
+    {
+        return $this->hasOne(AffiliateReferral::class);
+    }
+
+    /**
+     * Check if user is an affiliate.
+     */
+    public function isAffiliate(): bool
+    {
+        return $this->affiliate()->exists();
+    }
+
+    /**
+     * Check if user was referred by an affiliate.
+     */
+    public function wasReferred(): bool
+    {
+        return $this->affiliateReferral()->exists();
+    }
 }

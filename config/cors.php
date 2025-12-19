@@ -39,7 +39,9 @@ return [
         'shipment-tracking',
         'shipment-tracking/*',
         'purchase-requests',
-        'purchase-requests/*'
+        'purchase-requests/*',
+        'affiliate',
+        'affiliate/*'
     ],
 
     'allowed_methods' => ['*'],

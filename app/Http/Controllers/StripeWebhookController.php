@@ -4,13 +4,16 @@ namespace App\Http\Controllers;
 
 use App\Models\Order;
 use App\Models\PurchaseRequest;
+use App\Models\Affiliate;
+use App\Models\AffiliateConversion;
 use Illuminate\Http\Request;
 use Stripe\Event;
 use Stripe\Webhook;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\DB;
 use App\Mail\PaymentReceived;
-use App\Mail\DepositReceived; // Ensure this is imported
+use App\Mail\DepositReceived;
 use App\Mail\PurchaseRequestPaymentReceived;
 
 class StripeWebhookController extends Controller
@@ -24,7 +27,11 @@ class StripeWebhookController extends Controller
         try {
             $event = Webhook::constructEvent($payload, $sigHeader, $webhookSecret);
         } catch (\Exception $e) {
-            return response()->json(['error' => 'Webhook Error'], 400);
+            Log::error('Stripe webhook signature verification failed', [
+                'error' => $e->getMessage(),
+                'has_secret' => !empty($webhookSecret),
+            ]);
+            return response()->json(['error' => 'Webhook Error: ' . $e->getMessage()], 400);
         }
 
         if ($event->type === 'invoice.paid') {
@@ -78,6 +85,9 @@ class StripeWebhookController extends Controller
                 } catch (\Exception $e) {
                     Log::error('Failed to queue box payment email', ['error' => $e->getMessage()]);
                 }
+
+                // Track affiliate conversion
+                $this->trackAffiliateConversion($order);
             }
             return;
         }
@@ -122,6 +132,14 @@ class StripeWebhookController extends Controller
             $this->handlePurchaseRequestPaid($invoice, $metadata);
             return;
         }
+
+        // Log unhandled invoice types for debugging
+        Log::warning('Invoice paid webhook received but no handler matched', [
+            'invoice_id' => $invoice->id,
+            'type' => $type,
+            'metadata' => $metadata,
+            'amount_paid' => $invoice->amount_paid,
+        ]);
     }
 
     protected function handleOrderPaid($invoice, $metadata)
@@ -171,6 +189,9 @@ class StripeWebhookController extends Controller
             Mail::to($order->user)->queue(new PaymentReceived($order));
             Log::info('Payment received email queued', ['order_id' => $order->id]);
 
+            // Track affiliate conversion
+            $this->trackAffiliateConversion($order);
+
         } catch (\Exception $e) {
             Log::error('Order paid handling failed', [
                 'order_id' => $order->id,
@@ -189,6 +210,75 @@ class StripeWebhookController extends Controller
             Mail::to($pr->user)->queue(new PurchaseRequestPaymentReceived($pr));
         } catch (\Exception $e) {
             Log::error('PR paid handling failed', ['error' => $e->getMessage()]);
+        }
+    }
+
+    /**
+     * Track affiliate conversion when an order is paid.
+     * Creates a conversion record if the user was referred by an affiliate.
+     */
+    protected function trackAffiliateConversion(Order $order): void
+    {
+        try {
+            $user = $order->user;
+
+            // Check if user was referred by an affiliate
+            $referral = $user->affiliateReferral;
+            if (!$referral) {
+                return;
+            }
+
+            // Check if conversion already exists for this order
+            if (AffiliateConversion::where('order_id', $order->id)->exists()) {
+                Log::info('Affiliate conversion already exists', ['order_id' => $order->id]);
+                return;
+            }
+
+            $affiliate = $referral->affiliate;
+
+            // Only track for active affiliates
+            if (!$affiliate->isActive()) {
+                Log::info('Affiliate is not active, skipping conversion', [
+                    'affiliate_id' => $affiliate->id,
+                    'order_id' => $order->id,
+                ]);
+                return;
+            }
+
+            // Calculate commission based on total box price
+            $boxPrice = $order->calculateTotalBoxPrice();
+            $commissionAmount = $affiliate->calculateCommission($boxPrice);
+
+            DB::transaction(function () use ($affiliate, $referral, $order, $boxPrice, $commissionAmount) {
+                // Create conversion record
+                AffiliateConversion::create([
+                    'affiliate_id' => $affiliate->id,
+                    'referral_id' => $referral->id,
+                    'order_id' => $order->id,
+                    'order_amount' => $boxPrice,
+                    'commission_amount' => $commissionAmount,
+                    'status' => AffiliateConversion::STATUS_APPROVED,
+                ]);
+
+                // Update affiliate's total earnings
+                $affiliate->increment('total_earnings', $commissionAmount);
+            });
+
+            Log::info('Affiliate conversion tracked', [
+                'affiliate_id' => $affiliate->id,
+                'affiliate_code' => $affiliate->affiliate_code,
+                'order_id' => $order->id,
+                'box_price' => $boxPrice,
+                'commission_amount' => $commissionAmount,
+                'commission_type' => $affiliate->commission_type,
+                'commission_value' => $affiliate->commission_value,
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Failed to track affiliate conversion', [
+                'order_id' => $order->id,
+                'error' => $e->getMessage(),
+            ]);
         }
     }
 }

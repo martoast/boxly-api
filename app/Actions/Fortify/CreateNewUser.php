@@ -3,6 +3,7 @@
 namespace App\Actions\Fortify;
 
 use App\Models\User;
+use App\Http\Controllers\AffiliateController;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
@@ -36,6 +37,7 @@ class CreateNewUser implements CreatesNewUsers
             ],
             'password' => $this->passwordRules(),
             'registration_source' => ['nullable', 'json'],
+            'referred_by' => ['nullable', 'string', 'max:20'],
         ], [
             'phone.required' => 'Phone number is required.',
             'phone.regex' => 'Please enter a valid phone number.',
@@ -55,7 +57,7 @@ class CreateNewUser implements CreatesNewUsers
             }
         }
 
-        return User::create([
+        $user = User::create([
             'name' => $input['name'],
             'email' => $input['email'],
             'phone' => $input['phone'],
@@ -64,5 +66,16 @@ class CreateNewUser implements CreatesNewUsers
             'password' => Hash::make($input['password']),
             'preferred_language' => 'es', // Default to Spanish
         ]);
+
+        // Track affiliate referral if code provided
+        if (!empty($input['referred_by'])) {
+            AffiliateController::trackReferral(
+                $user->id,
+                $input['referred_by'],
+                request()->ip()
+            );
+        }
+
+        return $user;
     }
 }

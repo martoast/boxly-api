@@ -23,6 +23,8 @@ use App\Http\Controllers\ShipmentTrackingController;
 use App\Http\Controllers\PurchaseRequestController;
 use App\Http\Controllers\AdminPurchaseRequestController;
 use App\Http\Controllers\AdminOrderBoxController;
+use App\Http\Controllers\AffiliateController;
+use App\Http\Controllers\AdminAffiliateController;
 
 /*
 |--------------------------------------------------------------------------
@@ -31,6 +33,9 @@ use App\Http\Controllers\AdminOrderBoxController;
 */
 
 Route::post('/webhooks/stripe', [StripeWebhookController::class, 'handle']);
+
+// Public Affiliate Routes
+Route::get('/affiliate/validate/{code}', [AffiliateController::class, 'validateCode']);
 
 Route::get('/', function () {
     return response()->json(['status' => 'ok']);
@@ -92,7 +97,7 @@ Route::middleware(['web'])->group(function () {
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/user', function (Request $request) {
         $user = $request->user();
-        return [
+        $response = [
             'id' => $user->id,
             'name' => $user->name,
             'email' => $user->email,
@@ -102,9 +107,35 @@ Route::middleware('auth:sanctum')->group(function () {
             'role' => $user->role,
             'email_verified_at' => $user->email_verified_at,
             'created_at' => $user->created_at,
+            'is_affiliate' => $user->isAffiliate(),
         ];
+
+        // Include affiliate data if user is an affiliate
+        if ($user->isAffiliate()) {
+            $affiliate = $user->affiliate;
+            $response['affiliate'] = [
+                'id' => $affiliate->id,
+                'affiliate_code' => $affiliate->affiliate_code,
+                'referral_link' => $affiliate->referral_link,
+                'status' => $affiliate->status,
+                'total_earnings' => (float) $affiliate->total_earnings,
+                'pending_earnings' => $affiliate->pending_earnings,
+            ];
+        }
+
+        return $response;
     });
-    
+
+    // Affiliate Portal Routes
+    Route::prefix('affiliate')->group(function () {
+        Route::post('/become', [AffiliateController::class, 'become']);
+        Route::get('/dashboard', [AffiliateController::class, 'dashboard']);
+        Route::get('/referrals', [AffiliateController::class, 'referrals']);
+        Route::get('/conversions', [AffiliateController::class, 'conversions']);
+        Route::get('/payouts', [AffiliateController::class, 'payouts']);
+        Route::put('/profile', [AffiliateController::class, 'updateProfile']);
+    });
+
     Route::prefix('profile')->group(function () {
         Route::get('/', [ProfileController::class, 'show']);
         Route::put('/', [ProfileController::class, 'update']);
@@ -251,6 +282,17 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::prefix('boxes')->group(function () {
             Route::get('/', [AdminOrderBoxController::class, 'index']);
             Route::get('/{box}', [AdminOrderBoxController::class, 'show']);
+        });
+
+        Route::prefix('affiliates')->group(function () {
+            Route::get('/', [AdminAffiliateController::class, 'index']);
+            Route::post('/', [AdminAffiliateController::class, 'store']);
+            Route::get('/{affiliate}', [AdminAffiliateController::class, 'show']);
+            Route::put('/{affiliate}', [AdminAffiliateController::class, 'update']);
+            Route::delete('/{affiliate}', [AdminAffiliateController::class, 'destroy']);
+            Route::get('/{affiliate}/conversions', [AdminAffiliateController::class, 'conversions']);
+            Route::get('/{affiliate}/payouts', [AdminAffiliateController::class, 'payouts']);
+            Route::post('/{affiliate}/record-payout', [AdminAffiliateController::class, 'recordPayout']);
         });
     });
 });
