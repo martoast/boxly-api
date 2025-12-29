@@ -78,6 +78,7 @@ class ProfileController extends Controller
             'municipio' => 'nullable|string|max:100',
             'estado' => 'nullable|string|max:100',
             'postal_code' => 'nullable|string|regex:/^\d{5}$/',
+            'full_address' => 'nullable|string|max:1000',
             'user_type' => [
                 'nullable',
                 Rule::in(['expat', 'business', 'shopper']),

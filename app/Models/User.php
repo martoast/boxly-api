@@ -38,6 +38,7 @@ class User extends Authenticatable
         'municipio',
         'estado',
         'postal_code',
+        'full_address',
         'provider',
         'role',
         'user_type',

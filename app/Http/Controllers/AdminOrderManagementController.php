@@ -51,6 +51,10 @@ class AdminOrderManagementController extends Controller
             'boxes' => 'nullable|array',
             'boxes.*.stripe_price_id' => 'required_with:boxes|string|max:255',
             'boxes.*.quantity' => 'nullable|integer|min:1|max:99',
+            'boxes.*.length' => 'nullable|numeric|min:0|max:999999.99',
+            'boxes.*.width' => 'nullable|numeric|min:0|max:999999.99',
+            'boxes.*.height' => 'nullable|numeric|min:0|max:999999.99',
+            'boxes.*.weight' => 'nullable|numeric|min:0|max:999999.99',
         ]);
 
         DB::beginTransaction();
@@ -184,6 +188,10 @@ class AdminOrderManagementController extends Controller
             'boxes.*.id' => 'nullable|integer|exists:order_boxes,id',
             'boxes.*.stripe_price_id' => 'required_with:boxes|string|max:255',
             'boxes.*.quantity' => 'nullable|integer|min:1|max:99',
+            'boxes.*.length' => 'nullable|numeric|min:0|max:999999.99',
+            'boxes.*.width' => 'nullable|numeric|min:0|max:999999.99',
+            'boxes.*.height' => 'nullable|numeric|min:0|max:999999.99',
+            'boxes.*.weight' => 'nullable|numeric|min:0|max:999999.99',
             // Per-box GIA fields
             'boxes.*.guia_number' => 'nullable|string|max:50',
             'boxes.*.gia_file' => 'nullable|file|mimes:pdf|max:10240',
@@ -317,6 +325,10 @@ class AdminOrderManagementController extends Controller
                 'box_price' => $stripePrice->unit_amount / 100,
                 'currency' => strtolower($stripePrice->currency),
                 'quantity' => $quantity,
+                'length' => $boxInput['length'] ?? null,
+                'width' => $boxInput['width'] ?? null,
+                'height' => $boxInput['height'] ?? null,
+                'weight' => $boxInput['weight'] ?? null,
             ];
         }
 
@@ -344,6 +356,10 @@ class AdminOrderManagementController extends Controller
                 'box_price' => $entry['box_price'],
                 'currency' => $entry['currency'],
                 'quantity' => $entry['quantity'],
+                'length' => $entry['length'] ?? null,
+                'width' => $entry['width'] ?? null,
+                'height' => $entry['height'] ?? null,
+                'weight' => $entry['weight'] ?? null,
             ]);
 
             $totalBoxPrice += $entry['box_price'] * $entry['quantity'];
@@ -412,13 +428,22 @@ class AdminOrderManagementController extends Controller
                             'box_price' => $stripePrice->unit_amount / 100,
                             'currency' => strtolower($stripePrice->currency),
                             'quantity' => $quantity,
+                            'length' => $boxInput['length'] ?? $box->length,
+                            'width' => $boxInput['width'] ?? $box->width,
+                            'height' => $boxInput['height'] ?? $box->height,
+                            'weight' => $boxInput['weight'] ?? $box->weight,
                         ]);
                     } catch (\Exception $e) {
                         throw new \Exception("Invalid Stripe Price ID: {$stripePriceId}");
                     }
                 } else {
-                    // Just update quantity
-                    $box->update(['quantity' => $quantity]);
+                    // Update quantity and dimensions if provided
+                    $updateData = ['quantity' => $quantity];
+                    if (isset($boxInput['length'])) $updateData['length'] = $boxInput['length'];
+                    if (isset($boxInput['width'])) $updateData['width'] = $boxInput['width'];
+                    if (isset($boxInput['height'])) $updateData['height'] = $boxInput['height'];
+                    if (isset($boxInput['weight'])) $updateData['weight'] = $boxInput['weight'];
+                    $box->update($updateData);
                 }
 
                 // Update guia_number if provided
@@ -469,6 +494,10 @@ class AdminOrderManagementController extends Controller
                     'currency' => strtolower($stripePrice->currency),
                     'quantity' => $quantity,
                     'guia_number' => $guiaNumber,
+                    'length' => $boxInput['length'] ?? null,
+                    'width' => $boxInput['width'] ?? null,
+                    'height' => $boxInput['height'] ?? null,
+                    'weight' => $boxInput['weight'] ?? null,
                 ]);
 
                 // Handle GIA file upload for new box

@@ -28,15 +28,18 @@ class UpdateOrderRequest extends FormRequest
      */
     public function rules(): array
     {
+        $hasFullAddress = !empty($this->input('delivery_address.full_address'));
+
         return [
             'delivery_address' => 'sometimes|required|array',
-            'delivery_address.street' => 'sometimes|required|string|max:255',
-            'delivery_address.exterior_number' => 'sometimes|required|string|max:20',
+            'delivery_address.full_address' => 'nullable|string|max:1000',
+            'delivery_address.street' => $hasFullAddress ? 'nullable|string|max:255' : 'sometimes|required|string|max:255',
+            'delivery_address.exterior_number' => $hasFullAddress ? 'nullable|string|max:20' : 'sometimes|required|string|max:20',
             'delivery_address.interior_number' => 'nullable|string|max:20',
-            'delivery_address.colonia' => 'sometimes|required|string|max:100',
-            'delivery_address.municipio' => 'sometimes|required|string|max:100',
-            'delivery_address.estado' => 'sometimes|required|string|max:100',
-            'delivery_address.postal_code' => 'sometimes|required|string|regex:/^\d{5}$/',
+            'delivery_address.colonia' => $hasFullAddress ? 'nullable|string|max:100' : 'sometimes|required|string|max:100',
+            'delivery_address.municipio' => $hasFullAddress ? 'nullable|string|max:100' : 'sometimes|required|string|max:100',
+            'delivery_address.estado' => $hasFullAddress ? 'nullable|string|max:100' : 'sometimes|required|string|max:100',
+            'delivery_address.postal_code' => $hasFullAddress ? 'nullable|string|regex:/^\d{5}$/' : 'sometimes|required|string|regex:/^\d{5}$/',
             'delivery_address.referencias' => 'nullable|string|max:500',
             'is_rural' => 'sometimes|boolean',
             'declared_value' => 'sometimes|nullable|numeric|min:0|max:999999.99',

@@ -40,16 +40,24 @@ class OrderController extends Controller
 
     public function create(Request $request)
     {
+        $isShipping = $request->order_type === 'shipping' || $request->order_type === null;
+        $hasFullAddress = !empty($request->input('delivery_address.full_address'));
+
         $request->validate([
             'order_type' => 'nullable|string|in:shipping,crossing',
-            'delivery_address' => 'required_if:order_type,shipping|nullable|array',
-            'delivery_address.street' => 'required_if:order_type,shipping|nullable|string|max:255',
-            'delivery_address.exterior_number' => 'required_if:order_type,shipping|nullable|string|max:20',
+            'delivery_address' => $isShipping ? 'required|array' : 'nullable|array',
+
+            // Option 1: Simple full_address string
+            'delivery_address.full_address' => 'nullable|string|max:1000',
+
+            // Option 2: Individual fields (only required if full_address not provided AND shipping)
+            'delivery_address.street' => ($isShipping && !$hasFullAddress) ? 'required|string|max:255' : 'nullable|string|max:255',
+            'delivery_address.exterior_number' => ($isShipping && !$hasFullAddress) ? 'required|string|max:20' : 'nullable|string|max:20',
             'delivery_address.interior_number' => 'nullable|string|max:20',
-            'delivery_address.colonia' => 'required_if:order_type,shipping|nullable|string|max:100',
-            'delivery_address.municipio' => 'required_if:order_type,shipping|nullable|string|max:100',
-            'delivery_address.estado' => 'required_if:order_type,shipping|nullable|string|max:100',
-            'delivery_address.postal_code' => 'required_if:order_type,shipping|nullable|regex:/^\d{5}$/',
+            'delivery_address.colonia' => ($isShipping && !$hasFullAddress) ? 'required|string|max:100' : 'nullable|string|max:100',
+            'delivery_address.municipio' => ($isShipping && !$hasFullAddress) ? 'required|string|max:100' : 'nullable|string|max:100',
+            'delivery_address.estado' => ($isShipping && !$hasFullAddress) ? 'required|string|max:100' : 'nullable|string|max:100',
+            'delivery_address.postal_code' => ($isShipping && !$hasFullAddress) ? 'required|regex:/^\d{5}$/' : 'nullable|regex:/^\d{5}$/',
             'delivery_address.referencias' => 'nullable|string|max:500',
             'is_rural' => 'boolean',
             'notes' => 'nullable|string|max:1000',

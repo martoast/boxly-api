@@ -46,6 +46,7 @@ class AdminCreateUserRequest extends FormRequest
             'municipio' => ['nullable', 'string', 'max:255'],
             'estado' => ['nullable', 'string', 'max:255'],
             'postal_code' => ['nullable', 'string', 'max:10'],
+            'full_address' => ['nullable', 'string', 'max:1000'],
         ];
     }
 

@@ -99,6 +99,10 @@ class Order extends Model
         'gia_size' => 'integer',
     ];
 
+    protected $appends = [
+        'total_box_weight',
+    ];
+
     // Updated status constants
     const STATUS_COLLECTING = 'collecting';
     const STATUS_AWAITING_PACKAGES = 'awaiting_packages';
@@ -510,6 +514,23 @@ class Order extends Model
     {
         $totalWeight = $this->items()->whereNotNull('weight')->sum('weight');
         return $totalWeight > 0 ? $totalWeight : null;
+    }
+
+    /**
+     * Calculate total weight from all boxes in the order.
+     */
+    public function calculateTotalBoxWeight(): ?float
+    {
+        $totalWeight = $this->boxes()->whereNotNull('weight')->sum('weight');
+        return $totalWeight > 0 ? round($totalWeight, 2) : null;
+    }
+
+    /**
+     * Get the total box weight attribute for API responses.
+     */
+    public function getTotalBoxWeightAttribute(): ?float
+    {
+        return $this->calculateTotalBoxWeight();
     }
 
     public function calculateTotalDeclaredValue(): float

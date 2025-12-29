@@ -99,6 +99,9 @@ class AdminCustomerController extends Controller
             if ($request->filled('postal_code')) {
                 $userData['postal_code'] = $request->postal_code;
             }
+            if ($request->filled('full_address')) {
+                $userData['full_address'] = $request->full_address;
+            }
 
             $user = User::create($userData);
 
@@ -205,6 +208,7 @@ class AdminCustomerController extends Controller
             'municipio' => ['nullable', 'string', 'max:255'],
             'estado' => ['nullable', 'string', 'max:255'],
             'postal_code' => ['nullable', 'string', 'max:10'],
+            'full_address' => ['nullable', 'string', 'max:1000'],
         ]);
 
         DB::beginTransaction();
@@ -222,6 +226,7 @@ class AdminCustomerController extends Controller
                 'municipio',
                 'estado',
                 'postal_code',
+                'full_address',
             ]));
 
             DB::commit();

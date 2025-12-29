@@ -130,6 +130,10 @@ class AdminOrderController extends Controller
             'boxes' => 'required|array|min:1',
             'boxes.*.stripe_price_id' => 'required|string',
             'boxes.*.quantity' => 'nullable|integer|min:1',
+            'boxes.*.length' => 'nullable|numeric|min:0|max:999999.99',
+            'boxes.*.width' => 'nullable|numeric|min:0|max:999999.99',
+            'boxes.*.height' => 'nullable|numeric|min:0|max:999999.99',
+            'boxes.*.weight' => 'nullable|numeric|min:0|max:999999.99',
             'payment_method' => 'nullable|in:stripe,manual_transfer',
         ]);
 
@@ -180,6 +184,10 @@ class AdminOrderController extends Controller
                     'box_price' => $boxPrice,
                     'currency' => $currency,
                     'quantity' => $quantity,
+                    'length' => $boxInput['length'] ?? null,
+                    'width' => $boxInput['width'] ?? null,
+                    'height' => $boxInput['height'] ?? null,
+                    'weight' => $boxInput['weight'] ?? null,
                 ];
 
                 $totalBoxPrice += ($boxPrice * $quantity);
@@ -253,6 +261,10 @@ class AdminOrderController extends Controller
                     'box_price' => $entry['box_price'],
                     'currency' => $entry['currency'],
                     'quantity' => $entry['quantity'],
+                    'length' => $entry['length'],
+                    'width' => $entry['width'],
+                    'height' => $entry['height'],
+                    'weight' => $entry['weight'],
                 ]);
             }
 

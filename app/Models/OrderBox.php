@@ -20,6 +20,11 @@ class OrderBox extends Model
         'box_price',
         'currency',
         'quantity',
+        // Dimensions and weight
+        'length',
+        'width',
+        'height',
+        'weight',
         // GIA file fields (one per box)
         'guia_number',
         'gia_path',
@@ -32,6 +37,10 @@ class OrderBox extends Model
     protected $casts = [
         'box_price' => 'decimal:2',
         'quantity' => 'integer',
+        'length' => 'decimal:2',
+        'width' => 'decimal:2',
+        'height' => 'decimal:2',
+        'weight' => 'decimal:2',
         'gia_size' => 'integer',
     ];
 
