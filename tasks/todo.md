@@ -1,31 +1,31 @@
-# Order Weight from Boxes Sum
+# Task: Simplify Admin Purchase Request Update Endpoint
 
 ## Problem
-The order's weight should default to the sum of weights from all boxes in the order, while still allowing admin to manually override.
+Admin currently has to manually enter `shipping_cost` and `processing_fee` when updating a purchase request. This is annoying and unnecessary.
 
-## Proposed Solution
-Add a method to calculate total box weight and use it as default when displaying order weight.
+## Solution
+- Only require `items_total` and `total_amount`
+- Calculate `processing_fee` automatically as: `total_amount - items_total`
+- Remove `shipping_cost` and `processing_fee` from required fields
 
----
+## Todo
+- [x] Update `AdminPurchaseRequestController::update()` method to calculate `processing_fee` automatically
 
-## Todo Items
-
-- [x] Add `calculateTotalBoxWeight()` method to Order model
-- [x] Add `total_box_weight` appended attribute for API responses
-
----
+## Files to Change
+- `app/Http/Controllers/AdminPurchaseRequestController.php` - the `update` method only
 
 ## Review
 
-### Changes Made:
-1. **Order Model**: Added `calculateTotalBoxWeight()` method - sums weight from all boxes
-2. **Order Model**: Added `getTotalBoxWeightAttribute()` accessor
-3. **Order Model**: Added `$appends` array with `total_box_weight` so it's included in all API responses
+### Change Made
+Added 4 lines of code to auto-calculate `processing_fee` when both `items_total` and `total_amount` are provided:
 
-### Files Modified:
-- `app/Models/Order.php`
+```php
+if (isset($validated['items_total']) && isset($validated['total_amount'])) {
+    $validated['processing_fee'] = $validated['total_amount'] - $validated['items_total'];
+}
+```
 
-### How It Works:
-- `total_box_weight` is automatically calculated from the sum of all box weights
-- Returned in all order API responses
-- Admin can still manually set `total_weight` or `actual_weight` fields if they need to override
+### How It Works Now
+- Admin sends: `items_total` (cost of goods) and `total_amount` (what customer pays)
+- System calculates: `processing_fee = total_amount - items_total` (your profit)
+- `shipping_cost` and `processing_fee` fields still accepted if admin wants to override manually

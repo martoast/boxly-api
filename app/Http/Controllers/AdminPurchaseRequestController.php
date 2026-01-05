@@ -184,6 +184,11 @@ class AdminPurchaseRequestController extends Controller
             'payment_link' => 'nullable|url',
         ]);
 
+        // Auto-calculate processing_fee as the difference between total_amount and items_total
+        if (isset($validated['items_total']) && isset($validated['total_amount'])) {
+            $validated['processing_fee'] = $validated['total_amount'] - $validated['items_total'];
+        }
+
         $purchaseRequest->update($validated);
 
         Log::info('Admin manually updated purchase request', [
