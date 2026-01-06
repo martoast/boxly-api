@@ -38,6 +38,10 @@ class AdminCustomerController extends Controller
             $query->has('activeOrders');
         }
 
+        if ($request->has('no_orders') && $request->no_orders) {
+            $query->doesntHave('orders');
+        }
+
         $total = $query->count();
 
         $customers = $query->latest()->paginate($perPage);
@@ -46,6 +50,52 @@ class AdminCustomerController extends Controller
             'success' => true,
             'data' => $customers,
             'total' => $total,
+        ]);
+    }
+
+    /**
+     * Export customers as CSV
+     */
+    public function export(Request $request)
+    {
+        $query = User::withCount(['orders', 'activeOrders'])
+            ->where('role', 'customer');
+
+        if ($request->has('search')) {
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->where('name', 'like', "%{$search}%")
+                ->orWhere('email', 'like', "%{$search}%")
+                ->orWhere('phone', 'like', "%{$search}%");
+            });
+        }
+
+        if ($request->has('active_only') && $request->active_only) {
+            $query->has('activeOrders');
+        }
+
+        if ($request->has('no_orders') && $request->no_orders) {
+            $query->doesntHave('orders');
+        }
+
+        $customers = $query->latest()->get();
+
+        $csv = "Name,Email,Phone,Orders,Active Orders,Joined\n";
+        foreach ($customers as $customer) {
+            $csv .= sprintf(
+                "\"%s\",\"%s\",\"%s\",%d,%d,\"%s\"\n",
+                str_replace('"', '""', $customer->name),
+                str_replace('"', '""', $customer->email),
+                str_replace('"', '""', $customer->phone ?? ''),
+                $customer->orders_count,
+                $customer->active_orders_count,
+                $customer->created_at->format('Y-m-d')
+            );
+        }
+
+        return response($csv, 200, [
+            'Content-Type' => 'text/csv',
+            'Content-Disposition' => 'attachment; filename="customers-' . now()->format('Y-m-d') . '.csv"',
         ]);
     }
 

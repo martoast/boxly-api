@@ -262,6 +262,7 @@ Route::middleware('auth:sanctum')->group(function () {
         
         Route::prefix('customers')->group(function () {
             Route::get('/', [AdminCustomerController::class, 'index']);
+            Route::get('/export', [AdminCustomerController::class, 'export']);
             Route::post('/', [AdminCustomerController::class, 'store']);
             Route::get('/{customer}', [AdminCustomerController::class, 'show']);
             Route::put('/{customer}', [AdminCustomerController::class, 'update']);
