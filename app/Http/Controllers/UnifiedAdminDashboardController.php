@@ -468,6 +468,10 @@ class UnifiedAdminDashboardController extends Controller
         $calculatedExpensesByCategory['total'] = round($calculatedTotalExpenses, 2);
         $calculatedAdSpend = $calculatedExpensesByCategory['ads'];
 
+        // --- ACCOUNTS RECEIVABLE ---
+        // Orders with boxes that haven't been fully paid yet (not cancelled)
+        $accountsReceivable = $this->calculateAccountsReceivable($start, $end);
+
         // === ALL TIME MODE ===
         if ($period === 'all') {
             $manualMetrics = MonthlyManualMetric::where('is_manual_mode', true)->get();
@@ -513,6 +517,9 @@ class UnifiedAdminDashboardController extends Controller
                 $q->where('status', 'purchased');
             })->sum('quantity');
 
+            // Calculate all-time accounts receivable
+            $allTimeAR = $this->calculateAccountsReceivable();
+
             return [
                 'source' => 'combined',
                 'revenue' => [
@@ -528,6 +535,7 @@ class UnifiedAdminDashboardController extends Controller
                     'amount' => round($profit, 2),
                     'margin' => round($profitMargin, 2),
                 ],
+                'accounts_receivable' => $allTimeAR,
                 'metrics' => [
                     'total_orders' => $totalOrders,
                     'new_customers' => $allCustomers,
@@ -642,6 +650,7 @@ class UnifiedAdminDashboardController extends Controller
                 'amount' => round($profit, 2),
                 'margin' => round($profitMargin, 2),
             ],
+            'accounts_receivable' => $accountsReceivable,
             'metrics' => [
                 'total_orders' => $ordersToUse,
                 'total_orders_is_manual' => $isOrdersManual,
@@ -949,6 +958,42 @@ class UnifiedAdminDashboardController extends Controller
                 Order::whereNotNull('total_weight')->avg('total_weight') ?? 0,
                 2
             ),
+        ];
+    }
+
+    /**
+     * Calculate accounts receivable - unpaid orders that have boxes.
+     * These are orders where customers owe money (box selected but not fully paid).
+     */
+    private function calculateAccountsReceivable(?string $start = null, ?string $end = null): array
+    {
+        // Base query: orders not fully paid and not cancelled
+        $query = Order::whereNull('paid_at')
+            ->where('status', '!=', Order::STATUS_CANCELLED);
+
+        // Apply date filter if provided (based on order creation date)
+        if ($start && $end) {
+            $query->whereBetween('created_at', [$start, $end]);
+        }
+
+        // Get orders that have boxes (either in order_boxes table or legacy box_price)
+        $ordersWithBoxes = (clone $query)
+            ->where(function ($q) {
+                $q->whereHas('boxes')
+                    ->orWhereNotNull('box_price');
+            })
+            ->with('boxes')
+            ->get();
+
+        // Calculate total receivable amount
+        $totalAmount = 0;
+        foreach ($ordersWithBoxes as $order) {
+            $totalAmount += $order->calculateTotalBoxPrice();
+        }
+
+        return [
+            'total' => round($totalAmount, 2),
+            'count' => $ordersWithBoxes->count(),
         ];
     }
 }
