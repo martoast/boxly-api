@@ -964,6 +964,7 @@ class UnifiedAdminDashboardController extends Controller
     /**
      * Calculate accounts receivable - unpaid orders that have boxes.
      * These are orders where customers owe money (box selected but not fully paid).
+     * Subtracts any deposits already paid to get the true outstanding amount.
      */
     private function calculateAccountsReceivable(?string $start = null, ?string $end = null): array
     {
@@ -985,10 +986,21 @@ class UnifiedAdminDashboardController extends Controller
             ->with('boxes')
             ->get();
 
-        // Calculate total receivable amount
+        // Calculate total receivable amount (box price minus any deposits paid)
         $totalAmount = 0;
         foreach ($ordersWithBoxes as $order) {
-            $totalAmount += $order->calculateTotalBoxPrice();
+            $boxPrice = $order->calculateTotalBoxPrice();
+
+            // Subtract deposit if already paid
+            $depositPaid = 0;
+            if ($order->deposit_paid_at && $order->deposit_amount) {
+                $depositPaid = (float) $order->deposit_amount;
+            }
+
+            $outstanding = $boxPrice - $depositPaid;
+            if ($outstanding > 0) {
+                $totalAmount += $outstanding;
+            }
         }
 
         return [

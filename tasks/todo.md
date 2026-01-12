@@ -70,5 +70,7 @@ Add an `accounts_receivable` field to the financial data in `UnifiedAdminDashboa
 
 ### How It Works
 - Orders with boxes that haven't been fully paid represent money owed
+- **Subtracts any deposits already paid** to show true outstanding amount
+- Formula: `box_price - deposit_paid = accounts_receivable`
 - Displayed as a 4th card in the financial overview section
 - Shows both the total amount and the number of orders pending payment
