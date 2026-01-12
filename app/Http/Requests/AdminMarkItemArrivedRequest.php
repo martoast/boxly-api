@@ -23,7 +23,7 @@ class AdminMarkItemArrivedRequest extends FormRequest
     {
         return [
             'arrived' => 'required|boolean',
-            'weight' => 'required_if:arrived,true|nullable|numeric|min:0.01|max:999.99',
+            'weight' => 'nullable|numeric|min:0.01|max:999.99',
             'dimensions' => 'nullable|array',
             'dimensions.length' => 'nullable|numeric|min:1|max:999',
             'dimensions.width' => 'nullable|numeric|min:1|max:999',
@@ -55,7 +55,6 @@ class AdminMarkItemArrivedRequest extends FormRequest
     public function messages(): array
     {
         return [
-            'weight.required_if' => 'Weight is required when marking item as arrived.',
             'weight.min' => 'Weight must be at least 0.01 kg.',
             'declared_value.min' => 'Declared value cannot be negative.',
             'declared_value.max' => 'Declared value cannot exceed $99,999.99.',
