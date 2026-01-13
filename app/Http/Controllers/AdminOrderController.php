@@ -639,21 +639,16 @@ class AdminOrderController extends Controller
             'arrival_image' => 'required|image|mimes:jpeg,jpg,png,webp|max:10240', // Max 10MB
         ]);
 
-        // Check if all items are arrived
-        if (!$order->allItemsArrived()) {
+        // Check if all items are arrived (skip this check if we're just replacing an existing image)
+        if (!$order->hasArrivalImage() && !$order->allItemsArrived()) {
             return response()->json([
                 'success' => false,
                 'message' => 'All items must be marked as arrived before uploading the arrival image'
             ], 400);
         }
 
-        // Check order status
-        if (!in_array($order->status, [Order::STATUS_AWAITING_PACKAGES, Order::STATUS_PACKAGES_COMPLETE])) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Order must be in awaiting_packages or packages_complete status'
-            ], 400);
-        }
+        // Determine if we should update status (only if currently in awaiting_packages)
+        $shouldUpdateStatus = $order->status === Order::STATUS_AWAITING_PACKAGES;
 
         try {
             $user = $order->user;
@@ -673,34 +668,43 @@ class AdminOrderController extends Controller
             $uploadedPath = Storage::disk('spaces')->putFileAs($storagePath, $file, $filename, 'public');
             $url = config('filesystems.disks.spaces.url') . '/' . $uploadedPath;
 
-            // Update order with image data and status
-            $order->update([
+            // Update order with image data (and status only if in awaiting_packages)
+            $updateData = [
                 'arrival_image_path' => $uploadedPath,
                 'arrival_image_filename' => $file->getClientOriginalName(),
                 'arrival_image_mime_type' => $file->getClientMimeType(),
                 'arrival_image_size' => $file->getSize(),
                 'arrival_image_url' => $url,
-                'status' => Order::STATUS_PACKAGES_COMPLETE,
                 'total_weight' => $order->calculateTotalWeight(),
-            ]);
+            ];
+
+            if ($shouldUpdateStatus) {
+                $updateData['status'] = Order::STATUS_PACKAGES_COMPLETE;
+            }
+
+            $order->update($updateData);
 
             Log::info('Arrival image uploaded', [
                 'order_id' => $order->id,
                 'url' => $url,
-                'status' => Order::STATUS_PACKAGES_COMPLETE,
+                'status_updated' => $shouldUpdateStatus,
             ]);
 
-            // Send notification email to customer
-            try {
-                Mail::to($user)->queue(new \App\Mail\AllPackagesArrived($order));
-                Log::info('All packages arrived email queued', ['order_id' => $order->id]);
-            } catch (\Exception $e) {
-                Log::error('Failed to queue all packages arrived email', ['error' => $e->getMessage()]);
+            // Send notification email only if this is a new upload (status was updated)
+            $message = 'Arrival image uploaded.';
+            if ($shouldUpdateStatus) {
+                try {
+                    Mail::to($user)->queue(new \App\Mail\AllPackagesArrived($order));
+                    Log::info('All packages arrived email queued', ['order_id' => $order->id]);
+                    $message = 'Arrival image uploaded. Customer has been notified.';
+                } catch (\Exception $e) {
+                    Log::error('Failed to queue all packages arrived email', ['error' => $e->getMessage()]);
+                }
             }
 
             return response()->json([
                 'success' => true,
-                'message' => 'Arrival image uploaded. Customer has been notified.',
+                'message' => $message,
                 'data' => $order->fresh()->load(['user', 'items', 'boxes'])
             ]);
 
