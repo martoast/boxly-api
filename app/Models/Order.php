@@ -67,6 +67,11 @@ class Order extends Model
         'consolidation_invoice_id',
         'consolidation_payment_link',
         'consolidation_paid_at',
+        'arrival_image_path',
+        'arrival_image_filename',
+        'arrival_image_mime_type',
+        'arrival_image_size',
+        'arrival_image_url',
     ];
 
     protected $casts = [
@@ -97,6 +102,7 @@ class Order extends Model
         'shipped_at' => 'datetime',
         'delivered_at' => 'datetime',
         'gia_size' => 'integer',
+        'arrival_image_size' => 'integer',
     ];
 
     protected $appends = [
@@ -270,9 +276,10 @@ class Order extends Model
             'completed_at' => now(),
         ]);
 
+        // Note: packages_complete status is now triggered when admin uploads arrival image
+        // Just update weight if all items are already arrived
         if ($this->allItemsArrived()) {
             $this->update([
-                'status' => self::STATUS_PACKAGES_COMPLETE,
                 'total_weight' => $this->calculateTotalWeight(),
             ]);
         }
@@ -312,9 +319,10 @@ class Order extends Model
 
     public function checkAndUpdatePackageStatus(): void
     {
+        // Note: packages_complete status is now triggered when admin uploads arrival image
+        // This method only updates the total weight when all items arrive
         if ($this->status === self::STATUS_AWAITING_PACKAGES && $this->allItemsArrived()) {
             $this->update([
-                'status' => self::STATUS_PACKAGES_COMPLETE,
                 'total_weight' => $this->calculateTotalWeight(),
             ]);
         }
@@ -632,6 +640,52 @@ class Order extends Model
     public function getBoxesWithGiaCountAttribute(): int
     {
         return $this->boxes->filter(fn($box) => $box->hasGia())->count();
+    }
+
+    /**
+     * Check if the order has an arrival image uploaded.
+     */
+    public function hasArrivalImage(): bool
+    {
+        return !empty($this->arrival_image_path) || !empty($this->arrival_image_url);
+    }
+
+    /**
+     * Get the full URL for the arrival image.
+     */
+    public function getArrivalImageFullUrlAttribute(): ?string
+    {
+        if (!$this->arrival_image_url && !$this->arrival_image_path) {
+            return null;
+        }
+
+        if ($this->arrival_image_url && filter_var($this->arrival_image_url, FILTER_VALIDATE_URL)) {
+            return $this->arrival_image_url;
+        }
+
+        if ($this->arrival_image_path) {
+            return config('filesystems.disks.spaces.url') . '/' . $this->arrival_image_path;
+        }
+
+        return $this->arrival_image_url;
+    }
+
+    /**
+     * Delete the arrival image from storage.
+     */
+    public function deleteArrivalImage(): void
+    {
+        if ($this->arrival_image_path) {
+            \Illuminate\Support\Facades\Storage::disk('spaces')->delete($this->arrival_image_path);
+        }
+
+        $this->update([
+            'arrival_image_path' => null,
+            'arrival_image_filename' => null,
+            'arrival_image_mime_type' => null,
+            'arrival_image_size' => null,
+            'arrival_image_url' => null,
+        ]);
     }
 
 }

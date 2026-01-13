@@ -74,3 +74,88 @@ Add an `accounts_receivable` field to the financial data in `UnifiedAdminDashboa
 - Formula: `box_price - deposit_paid = accounts_receivable`
 - Displayed as a 4th card in the financial overview section
 - Shows both the total amount and the number of orders pending payment
+
+---
+
+# Feature: Simplified Package Arrival + Proof Image (API)
+
+## Overview
+Backend changes to support simplified arrival flow with proof image:
+1. Add arrival image fields to orders table
+2. Create endpoint to upload arrival image
+3. Update packages_complete trigger to require arrival image
+4. Send email with arrival image to customer
+
+---
+
+## Tasks
+
+### Phase 1: Database & Model
+- [x] 1. Create migration to add arrival image fields to orders table
+- [x] 2. Update Order model with arrival image methods
+
+### Phase 2: Controller & Endpoint
+- [x] 3. Add `uploadArrivalImage` method to AdminOrderController
+- [x] 4. Add route for the new endpoint: `POST /admin/orders/{order}/arrival-image`
+
+### Phase 3: Email Notification
+- [x] 5. Create new email template `all-packages-arrived.blade.php`
+- [x] 6. Create Mailable class `AllPackagesArrived`
+
+### Phase 4: Cleanup
+- [x] 7. Update `checkAndUpdatePackageStatus()` to NOT auto-trigger packages_complete
+- [x] 8. Update `markAsComplete()` to NOT auto-trigger packages_complete
+
+---
+
+## Review
+
+### Files Created
+
+**`database/migrations/2026_01_13_071425_add_arrival_image_to_orders_table.php`**
+- Adds 5 new columns to orders table:
+  - `arrival_image_path`, `arrival_image_filename`, `arrival_image_mime_type`
+  - `arrival_image_size`, `arrival_image_url`
+
+**`app/Mail/AllPackagesArrived.php`**
+- New Mailable class for arrival notification email
+- Includes order, user, items list, and arrival image URL
+- Multi-language support (ES/EN)
+
+**`resources/views/emails/orders/all-packages-arrived.blade.php`**
+- Email template showing:
+  - Arrival image
+  - List of all items received
+  - "What's next" section explaining the process
+  - CTA to view order
+
+### Files Modified
+
+**`app/Models/Order.php`**
+- Added fillable fields for arrival image
+- Added cast for `arrival_image_size`
+- Added `hasArrivalImage()` method
+- Added `getArrivalImageFullUrlAttribute()` accessor
+- Added `deleteArrivalImage()` method
+- Modified `checkAndUpdatePackageStatus()` - no longer auto-triggers packages_complete
+- Modified `markAsComplete()` - no longer auto-triggers packages_complete
+
+**`app/Http/Controllers/AdminOrderController.php`**
+- Added `uploadArrivalImage()` method:
+  - Validates image file (jpeg, jpg, png, webp, max 10MB)
+  - Checks all items are arrived
+  - Stores image in DigitalOcean Spaces
+  - Updates order status to `packages_complete`
+  - Queues `AllPackagesArrived` email to customer
+
+**`routes/api.php`**
+- Added route: `POST /admin/orders/{order}/arrival-image`
+
+### Logic Change
+
+Previously: `packages_complete` status was auto-triggered when all items were marked as arrived.
+
+Now: `packages_complete` status is ONLY triggered when admin uploads the arrival proof image. This ensures:
+1. Admin has physically verified all items
+2. Customer receives a photo proof
+3. Better accountability and communication

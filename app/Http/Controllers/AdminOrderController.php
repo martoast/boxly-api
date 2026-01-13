@@ -630,6 +630,87 @@ class AdminOrderController extends Controller
     }
 
     /**
+     * Upload arrival image for an order.
+     * This triggers the packages_complete status and notifies the customer.
+     */
+    public function uploadArrivalImage(Request $request, Order $order)
+    {
+        $request->validate([
+            'arrival_image' => 'required|image|mimes:jpeg,jpg,png,webp|max:10240', // Max 10MB
+        ]);
+
+        // Check if all items are arrived
+        if (!$order->allItemsArrived()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'All items must be marked as arrived before uploading the arrival image'
+            ], 400);
+        }
+
+        // Check order status
+        if (!in_array($order->status, [Order::STATUS_AWAITING_PACKAGES, Order::STATUS_PACKAGES_COMPLETE])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Order must be in awaiting_packages or packages_complete status'
+            ], 400);
+        }
+
+        try {
+            $user = $order->user;
+            $userName = Str::slug($user->name);
+            $file = $request->file('arrival_image');
+
+            // Delete existing arrival image if present
+            if ($order->hasArrivalImage()) {
+                $order->deleteArrivalImage();
+            }
+
+            // Store the image
+            $storagePath = "users/{$userName}-{$user->id}/orders/{$order->order_number}";
+            $extension = $file->getClientOriginalExtension();
+            $filename = "arrival-image-" . time() . ".{$extension}";
+
+            $uploadedPath = Storage::disk('spaces')->putFileAs($storagePath, $file, $filename, 'public');
+            $url = config('filesystems.disks.spaces.url') . '/' . $uploadedPath;
+
+            // Update order with image data and status
+            $order->update([
+                'arrival_image_path' => $uploadedPath,
+                'arrival_image_filename' => $file->getClientOriginalName(),
+                'arrival_image_mime_type' => $file->getClientMimeType(),
+                'arrival_image_size' => $file->getSize(),
+                'arrival_image_url' => $url,
+                'status' => Order::STATUS_PACKAGES_COMPLETE,
+                'total_weight' => $order->calculateTotalWeight(),
+            ]);
+
+            Log::info('Arrival image uploaded', [
+                'order_id' => $order->id,
+                'url' => $url,
+                'status' => Order::STATUS_PACKAGES_COMPLETE,
+            ]);
+
+            // Send notification email to customer
+            try {
+                Mail::to($user)->queue(new \App\Mail\AllPackagesArrived($order));
+                Log::info('All packages arrived email queued', ['order_id' => $order->id]);
+            } catch (\Exception $e) {
+                Log::error('Failed to queue all packages arrived email', ['error' => $e->getMessage()]);
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Arrival image uploaded. Customer has been notified.',
+                'data' => $order->fresh()->load(['user', 'items', 'boxes'])
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Failed to upload arrival image', ['error' => $e->getMessage()]);
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
      * Track affiliate conversion when an order is marked as paid.
      * Creates a conversion record if the user was referred by an affiliate.
      */

@@ -242,7 +242,8 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/{order}/mark-consolidation-paid', [AdminOrderController::class, 'markConsolidationPaid']);
             Route::post('/{order}/ship', [AdminOrderController::class, 'shipOrder']);
             Route::get('/{order}/gia', [AdminOrderController::class, 'viewGia']);
-            
+            Route::post('/{order}/arrival-image', [AdminOrderController::class, 'uploadArrivalImage']);
+
             Route::put('/{order}/items/mark-all-arrived', [AdminOrderItemController::class, 'markAllArrived']);
             Route::put('/{order}/items/{item}/arrived', [AdminOrderItemController::class, 'markArrived']);
         });

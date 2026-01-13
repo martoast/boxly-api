@@ -102,6 +102,12 @@ class OrderController extends Controller
 
             DB::commit();
 
+            // Send conversion webhook if this is the user's first order
+            $userOrderCount = Order::where('user_id', $user->id)->count();
+            if ($userOrderCount === 1) {
+                \App\Jobs\SendOrderPlacedWebhookJob::dispatch($user);
+            }
+
             // Note: Email is automatically sent via OrderStatusChanged event when status is set to 'collecting'
             // The status-changed.blade.php template handles both shipping and crossing-only orders
 
@@ -244,10 +250,7 @@ class OrderController extends Controller
     {
         try {
             $order->markAsComplete();
-            
-            // Send webhook with full order and items
-            \App\Jobs\SendOrderPlacedWebhookJob::dispatch($order->fresh()->load('user', 'items'));
-            
+
             return response()->json([
                 'success' => true,
                 'message' => 'Order marked as complete. We\'ll notify you when your packages arrive.',
