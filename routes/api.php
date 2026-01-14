@@ -223,7 +223,8 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/ready-for-quote', [AdminQuoteController::class, 'ordersReadyForQuote']);
 
             Route::delete('/bulk', [AdminOrderController::class, 'bulkDestroy']);
-            
+            Route::post('/merge', [AdminOrderController::class, 'mergeOrders']);
+
             Route::get('/{order}', [AdminOrderController::class, 'show']);
             Route::put('/{order}/status', [AdminOrderController::class, 'updateStatus']);
             Route::delete('/{order}', [AdminOrderController::class, 'destroy']);

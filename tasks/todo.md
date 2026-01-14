@@ -159,3 +159,76 @@ Now: `packages_complete` status is ONLY triggered when admin uploads the arrival
 1. Admin has physically verified all items
 2. Customer receives a photo proof
 3. Better accountability and communication
+
+---
+
+# Feature: Order Consolidation (API)
+
+## Overview
+Allow admins to consolidate multiple orders from the same user into a single order. This fixes the issue where users create multiple orders instead of adding all items to one order.
+
+## Requirements
+- Orders must belong to the same user (user_id) to be consolidated
+- All items from source orders get merged into target order
+- Source orders are deleted after consolidation
+- Order with furthest status becomes target (delivered > shipped > paid > awaiting_packages)
+
+## Status Priority (furthest wins)
+1. `delivered` (highest)
+2. `shipped`
+3. `paid`
+4. `processing`
+5. `awaiting_payment`
+6. `packages_complete`
+7. `awaiting_packages` (lowest)
+
+---
+
+## Tasks
+
+- [ ] 1. Create `consolidateOrders` method in AdminOrderController
+  - Accepts: `order_ids[]` (array of order IDs to consolidate)
+  - Validates all orders belong to same user
+  - Auto-selects target order based on furthest status
+  - Moves all items from source orders to target order
+  - Deletes source orders
+  - Returns updated target order with items
+
+- [x] 2. Add route: `POST /admin/orders/merge`
+
+---
+
+## Review
+
+### Files Modified
+
+**`routes/api.php`**
+- Added route: `POST /admin/orders/merge` → `AdminOrderController@mergeOrders`
+
+**`app/Http/Controllers/AdminOrderController.php`**
+- Added `mergeOrders()` method with:
+  - Validation: requires 2+ order IDs, all must belong to same user
+  - Status priority logic to auto-select target order (furthest status wins)
+  - Moves all items from source orders to target order
+  - Deletes source orders (including boxes, GIA files, arrival images)
+  - Returns updated target order with success message
+
+### Status Priority (furthest wins)
+1. `delivered` (highest)
+2. `shipped`
+3. `paid`
+4. `processing`
+5. `awaiting_payment`
+6. `packages_complete`
+7. `awaiting_packages`
+8. `collecting` (lowest)
+9. `cancelled` (-1, never selected)
+
+### API Response
+```json
+{
+  "success": true,
+  "message": "Successfully merged 3 orders. Moved 5 items.",
+  "data": { /* target order with items and boxes */ }
+}
+```

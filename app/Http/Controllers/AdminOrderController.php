@@ -780,4 +780,108 @@ class AdminOrderController extends Controller
             ]);
         }
     }
+
+    /**
+     * Merge multiple orders from the same user into one.
+     * The order with the furthest status becomes the target.
+     * All items from source orders are moved to the target, then source orders are deleted.
+     */
+    public function mergeOrders(Request $request)
+    {
+        $request->validate([
+            'order_ids' => 'required|array|min:2',
+            'order_ids.*' => 'required|integer|exists:orders,id',
+        ]);
+
+        $orders = Order::whereIn('id', $request->order_ids)->with(['items', 'user'])->get();
+
+        if ($orders->count() < 2) {
+            return response()->json([
+                'success' => false,
+                'message' => 'At least 2 valid orders are required to merge'
+            ], 400);
+        }
+
+        // Validate all orders belong to the same user
+        $userIds = $orders->pluck('user_id')->unique();
+        if ($userIds->count() > 1) {
+            return response()->json([
+                'success' => false,
+                'message' => 'All orders must belong to the same user'
+            ], 400);
+        }
+
+        // Status priority - furthest along wins (higher number = further along)
+        $statusPriority = [
+            Order::STATUS_COLLECTING => 0,
+            Order::STATUS_AWAITING_PACKAGES => 1,
+            Order::STATUS_PACKAGES_COMPLETE => 2,
+            Order::STATUS_AWAITING_PAYMENT => 3,
+            Order::STATUS_PROCESSING => 4,
+            Order::STATUS_PAID => 5,
+            Order::STATUS_SHIPPED => 6,
+            Order::STATUS_DELIVERED => 7,
+            Order::STATUS_CANCELLED => -1, // Cancelled orders have lowest priority
+        ];
+
+        // Find the target order (furthest status)
+        $targetOrder = $orders->sortByDesc(function ($order) use ($statusPriority) {
+            return $statusPriority[$order->status] ?? 0;
+        })->first();
+
+        $sourceOrders = $orders->filter(fn($o) => $o->id !== $targetOrder->id);
+
+        DB::beginTransaction();
+        try {
+            $movedItemsCount = 0;
+
+            // Move all items from source orders to target order
+            foreach ($sourceOrders as $sourceOrder) {
+                $itemsToMove = $sourceOrder->items;
+
+                foreach ($itemsToMove as $item) {
+                    $item->order_id = $targetOrder->id;
+                    $item->save();
+                    $movedItemsCount++;
+                }
+
+                // Delete the source order (items already moved)
+                // Clean up any associated files
+                if ($sourceOrder->gia_path) {
+                    $sourceOrder->deleteGia();
+                }
+                if ($sourceOrder->hasArrivalImage()) {
+                    $sourceOrder->deleteArrivalImage();
+                }
+
+                // Delete boxes associated with source order
+                $sourceOrder->boxes()->delete();
+
+                $sourceOrder->delete();
+            }
+
+            DB::commit();
+
+            Log::info('Orders merged successfully', [
+                'target_order_id' => $targetOrder->id,
+                'source_order_ids' => $sourceOrders->pluck('id')->toArray(),
+                'items_moved' => $movedItemsCount,
+                'user_id' => $targetOrder->user_id,
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => "Successfully merged " . ($sourceOrders->count() + 1) . " orders. Moved {$movedItemsCount} items.",
+                'data' => $targetOrder->fresh()->load(['user', 'items', 'boxes'])
+            ]);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Failed to merge orders', ['error' => $e->getMessage()]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to merge orders: ' . $e->getMessage()
+            ], 500);
+        }
+    }
 }
