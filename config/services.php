@@ -55,4 +55,11 @@ return [
         'account_number' => env('NU_ACCOUNT_NUMBER'),
     ],
 
+    'hsbc' => [
+        'beneficiary_name' => env('HSBC_BENEFICIARY_NAME'),
+        'bank_name' => env('HSBC_BANK_NAME'),
+        'account_number' => env('HSBC_ACCOUNT_NUMBER'),
+        'clave' => env('HSBC_CLAVE'),
+    ],
+
 ];

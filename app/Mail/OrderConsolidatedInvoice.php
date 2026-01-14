@@ -41,11 +41,12 @@ class OrderConsolidatedInvoice extends Mailable implements ShouldQueue
         $totalBoxPrice = $this->order->calculateTotalBoxPrice();
         $isCrossing = $this->order->isCrossingOnly();
 
-        // Bank details for manual transfer
+        // Bank details for manual transfer (HSBC)
         $bankDetails = [
-            'beneficiary_name' => config('services.nu_bank.beneficiary_name'),
-            'bank_name' => config('services.nu_bank.bank_name'),
-            'account_number' => config('services.nu_bank.account_number'),
+            'beneficiary_name' => config('services.hsbc.beneficiary_name'),
+            'bank_name' => config('services.hsbc.bank_name'),
+            'account_number' => config('services.hsbc.account_number'),
+            'clave' => config('services.hsbc.clave'),
         ];
 
         return new Content(

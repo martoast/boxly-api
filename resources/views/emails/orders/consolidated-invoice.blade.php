@@ -131,6 +131,14 @@
                         {{ $bankDetails['account_number'] }}
                     </td>
                 </tr>
+                <tr>
+                    <td style="padding: 8px 0; color: #666;">
+                        {{ $locale === 'es' ? 'CLABE Interbancaria:' : 'CLABE:' }}
+                    </td>
+                    <td style="padding: 8px 0; text-align: right; font-weight: bold; font-family: monospace;">
+                        {{ $bankDetails['clave'] }}
+                    </td>
+                </tr>
                 <tr style="border-top: 2px solid #ffc107;">
                     <td style="padding: 15px 0 5px 0; color: #2E6BB7; font-weight: bold;">
                         {{ $locale === 'es' ? 'Monto a Depositar:' : 'Amount to Deposit:' }}
