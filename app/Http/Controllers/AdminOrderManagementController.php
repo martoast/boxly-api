@@ -212,15 +212,24 @@ class AdminOrderManagementController extends Controller
                 $updateData['is_rural'] = false;
             }
 
+            // Handle clear_boxes flag - delete all boxes
+            if ($request->has('clear_boxes') && $request->input('clear_boxes') === '1') {
+                foreach ($order->boxes as $box) {
+                    if ($box->hasGia()) {
+                        $box->deleteGia();
+                    }
+                }
+                $order->boxes()->delete();
+
+                $updateData['box_price'] = null;
+                $updateData['box_size'] = null;
+                $updateData['stripe_price_id'] = null;
+                $updateData['stripe_product_id'] = null;
+            }
             // Handle boxes array if provided
-            if ($request->has('boxes')) {
+            elseif ($request->has('boxes')) {
                 $boxes = $request->input('boxes');
                 $giaFiles = $request->file('boxes', []);
-
-                // Handle case where frontend sends '[]' string to indicate "delete all boxes"
-                if ($boxes === '[]' || $boxes === '') {
-                    $boxes = [];
-                }
 
                 if (is_array($boxes) && count($boxes) > 0) {
                     $totalBoxPrice = $this->updateBoxesWithGia($order, $boxes, $giaFiles);
