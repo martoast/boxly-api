@@ -260,13 +260,14 @@ class AdminOrderManagementController extends Controller
 
             DB::commit();
 
+            $boxesInput = $request->input('boxes');
             Log::info('Admin updated order', [
                 'order_id' => $order->id,
                 'order_number' => $order->order_number,
                 'admin_id' => $request->user()->id,
                 'fields_updated' => array_keys($request->all()),
                 'boxes_updated' => $request->has('boxes'),
-                'boxes_count' => $request->has('boxes') ? count($request->input('boxes', [])) : null,
+                'boxes_count' => is_array($boxesInput) ? count($boxesInput) : 0,
             ]);
 
             return response()->json([
