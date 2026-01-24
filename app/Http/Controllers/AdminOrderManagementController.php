@@ -217,6 +217,11 @@ class AdminOrderManagementController extends Controller
                 $boxes = $request->input('boxes');
                 $giaFiles = $request->file('boxes', []);
 
+                // Handle case where frontend sends '[]' string to indicate "delete all boxes"
+                if ($boxes === '[]' || $boxes === '') {
+                    $boxes = [];
+                }
+
                 if (is_array($boxes) && count($boxes) > 0) {
                     $totalBoxPrice = $this->updateBoxesWithGia($order, $boxes, $giaFiles);
 
