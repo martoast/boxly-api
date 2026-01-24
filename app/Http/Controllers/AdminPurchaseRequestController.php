@@ -277,6 +277,111 @@ class AdminPurchaseRequestController extends Controller
         }
     }
 
+    /**
+     * Merge multiple purchase requests from the same user into one.
+     * The request with the furthest status becomes the target.
+     * All items from source requests are moved to the target, then source requests are deleted.
+     */
+    public function mergePurchaseRequests(Request $request)
+    {
+        $request->validate([
+            'request_ids' => 'required|array|min:2',
+            'request_ids.*' => 'required|integer|exists:purchase_requests,id',
+        ]);
+
+        $purchaseRequests = PurchaseRequest::whereIn('id', $request->request_ids)
+            ->with(['items', 'user'])
+            ->get();
+
+        if ($purchaseRequests->count() < 2) {
+            return response()->json([
+                'success' => false,
+                'message' => 'At least 2 valid purchase requests are required to merge'
+            ], 400);
+        }
+
+        // Validate all requests belong to the same user
+        $userIds = $purchaseRequests->pluck('user_id')->unique();
+        if ($userIds->count() > 1) {
+            return response()->json([
+                'success' => false,
+                'message' => 'All purchase requests must belong to the same user'
+            ], 400);
+        }
+
+        // Status priority - furthest along wins (higher number = further along)
+        $statusPriority = [
+            PurchaseRequest::STATUS_PENDING_REVIEW => 0,
+            PurchaseRequest::STATUS_QUOTED => 1,
+            PurchaseRequest::STATUS_PAID => 2,
+            PurchaseRequest::STATUS_PURCHASED => 3,
+            PurchaseRequest::STATUS_REJECTED => -1,
+            PurchaseRequest::STATUS_CANCELLED => -1,
+        ];
+
+        // Find the target request (furthest status)
+        $targetRequest = $purchaseRequests->sortByDesc(function ($pr) use ($statusPriority) {
+            return $statusPriority[$pr->status] ?? 0;
+        })->first();
+
+        $sourceRequests = $purchaseRequests->filter(fn($pr) => $pr->id !== $targetRequest->id);
+
+        DB::beginTransaction();
+        try {
+            $movedItemsCount = 0;
+
+            // Move all items from source requests to target request
+            foreach ($sourceRequests as $sourceRequest) {
+                $itemsToMove = $sourceRequest->items;
+
+                foreach ($itemsToMove as $item) {
+                    $item->purchase_request_id = $targetRequest->id;
+                    $item->save();
+                    $movedItemsCount++;
+                }
+
+                // Void any open Stripe invoices on source requests
+                if ($sourceRequest->stripe_invoice_id && $sourceRequest->status !== PurchaseRequest::STATUS_PAID) {
+                    try {
+                        $stripe = Cashier::stripe();
+                        $invoice = $stripe->invoices->retrieve($sourceRequest->stripe_invoice_id);
+                        if ($invoice->status === 'open') {
+                            $stripe->invoices->voidInvoice($sourceRequest->stripe_invoice_id);
+                        }
+                    } catch (\Exception $e) {
+                        Log::warning('Could not void invoice during merge', ['id' => $sourceRequest->stripe_invoice_id]);
+                    }
+                }
+
+                // Delete the source request (items already moved)
+                $sourceRequest->delete();
+            }
+
+            DB::commit();
+
+            Log::info('Purchase requests merged successfully', [
+                'target_request_id' => $targetRequest->id,
+                'source_request_ids' => $sourceRequests->pluck('id')->toArray(),
+                'items_moved' => $movedItemsCount,
+                'user_id' => $targetRequest->user_id,
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => "Successfully merged " . ($sourceRequests->count() + 1) . " requests. Moved {$movedItemsCount} items.",
+                'data' => $targetRequest->fresh()->load(['user', 'items'])
+            ]);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Failed to merge purchase requests', ['error' => $e->getMessage()]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to merge purchase requests: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
     public function createQuote(Request $request, PurchaseRequest $purchaseRequest)
     {
         $validated = $request->validate([

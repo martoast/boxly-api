@@ -196,6 +196,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/', [AdminPurchaseRequestController::class, 'store']);
 
             Route::delete('/bulk', [AdminPurchaseRequestController::class, 'bulkDestroy']);
+            Route::post('/merge', [AdminPurchaseRequestController::class, 'mergePurchaseRequests']);
             Route::get('/{purchaseRequest}', [AdminPurchaseRequestController::class, 'show']);
             
             Route::put('/{purchaseRequest}', [AdminPurchaseRequestController::class, 'update']);
