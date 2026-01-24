@@ -184,9 +184,10 @@ class AdminOrderManagementController extends Controller
             'deposit_payment_link' => 'nullable|url|max:500',
 
             // Boxes support with per-box GIA fields
-            'boxes' => 'nullable|array',
+            // Note: 'boxes' can be an array of boxes OR empty string to clear all boxes
+            'boxes' => 'nullable',
             'boxes.*.id' => 'nullable|integer|exists:order_boxes,id',
-            'boxes.*.stripe_price_id' => 'required_with:boxes|string|max:255',
+            'boxes.*.stripe_price_id' => 'sometimes|string|max:255',
             'boxes.*.quantity' => 'nullable|integer|min:1|max:99',
             'boxes.*.length' => 'nullable|numeric|min:0|max:999999.99',
             'boxes.*.width' => 'nullable|numeric|min:0|max:999999.99',
@@ -212,22 +213,8 @@ class AdminOrderManagementController extends Controller
                 $updateData['is_rural'] = false;
             }
 
-            // Handle clear_boxes flag - delete all boxes
-            if ($request->has('clear_boxes') && $request->input('clear_boxes') === '1') {
-                foreach ($order->boxes as $box) {
-                    if ($box->hasGia()) {
-                        $box->deleteGia();
-                    }
-                }
-                $order->boxes()->delete();
-
-                $updateData['box_price'] = null;
-                $updateData['box_size'] = null;
-                $updateData['stripe_price_id'] = null;
-                $updateData['stripe_product_id'] = null;
-            }
-            // Handle boxes array if provided
-            elseif ($request->has('boxes')) {
+            // Handle boxes if provided (can be array of boxes or empty string to clear all)
+            if ($request->has('boxes')) {
                 $boxes = $request->input('boxes');
                 $giaFiles = $request->file('boxes', []);
 
