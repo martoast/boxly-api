@@ -426,11 +426,11 @@ class OrderController extends Controller
     {
         return [
             'name' => $order->user->name . ' (' . $order->tracking_number . ')',
-            'street' => '2220 Otay Lakes Rd.',
-            'suite' => 'Suite 502 #95',
-            'city' => 'Chula Vista',
+            'street' => '482 W. San Ysidro Blvd.',
+            'suite' => 'Apt. 123',
+            'city' => 'San Ysidro',
             'state' => 'CA',
-            'zip' => '91915',
+            'zip' => '92173',
             'country' => 'United States',
             'phone' => '+1 (619) 559-1920',
             'important_note' => 'MUST include tracking number: ' . $order->tracking_number,
