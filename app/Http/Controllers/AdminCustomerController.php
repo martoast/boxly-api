@@ -42,6 +42,10 @@ class AdminCustomerController extends Controller
             $query->doesntHave('orders');
         }
 
+        if ($request->has('has_orders') && $request->has_orders) {
+            $query->has('orders');
+        }
+
         $total = $query->count();
 
         $customers = $query->latest()->paginate($perPage);
