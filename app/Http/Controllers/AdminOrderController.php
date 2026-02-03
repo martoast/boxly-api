@@ -78,6 +78,79 @@ class AdminOrderController extends Controller
         ]);
     }
 
+    /**
+     * Export orders as CSV
+     */
+    public function export(Request $request)
+    {
+        $query = Order::with(['user', 'items', 'boxes']);
+
+        // If specific order IDs are provided, filter by those
+        if ($request->has('order_ids')) {
+            $query->whereIn('id', $request->order_ids);
+        } else {
+            // Otherwise apply filters
+            if ($request->has('status')) {
+                $query->status($request->status);
+            }
+
+            if ($request->has('search')) {
+                $search = $request->search;
+                $query->where(function ($q) use ($search) {
+                    $q->where('order_number', 'like', "%{$search}%")
+                        ->orWhere('tracking_number', 'like', "%{$search}%")
+                        ->orWhereHas('user', function ($q) use ($search) {
+                            $q->where('name', 'like', "%{$search}%")
+                                ->orWhere('email', 'like', "%{$search}%");
+                        });
+                });
+            }
+
+            if ($request->has('from_date')) {
+                $query->whereDate('created_at', '>=', $request->from_date);
+            }
+            if ($request->has('to_date')) {
+                $query->whereDate('created_at', '<=', $request->to_date);
+            }
+        }
+
+        $orders = $query->latest()->get();
+
+        // Filter by pending payment if requested (calculated field)
+        if ($request->has('pending_payment') && $request->pending_payment) {
+            $orders = $orders->filter(function ($order) {
+                if ($order->paid_at) return false;
+                $totalPrice = $order->boxes->sum('box_price') ?: ($order->box_price ?? 0);
+                if ($totalPrice == 0) return false;
+                $pending = $totalPrice - ($order->amount_paid ?? 0);
+                return $pending > 0;
+            });
+        }
+
+        $csv = "Order Number,Tracking Number,Customer,Email,Phone,Status,Items,Total Price,Amount Paid,Created\n";
+        foreach ($orders as $order) {
+            $totalPrice = $order->boxes->sum('box_price') ?: ($order->box_price ?? 0);
+            $csv .= sprintf(
+                "\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",%d,%.2f,%.2f,\"%s\"\n",
+                str_replace('"', '""', $order->order_number ?? ''),
+                str_replace('"', '""', $order->tracking_number ?? ''),
+                str_replace('"', '""', $order->user->name ?? ''),
+                str_replace('"', '""', $order->user->email ?? ''),
+                str_replace('"', '""', $order->user->phone ?? ''),
+                str_replace('"', '""', $order->status ?? ''),
+                $order->items->count(),
+                $totalPrice,
+                $order->amount_paid ?? 0,
+                $order->created_at->format('Y-m-d')
+            );
+        }
+
+        return response($csv, 200, [
+            'Content-Type' => 'text/csv',
+            'Content-Disposition' => 'attachment; filename="orders-' . now()->format('Y-m-d') . '.csv"',
+        ]);
+    }
+
     public function show(Order $order)
     {
         return response()->json([

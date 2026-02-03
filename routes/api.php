@@ -219,6 +219,7 @@ Route::middleware('auth:sanctum')->group(function () {
         
         Route::prefix('orders')->group(function () {
             Route::get('/', [AdminOrderController::class, 'index']);
+            Route::get('/export', [AdminOrderController::class, 'export']);
             Route::get('/ready-to-process', [AdminOrderController::class, 'readyToProcess']);
             Route::get('/ready-to-ship', [AdminOrderController::class, 'readyToShip']);
             Route::get('/ready-for-quote', [AdminQuoteController::class, 'ordersReadyForQuote']);
