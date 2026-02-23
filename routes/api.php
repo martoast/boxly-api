@@ -108,6 +108,8 @@ Route::middleware('auth:sanctum')->group(function () {
             'email_verified_at' => $user->email_verified_at,
             'created_at' => $user->created_at,
             'is_affiliate' => $user->isAffiliate(),
+            'total_orders' => $user->orders()->count(),
+            'form_1583_completed_at' => $user->form_1583_completed_at,
         ];
 
         // Include affiliate data if user is an affiliate

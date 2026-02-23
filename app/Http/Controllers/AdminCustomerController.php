@@ -263,6 +263,7 @@ class AdminCustomerController extends Controller
             'estado' => ['nullable', 'string', 'max:255'],
             'postal_code' => ['nullable', 'string', 'max:10'],
             'full_address' => ['nullable', 'string', 'max:1000'],
+            'form_1583_completed_at' => ['nullable', 'date'],
         ]);
 
         DB::beginTransaction();
@@ -281,6 +282,7 @@ class AdminCustomerController extends Controller
                 'estado',
                 'postal_code',
                 'full_address',
+                'form_1583_completed_at',
             ]));
 
             DB::commit();

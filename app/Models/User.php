@@ -43,6 +43,7 @@ class User extends Authenticatable
         'role',
         'user_type',
         'registration_source',
+        'form_1583_completed_at',
     ];
 
     /**
@@ -66,6 +67,7 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'registration_source' => 'array', // Automatically cast JSON to array
+            'form_1583_completed_at' => 'datetime',
         ];
     }
 
