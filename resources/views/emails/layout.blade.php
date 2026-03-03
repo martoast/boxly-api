@@ -80,7 +80,11 @@
         <div class="footer">
             <p>
                 {{ ($locale ?? 'es') === 'es' ? '¿Tienes preguntas? Contáctanos:' : 'Have questions? Contact us:' }}
-                <a href="mailto:contact@boxly.mx">contact@boxly.mx</a>
+            </p>
+            <p>
+                <a href="mailto:contact@boxly.mx">contact@boxly.mx</a> ·
+                <a href="https://wa.me/16195591910">WhatsApp</a> ·
+                <a href="tel:+16195591910">+1 (619) 559-1910</a>
             </p>
             <p style="font-size: 12px;">
                 © {{ date('Y') }} {{ config('app.name') }}. {{ ($locale ?? 'es') === 'es' ? 'Todos los derechos reservados.' : 'All rights reserved.' }}

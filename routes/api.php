@@ -25,6 +25,8 @@ use App\Http\Controllers\AdminPurchaseRequestController;
 use App\Http\Controllers\AdminOrderBoxController;
 use App\Http\Controllers\AffiliateController;
 use App\Http\Controllers\AdminAffiliateController;
+use App\Http\Controllers\AdminCampaignController;
+use App\Http\Controllers\CampaignTrackingController;
 
 /*
 |--------------------------------------------------------------------------
@@ -81,6 +83,10 @@ Route::prefix('shipment-tracking')->group(function () {
 });
 
 Route::post('/funnel-capture', [FunnelCaptureController::class, 'store']);
+
+// Campaign Tracking (public)
+Route::get('/campaign/pixel/{token}', [CampaignTrackingController::class, 'pixel']);
+Route::get('/campaign/click/{token}', [CampaignTrackingController::class, 'click']);
 
 Route::middleware(['web'])->group(function () {
     Route::get('/auth/{provider}/redirect', AuthSocialRedirectController::class)
@@ -300,6 +306,21 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/{affiliate}/conversions', [AdminAffiliateController::class, 'conversions']);
             Route::get('/{affiliate}/payouts', [AdminAffiliateController::class, 'payouts']);
             Route::post('/{affiliate}/record-payout', [AdminAffiliateController::class, 'recordPayout']);
+        });
+
+        Route::prefix('campaigns')->group(function () {
+            Route::get('/', [AdminCampaignController::class, 'index']);
+            Route::post('/', [AdminCampaignController::class, 'store']);
+            Route::get('/preview-audience', [AdminCampaignController::class, 'previewAudience']);
+            Route::get('/{campaign}', [AdminCampaignController::class, 'show']);
+            Route::put('/{campaign}', [AdminCampaignController::class, 'update']);
+            Route::delete('/{campaign}', [AdminCampaignController::class, 'destroy']);
+            Route::post('/{campaign}/start', [AdminCampaignController::class, 'start']);
+            Route::post('/{campaign}/pause', [AdminCampaignController::class, 'pause']);
+            Route::post('/{campaign}/resume', [AdminCampaignController::class, 'resume']);
+            Route::post('/{campaign}/cancel', [AdminCampaignController::class, 'cancel']);
+            Route::get('/{campaign}/recipients', [AdminCampaignController::class, 'recipients']);
+            Route::get('/{campaign}/preview-recipients', [AdminCampaignController::class, 'previewRecipients']);
         });
     });
 });

@@ -23,6 +23,7 @@ return [
         'orders/*',
         'admin/*',
         'admin/customers',
+        'admin/campaigns',
         'profile',
         'profile/*',
         'products',
@@ -41,7 +42,8 @@ return [
         'purchase-requests',
         'purchase-requests/*',
         'affiliate',
-        'affiliate/*'
+        'affiliate/*',
+        'campaign/*'
     ],
 
     'allowed_methods' => ['*'],
