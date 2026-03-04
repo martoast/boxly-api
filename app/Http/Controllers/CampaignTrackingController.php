@@ -30,8 +30,10 @@ class CampaignTrackingController extends Controller
     {
         $recipient = CampaignRecipient::with('campaign')->where('tracking_token', $token)->first();
 
+        $frontendUrl = config('app.frontend_url') ?: config('app.spa_url') ?: 'https://boxly.mx';
+
         if (!$recipient || !$recipient->campaign->link_url) {
-            return redirect(config('app.frontend_url', 'https://boxly.mx'));
+            return redirect($frontendUrl);
         }
 
         if (!$recipient->opened_at) {
