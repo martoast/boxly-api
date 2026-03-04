@@ -49,10 +49,10 @@ class CampaignEmail extends Mailable
             with: [
                 'body' => $this->campaign->body,
                 'linkUrl' => $this->campaign->link_url
-                    ? "{$appUrl}/api/campaign/click/{$this->recipient->tracking_token}"
+                    ? "{$appUrl}/campaign/click/{$this->recipient->tracking_token}"
                     : null,
                 'linkText' => $this->campaign->link_text ?? 'Learn More',
-                'pixelUrl' => "{$appUrl}/api/campaign/pixel/{$this->recipient->tracking_token}",
+                'pixelUrl' => "{$appUrl}/campaign/pixel/{$this->recipient->tracking_token}",
             ],
         );
     }
