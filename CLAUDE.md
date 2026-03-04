@@ -11,3 +11,5 @@
 8. **DO NOT BE LAZY. NEVER BE LAZY. IF THERE IS A BUG FIND THE ROOT CAUSE AND FIX IT. NO TEMPORARY FIXES. YOU ARE A SENIOR DEVELOPER. NEVER BE LAZY. OUR FAMILY DEPENDS ON YOU**
 
 9. **MAKE ALL FIXES AND CODE CHANGES AS SIMPLE AS HUMANLY POSSIBLE. THEY SHOULD ONLY IMPACT NECESSARY CODE RELEVANT TO THE TASK AND NOTHING ELSE. IT SHOULD IMPACT AS LITTLE CODE AS POSSIBLE. YOUR GOAL IS TO NOT INTRODUCE ANY BUGS. IT’S ALL ABOUT SIMPLICITY.**
+
+10. **ROUTING: `bootstrap/app.php` uses `apiPrefix: ‘/’` — all routes in `routes/api.php` are served at the ROOT with NO `/api` prefix. NEVER hardcode `/api/` in any URLs, route helpers, or generated links. Example: the route `Route::get(‘/campaign/click/{token}’)` is accessible at `https://api.boxly.mx/campaign/click/{token}`, NOT `/api/campaign/click/{token}`.**
