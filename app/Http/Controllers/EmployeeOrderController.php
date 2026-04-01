@@ -122,7 +122,8 @@ class EmployeeOrderController extends Controller
         $request->validate([
             'labels'    => 'required|array|min:1',
             'labels.*'  => 'required|image|mimes:jpeg,jpg,png,webp|max:10240',
-            'contents'  => 'required|image|mimes:jpeg,jpg,png,webp|max:10240',
+            'contents'  => 'required|array|min:1',
+            'contents.*'=> 'required|image|mimes:jpeg,jpg,png,webp|max:10240',
         ]);
 
         try {
@@ -148,35 +149,40 @@ class EmployeeOrderController extends Controller
                 ]);
             }
 
-            // Store contents photo
-            $contentsFile = $request->file('contents');
-            $filename     = "contents-" . time() . ".{$contentsFile->getClientOriginalExtension()}";
-            $path         = Storage::disk('spaces')->putFileAs($storagePath, $contentsFile, $filename, 'public');
-            $contentsUrl  = config('filesystems.disks.spaces.url') . '/' . $path;
+            // Store contents photos
+            $contentsUrl = null;
+            foreach ($request->file('contents') as $j => $contentsFile) {
+                $filename    = "contents-" . ($j + 1) . "-" . time() . ".{$contentsFile->getClientOriginalExtension()}";
+                $path        = Storage::disk('spaces')->putFileAs($storagePath, $contentsFile, $filename, 'public');
+                $contentsUrl = config('filesystems.disks.spaces.url') . '/' . $path;
 
-            OrderArrivalImage::create([
-                'order_id'  => $order->id,
-                'type'      => 'contents',
-                'path'      => $path,
-                'url'       => $contentsUrl,
-                'filename'  => $contentsFile->getClientOriginalName(),
-                'mime_type' => $contentsFile->getClientMimeType(),
-                'size'      => $contentsFile->getSize(),
-            ]);
+                OrderArrivalImage::create([
+                    'order_id'  => $order->id,
+                    'type'      => 'contents',
+                    'path'      => $path,
+                    'url'       => $contentsUrl,
+                    'filename'  => $contentsFile->getClientOriginalName(),
+                    'mime_type' => $contentsFile->getClientMimeType(),
+                    'size'      => $contentsFile->getSize(),
+                ]);
+            }
 
-            // Set arrival_image_url to contents photo so admin panel can see it
+            // Set arrival_image_url to last contents photo so admin panel can see it
+            $lastContents = $request->file('contents');
+            $lastContents = end($lastContents);
             $order->update([
                 'arrival_image_path'      => $path,
-                'arrival_image_filename'  => $contentsFile->getClientOriginalName(),
-                'arrival_image_mime_type' => $contentsFile->getClientMimeType(),
-                'arrival_image_size'      => $contentsFile->getSize(),
+                'arrival_image_filename'  => $lastContents->getClientOriginalName(),
+                'arrival_image_mime_type' => $lastContents->getClientMimeType(),
+                'arrival_image_size'      => $lastContents->getSize(),
                 'arrival_image_url'       => $contentsUrl,
             ]);
 
             Log::info('Employee uploaded arrival images', [
-                'order_id'    => $order->id,
-                'employee_id' => $request->user()->id,
-                'label_count' => count($request->file('labels')),
+                'order_id'       => $order->id,
+                'employee_id'    => $request->user()->id,
+                'label_count'    => count($request->file('labels')),
+                'contents_count' => count($request->file('contents')),
             ]);
 
             return response()->json([
