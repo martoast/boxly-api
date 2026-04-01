@@ -27,6 +27,7 @@ use App\Http\Controllers\AffiliateController;
 use App\Http\Controllers\AdminAffiliateController;
 use App\Http\Controllers\AdminCampaignController;
 use App\Http\Controllers\CampaignTrackingController;
+use App\Http\Controllers\EmployeeOrderController;
 
 /*
 |--------------------------------------------------------------------------
@@ -321,6 +322,18 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/{campaign}/cancel', [AdminCampaignController::class, 'cancel']);
             Route::get('/{campaign}/recipients', [AdminCampaignController::class, 'recipients']);
             Route::get('/{campaign}/preview-recipients', [AdminCampaignController::class, 'previewRecipients']);
+        });
+
+        /*
+        |--------------------------------------------------------------------------
+        | Employee Routes (Mauricio — warehouse operations)
+        |--------------------------------------------------------------------------
+        */
+        Route::middleware('employee')->prefix('employee')->group(function () {
+            Route::get('/orders', [EmployeeOrderController::class, 'index']);
+            Route::get('/orders/{order}', [EmployeeOrderController::class, 'show']);
+            Route::put('/orders/{order}/items/{item}/arrived', [EmployeeOrderController::class, 'markItemArrived']);
+            Route::post('/orders/{order}/arrival-image', [EmployeeOrderController::class, 'uploadArrivalImage']);
         });
     });
 });

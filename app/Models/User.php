@@ -19,6 +19,10 @@ class User extends Authenticatable
     const TYPE_BUSINESS = 'business';
     const TYPE_SHOPPER = 'shopper';
 
+    const ROLE_CUSTOMER = 'customer';
+    const ROLE_ADMIN = 'admin';
+    const ROLE_EMPLOYEE = 'employee';
+
     /**
      * The attributes that are mass assignable.
      *
@@ -214,6 +218,11 @@ class User extends Authenticatable
     public function isAdmin(): bool
     {
         return $this->role === 'admin';
+    }
+
+    public function isEmployee(): bool
+    {
+        return $this->role === 'employee';
     }
 
     /**
