@@ -324,17 +324,18 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/{campaign}/preview-recipients', [AdminCampaignController::class, 'previewRecipients']);
         });
 
-        /*
-        |--------------------------------------------------------------------------
-        | Employee Routes (Mauricio — warehouse operations)
-        |--------------------------------------------------------------------------
-        */
-        Route::middleware('employee')->prefix('employee')->group(function () {
-            Route::get('/orders', [EmployeeOrderController::class, 'index']);
-            Route::get('/orders/{order}', [EmployeeOrderController::class, 'show']);
-            Route::put('/orders/{order}/items/{item}/arrived', [EmployeeOrderController::class, 'markItemArrived']);
-            Route::post('/orders/{order}/arrival-image', [EmployeeOrderController::class, 'uploadArrivalImage']);
-        });
+    });
+
+    /*
+    |--------------------------------------------------------------------------
+    | Employee Routes (Mauricio — warehouse operations)
+    |--------------------------------------------------------------------------
+    */
+    Route::middleware('employee')->prefix('employee')->group(function () {
+        Route::get('/orders', [EmployeeOrderController::class, 'index']);
+        Route::get('/orders/{order}', [EmployeeOrderController::class, 'show']);
+        Route::put('/orders/{order}/items/{item}/arrived', [EmployeeOrderController::class, 'markItemArrived']);
+        Route::post('/orders/{order}/arrival-image', [EmployeeOrderController::class, 'uploadArrivalImage']);
     });
 });
 
