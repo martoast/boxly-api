@@ -642,6 +642,11 @@ class Order extends Model
         return $this->boxes->filter(fn($box) => $box->hasGia())->count();
     }
 
+    public function arrivalImages(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(OrderArrivalImage::class);
+    }
+
     /**
      * Check if the order has an arrival image uploaded.
      */

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Order;
+use App\Models\OrderArrivalImage;
 use App\Models\OrderItem;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -58,7 +59,7 @@ class EmployeeOrderController extends Controller
             ], 403);
         }
 
-        $order->load(['user:id,name,phone', 'items']);
+        $order->load(['user:id,name,phone', 'items', 'arrivalImages']);
         $order->all_items_arrived = $order->allItemsArrived();
 
         return response()->json([
@@ -122,9 +123,10 @@ class EmployeeOrderController extends Controller
     }
 
     /**
-     * Upload arrival image — triggers packages_complete status + customer email.
+     * Upload arrival images (label photos + contents photo).
+     * Triggers packages_complete status and customer email.
      */
-    public function uploadArrivalImage(Request $request, Order $order)
+    public function uploadArrivalImages(Request $request, Order $order)
     {
         if ($order->status !== Order::STATUS_AWAITING_PACKAGES) {
             return response()->json([
@@ -136,40 +138,70 @@ class EmployeeOrderController extends Controller
         if (!$order->allItemsArrived()) {
             return response()->json([
                 'success' => false,
-                'message' => 'All items must be marked as arrived before uploading the arrival image.',
+                'message' => 'All items must be marked as arrived before uploading photos.',
             ], 400);
         }
 
         $request->validate([
-            'arrival_image' => 'required|image|mimes:jpeg,jpg,png,webp|max:10240',
+            'labels'    => 'required|array|min:1',
+            'labels.*'  => 'required|image|mimes:jpeg,jpg,png,webp|max:10240',
+            'contents'  => 'required|image|mimes:jpeg,jpg,png,webp|max:10240',
         ]);
 
         try {
             $user = $order->user;
             $userName = Str::slug($user->name);
-            $file = $request->file('arrival_image');
-
             $storagePath = "users/{$userName}-{$user->id}/orders/{$order->order_number}";
-            $extension = $file->getClientOriginalExtension();
-            $filename = "arrival-image-" . time() . ".{$extension}";
+            $contentsUrl = null;
 
-            $uploadedPath = Storage::disk('spaces')->putFileAs($storagePath, $file, $filename, 'public');
-            $url = config('filesystems.disks.spaces.url') . '/' . $uploadedPath;
+            // Store label photos
+            foreach ($request->file('labels') as $i => $file) {
+                $filename = "label-" . ($i + 1) . "-" . time() . ".{$file->getClientOriginalExtension()}";
+                $path = Storage::disk('spaces')->putFileAs($storagePath, $file, $filename, 'public');
+                $url  = config('filesystems.disks.spaces.url') . '/' . $path;
 
+                OrderArrivalImage::create([
+                    'order_id'  => $order->id,
+                    'type'      => 'label',
+                    'path'      => $path,
+                    'url'       => $url,
+                    'filename'  => $file->getClientOriginalName(),
+                    'mime_type' => $file->getClientMimeType(),
+                    'size'      => $file->getSize(),
+                ]);
+            }
+
+            // Store contents photo
+            $contentsFile = $request->file('contents');
+            $filename     = "contents-" . time() . ".{$contentsFile->getClientOriginalExtension()}";
+            $path         = Storage::disk('spaces')->putFileAs($storagePath, $contentsFile, $filename, 'public');
+            $contentsUrl  = config('filesystems.disks.spaces.url') . '/' . $path;
+
+            OrderArrivalImage::create([
+                'order_id'  => $order->id,
+                'type'      => 'contents',
+                'path'      => $path,
+                'url'       => $contentsUrl,
+                'filename'  => $contentsFile->getClientOriginalName(),
+                'mime_type' => $contentsFile->getClientMimeType(),
+                'size'      => $contentsFile->getSize(),
+            ]);
+
+            // Update order — set arrival_image_url to contents photo for admin panel compat
             $order->update([
-                'arrival_image_path'      => $uploadedPath,
-                'arrival_image_filename'  => $file->getClientOriginalName(),
-                'arrival_image_mime_type' => $file->getClientMimeType(),
-                'arrival_image_size'      => $file->getSize(),
-                'arrival_image_url'       => $url,
+                'arrival_image_path'      => $path,
+                'arrival_image_filename'  => $contentsFile->getClientOriginalName(),
+                'arrival_image_mime_type' => $contentsFile->getClientMimeType(),
+                'arrival_image_size'      => $contentsFile->getSize(),
+                'arrival_image_url'       => $contentsUrl,
                 'total_weight'            => $order->calculateTotalWeight(),
                 'status'                  => Order::STATUS_PACKAGES_COMPLETE,
             ]);
 
-            Log::info('Employee uploaded arrival image', [
-                'order_id'    => $order->id,
-                'employee_id' => $request->user()->id,
-                'url'         => $url,
+            Log::info('Employee uploaded arrival images', [
+                'order_id'      => $order->id,
+                'employee_id'   => $request->user()->id,
+                'label_count'   => count($request->file('labels')),
             ]);
 
             try {
@@ -180,12 +212,12 @@ class EmployeeOrderController extends Controller
 
             return response()->json([
                 'success' => true,
-                'message' => 'Arrival image uploaded. Customer has been notified.',
-                'data'    => $order->fresh()->load(['user', 'items']),
+                'message' => 'Photos uploaded. Customer has been notified.',
+                'data'    => $order->fresh()->load(['user', 'items', 'arrivalImages']),
             ]);
 
         } catch (\Exception $e) {
-            Log::error('Employee failed to upload arrival image', ['error' => $e->getMessage()]);
+            Log::error('Employee failed to upload arrival images', ['error' => $e->getMessage()]);
             return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }
     }
