@@ -334,7 +334,6 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::middleware('employee')->prefix('employee')->group(function () {
         Route::get('/orders', [EmployeeOrderController::class, 'index']);
         Route::get('/orders/{order}', [EmployeeOrderController::class, 'show']);
-        Route::put('/orders/{order}/items/{item}/arrived', [EmployeeOrderController::class, 'markItemArrived']);
         Route::post('/orders/{order}/arrival-images', [EmployeeOrderController::class, 'uploadArrivalImages']);
     });
 });

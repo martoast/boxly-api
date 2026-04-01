@@ -155,7 +155,7 @@ class AdminOrderController extends Controller
     {
         return response()->json([
             'success' => true,
-            'data' => $order->load(['user', 'items', 'boxes'])
+            'data' => $order->load(['user', 'items', 'boxes', 'arrivalImages'])
         ]);
     }
 

@@ -7,7 +7,6 @@ use App\Models\OrderArrivalImage;
 use App\Models\OrderItem;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -52,15 +51,7 @@ class EmployeeOrderController extends Controller
      */
     public function show(Order $order)
     {
-        if ($order->status !== Order::STATUS_AWAITING_PACKAGES) {
-            return response()->json([
-                'success' => false,
-                'message' => 'This order is not awaiting packages.',
-            ], 403);
-        }
-
         $order->load(['user:id,name,phone', 'items', 'arrivalImages']);
-        $order->all_items_arrived = $order->allItemsArrived();
 
         return response()->json([
             'success' => true,
@@ -128,20 +119,6 @@ class EmployeeOrderController extends Controller
      */
     public function uploadArrivalImages(Request $request, Order $order)
     {
-        if ($order->status !== Order::STATUS_AWAITING_PACKAGES) {
-            return response()->json([
-                'success' => false,
-                'message' => 'This order is not awaiting packages.',
-            ], 422);
-        }
-
-        if (!$order->allItemsArrived()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'All items must be marked as arrived before uploading photos.',
-            ], 400);
-        }
-
         $request->validate([
             'labels'    => 'required|array|min:1',
             'labels.*'  => 'required|image|mimes:jpeg,jpg,png,webp|max:10240',
@@ -187,32 +164,24 @@ class EmployeeOrderController extends Controller
                 'size'      => $contentsFile->getSize(),
             ]);
 
-            // Update order — set arrival_image_url to contents photo for admin panel compat
+            // Set arrival_image_url to contents photo so admin panel can see it
             $order->update([
                 'arrival_image_path'      => $path,
                 'arrival_image_filename'  => $contentsFile->getClientOriginalName(),
                 'arrival_image_mime_type' => $contentsFile->getClientMimeType(),
                 'arrival_image_size'      => $contentsFile->getSize(),
                 'arrival_image_url'       => $contentsUrl,
-                'total_weight'            => $order->calculateTotalWeight(),
-                'status'                  => Order::STATUS_PACKAGES_COMPLETE,
             ]);
 
             Log::info('Employee uploaded arrival images', [
-                'order_id'      => $order->id,
-                'employee_id'   => $request->user()->id,
-                'label_count'   => count($request->file('labels')),
+                'order_id'    => $order->id,
+                'employee_id' => $request->user()->id,
+                'label_count' => count($request->file('labels')),
             ]);
-
-            try {
-                Mail::to($user)->queue(new \App\Mail\AllPackagesArrived($order->fresh()));
-            } catch (\Exception $e) {
-                Log::error('Failed to queue all packages arrived email', ['error' => $e->getMessage()]);
-            }
 
             return response()->json([
                 'success' => true,
-                'message' => 'Photos uploaded. Customer has been notified.',
+                'message' => 'Photos uploaded successfully.',
                 'data'    => $order->fresh()->load(['user', 'items', 'arrivalImages']),
             ]);
 

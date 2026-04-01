@@ -174,7 +174,7 @@ class OrderController extends Controller
             ], 403);
         }
 
-        $order->load('items');
+        $order->load(['items', 'arrivalImages']);
 
         // Add metadata about what the user can do with this order
         $orderData = $order->toArray();
