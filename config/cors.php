@@ -43,7 +43,8 @@ return [
         'purchase-requests/*',
         'affiliate',
         'affiliate/*',
-        'campaign/*'
+        'campaign/*',
+        'employee/*',
     ],
 
     'allowed_methods' => ['*'],
