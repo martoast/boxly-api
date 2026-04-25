@@ -28,6 +28,8 @@ use App\Http\Controllers\AdminAffiliateController;
 use App\Http\Controllers\AdminCampaignController;
 use App\Http\Controllers\CampaignTrackingController;
 use App\Http\Controllers\EmployeeOrderController;
+use App\Http\Controllers\StoreProductController;
+use App\Http\Controllers\Admin\AdminProductController;
 
 /*
 |--------------------------------------------------------------------------
@@ -44,9 +46,16 @@ Route::get('/', function () {
     return response()->json(['status' => 'ok']);
 });
 
-// Public Product Routes
+// Public Product Routes (Stripe boxes)
 Route::get('/products', [ProductController::class, 'index']);
 Route::get('/products/{priceId}', [ProductController::class, 'show']); // Added this
+
+// Public Boxly Store Routes (anyone can browse + view product detail)
+Route::prefix('store')->group(function () {
+    Route::get('/products', [StoreProductController::class, 'index']);
+    Route::get('/products/{slug}', [StoreProductController::class, 'show']);
+    Route::get('/categories', [StoreProductController::class, 'categories']);
+});
 
 Route::get('/user-types', function () {
     return response()->json([
@@ -307,6 +316,18 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/{affiliate}/conversions', [AdminAffiliateController::class, 'conversions']);
             Route::get('/{affiliate}/payouts', [AdminAffiliateController::class, 'payouts']);
             Route::post('/{affiliate}/record-payout', [AdminAffiliateController::class, 'recordPayout']);
+        });
+
+        // Boxly Store — Admin Product Management
+        Route::prefix('products')->group(function () {
+            Route::get('/', [AdminProductController::class, 'index']);
+            Route::post('/', [AdminProductController::class, 'store']);
+            Route::get('/expiring', [AdminProductController::class, 'expiring']);
+            Route::get('/{product}', [AdminProductController::class, 'show']);
+            Route::put('/{product}', [AdminProductController::class, 'update']);
+            Route::delete('/{product}', [AdminProductController::class, 'destroy']);
+            Route::post('/{product}/images', [AdminProductController::class, 'uploadImages']);
+            Route::delete('/{product}/images/{index}', [AdminProductController::class, 'deleteImage']);
         });
 
         Route::prefix('campaigns')->group(function () {
