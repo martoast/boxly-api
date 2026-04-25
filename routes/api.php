@@ -29,6 +29,8 @@ use App\Http\Controllers\AdminCampaignController;
 use App\Http\Controllers\CampaignTrackingController;
 use App\Http\Controllers\EmployeeOrderController;
 use App\Http\Controllers\StoreProductController;
+use App\Http\Controllers\MarketplaceCheckoutController;
+use App\Http\Controllers\MarketplaceOrderController;
 use App\Http\Controllers\Admin\AdminProductController;
 
 /*
@@ -174,6 +176,16 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/', [PurchaseRequestController::class, 'store']);
         Route::get('/{purchaseRequest}', [PurchaseRequestController::class, 'show']);
         Route::put('/{purchaseRequest}', [PurchaseRequestController::class, 'update']);
+    });
+
+    // Boxly Store — Customer marketplace orders + checkout
+    Route::prefix('marketplace')->group(function () {
+        Route::post('/checkout', [MarketplaceCheckoutController::class, 'create']);
+        Route::get('/orders', [MarketplaceOrderController::class, 'index']);
+        Route::get('/orders/current', [MarketplaceOrderController::class, 'current']);
+        Route::get('/orders/{marketplaceOrder}', [MarketplaceOrderController::class, 'show']);
+        Route::post('/orders/{marketplaceOrder}/request-shipment', [MarketplaceOrderController::class, 'requestShipment']);
+        Route::post('/orders/{marketplaceOrder}/cancel', [MarketplaceOrderController::class, 'cancel']);
     });
 
     Route::prefix('orders')->group(function () {
