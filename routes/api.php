@@ -32,6 +32,7 @@ use App\Http\Controllers\StoreProductController;
 use App\Http\Controllers\MarketplaceCheckoutController;
 use App\Http\Controllers\MarketplaceOrderController;
 use App\Http\Controllers\Admin\AdminProductController;
+use App\Http\Controllers\Admin\AdminMarketplaceOrderController;
 
 /*
 |--------------------------------------------------------------------------
@@ -328,6 +329,19 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/{affiliate}/conversions', [AdminAffiliateController::class, 'conversions']);
             Route::get('/{affiliate}/payouts', [AdminAffiliateController::class, 'payouts']);
             Route::post('/{affiliate}/record-payout', [AdminAffiliateController::class, 'recordPayout']);
+        });
+
+        // Boxly Store — Admin Marketplace Order Management
+        Route::prefix('marketplace-orders')->group(function () {
+            Route::get('/', [AdminMarketplaceOrderController::class, 'index']);
+            Route::get('/{marketplaceOrder}', [AdminMarketplaceOrderController::class, 'show']);
+            Route::put('/{marketplaceOrder}/items/{item}/mark-received', [AdminMarketplaceOrderController::class, 'markItemReceived']);
+            Route::put('/{marketplaceOrder}/items/{item}/unmark-received', [AdminMarketplaceOrderController::class, 'unmarkItemReceived']);
+            Route::post('/{marketplaceOrder}/assign-box', [AdminMarketplaceOrderController::class, 'assignBox']);
+            Route::post('/{marketplaceOrder}/upload-gia', [AdminMarketplaceOrderController::class, 'uploadGia']);
+            Route::post('/{marketplaceOrder}/mark-shipped', [AdminMarketplaceOrderController::class, 'markShipped']);
+            Route::post('/{marketplaceOrder}/mark-delivered', [AdminMarketplaceOrderController::class, 'markDelivered']);
+            Route::post('/{marketplaceOrder}/refund', [AdminMarketplaceOrderController::class, 'refund']);
         });
 
         // Boxly Store — Admin Product Management
