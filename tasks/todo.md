@@ -1,234 +1,470 @@
-# Task: Add Accounts Receivable to Unified Dashboard
+# Boxly Store — API Implementation Plan
 
-## Problem
-Need to track outstanding payments (accounts receivable) in the admin dashboard. These are orders where:
-- Order has a box selected (so there's a price)
-- Final payment (`paid_at`) has NOT been made yet
-- Order is not cancelled
+## Vision
 
-This represents money owed to the business that should be displayed alongside profits and expenses.
+Add the **Boxly Store** — a regular e-commerce storefront inside Boxly where customers browse and buy products that Boxly stocks. Boxly is the only seller. Admin team uploads and manages all products via the existing admin panel.
 
-## Solution
-Add an `accounts_receivable` field to the financial data in `UnifiedAdminDashboardController`. This is a simple addition to the existing `getFinancialData()` method.
+**The Boxly twist on standard e-commerce:** customers can buy a little now and add more later. Each purchase is added to their **open marketplace order** (the same model as forwarding orders — items accumulate at our San Diego warehouse until the customer is ready to ship). When they decide to ship, Boxly consolidates everything into one box and invoices the shipping. Bigger box, cheaper per-kg.
 
-## Todo
-- [x] Add accounts receivable calculation to `getFinancialData()` method
-- [x] Include AR in both period-specific and "all time" modes
-- [x] Return breakdown: total AR amount and count of orders
-- [x] Add Accounts Receivable card to frontend dashboard
-- [x] Add translations for Accounts Receivable
+This is *not* a wholesale marketplace, *not* a B2B platform — it's a regular online store with one elegant difference: orders accumulate, then ship as a consolidated box.
 
-## Files Changed
+**Two parties:**
+1. **Boxly admin** — uploads and manages products
+2. **Customers** — browse, add to cart, pay for products, accumulate items, request shipment when ready
 
-### Backend (boxly-api)
-- `app/Http/Controllers/UnifiedAdminDashboardController.php`
+**No minimum order to buy.** Customers can purchase anything any time. The shipping cost (which box) is only determined when they request shipment, after Boxly consolidates whatever they've accumulated. If they only have a tiny bit, it ships in an XS box. If they keep buying, it consolidates into an L or XL.
 
-### Frontend (app)
-- `pages/app/admin/dashboard/index.vue`
+Marketplace orders flow through the same warehouse pipeline as forwarding orders (receive → accumulate → pack → assign box → invoice shipping → DHL).
 
-## Review
+---
 
-### Backend Changes
+## Architectural Decision
 
-**UnifiedAdminDashboardController.php** - Added accounts receivable tracking:
+**New models — do NOT extend the existing `Order` model.**
 
-1. Added `calculateAccountsReceivable()` helper method (lines 964-998):
-   - Queries orders where `paid_at` is NULL and status is not cancelled
-   - Filters to orders that have boxes (either in `order_boxes` table or legacy `box_price` field)
-   - Uses the existing `calculateTotalBoxPrice()` method from Order model
-   - Returns `total` (amount) and `count` (number of orders)
+The existing `Order` model is tightly coupled to package forwarding (customer-supplied tracking, GIA per-box, arrival images, retailer scraping). Mixing marketplace concerns into it would create weeks of conditional branching.
 
-2. Added AR calculation call in financial data section (line 473)
+**New models for the marketplace:**
+- `Product` — catalog item managed by Boxly admin
+- `MarketplaceOrder` — purchase record (what the buyer made)
+- `MarketplaceOrderItem` — line items
 
-3. Added `accounts_receivable` to both "all time" and period-specific return blocks
+The fulfillment layer (admin packing UI, GIA upload, DHL workflow) is reused at the **operational** level, not the data-model level. Admin gets a unified packing queue that includes both forwarding orders and marketplace orders.
 
-### Frontend Changes
+---
 
-**pages/app/admin/dashboard/index.vue**:
+## What's already in place we'll reuse
 
-1. Changed financial overview grid from 3 to 4 columns
-2. Added new Accounts Receivable card with:
-   - Orange gradient styling (consistent with existing card design)
-   - Clock icon to represent pending payments
-   - Total amount display
-   - Count of unpaid orders
-3. Added translations:
-   - `accountsReceivable`: "Accounts Receivable" / "Cuentas por Cobrar"
-   - `unpaidOrders`: "unpaid orders" / "órdenes pendientes"
+| Existing infrastructure | Reuse for |
+|---|---|
+| Laravel Cashier + Stripe webhooks | Marketplace checkout payment + shipping invoice |
+| `StripeWebhookController` metadata routing | Add `marketplace_purchase` + `marketplace_shipping` types |
+| DigitalOcean Spaces upload pattern | Product images |
+| Order status state-machine UX | Marketplace order timeline (similar lifecycle) |
+| Existing `admin` middleware | Product CRUD + marketplace order management |
+| Existing image compression on employee upload page | Product image uploads (admin on slow connections) |
 
-### API Response Format
-```json
-{
-  "financial": {
-    "accounts_receivable": {
-      "total": 12500.00,
-      "count": 15
-    }
-  }
-}
+---
+
+## Data Model
+
+### Phase 1
+
+#### `products` table
+```
+id
+name
+slug                unique
+description         text
+sku                 string nullable (Boxly internal SKU)
+source_url          string nullable (admin-only — link to where Boxly buys this; will eventually power auto-data-extraction)
+
+# Pricing
+price_cents         int  (MXN, set by admin)
+
+# Physical — used to estimate which box the order will need
+weight_kg           decimal(6,2)  REQUIRED
+length_cm           decimal(6,1)  REQUIRED
+width_cm            decimal(6,1)  REQUIRED
+height_cm           decimal(6,1)  REQUIRED
+
+stock               int  default 0
+status              enum: draft, active, inactive, sold_out
+available_until     timestamp nullable  (7-day clearance window)
+category            string nullable
+images              json (array of {path, url, order})
+
+created_at, updated_at
 ```
 
-### How It Works
-- Orders with boxes that haven't been fully paid represent money owed
-- **Subtracts any deposits already paid** to show true outstanding amount
-- Formula: `box_price - deposit_paid = accounts_receivable`
-- Displayed as a 4th card in the financial overview section
-- Shows both the total amount and the number of orders pending payment
+**Notes:**
+- `source_url` is admin-only — never exposed to customers. Future use: auto-fetch product data when admin pastes the URL.
+- Weight/dimensions drive cart's box estimate.
 
----
+#### `marketplace_orders` table
 
-# Feature: Simplified Package Arrival + Proof Image (API)
+A marketplace_order represents **a shipment-in-progress**. A customer has at most one in `collecting` state at a time. Each Stripe Checkout adds items to that open order. When the customer requests shipment, the order moves through the lifecycle.
 
-## Overview
-Backend changes to support simplified arrival flow with proof image:
-1. Add arrival image fields to orders table
-2. Create endpoint to upload arrival image
-3. Update packages_complete trigger to require arrival image
-4. Send email with arrival image to customer
-
----
-
-## Tasks
-
-### Phase 1: Database & Model
-- [x] 1. Create migration to add arrival image fields to orders table
-- [x] 2. Update Order model with arrival image methods
-
-### Phase 2: Controller & Endpoint
-- [x] 3. Add `uploadArrivalImage` method to AdminOrderController
-- [x] 4. Add route for the new endpoint: `POST /admin/orders/{order}/arrival-image`
-
-### Phase 3: Email Notification
-- [x] 5. Create new email template `all-packages-arrived.blade.php`
-- [x] 6. Create Mailable class `AllPackagesArrived`
-
-### Phase 4: Cleanup
-- [x] 7. Update `checkAndUpdatePackageStatus()` to NOT auto-trigger packages_complete
-- [x] 8. Update `markAsComplete()` to NOT auto-trigger packages_complete
-
----
-
-## Review
-
-### Files Created
-
-**`database/migrations/2026_01_13_071425_add_arrival_image_to_orders_table.php`**
-- Adds 5 new columns to orders table:
-  - `arrival_image_path`, `arrival_image_filename`, `arrival_image_mime_type`
-  - `arrival_image_size`, `arrival_image_url`
-
-**`app/Mail/AllPackagesArrived.php`**
-- New Mailable class for arrival notification email
-- Includes order, user, items list, and arrival image URL
-- Multi-language support (ES/EN)
-
-**`resources/views/emails/orders/all-packages-arrived.blade.php`**
-- Email template showing:
-  - Arrival image
-  - List of all items received
-  - "What's next" section explaining the process
-  - CTA to view order
-
-### Files Modified
-
-**`app/Models/Order.php`**
-- Added fillable fields for arrival image
-- Added cast for `arrival_image_size`
-- Added `hasArrivalImage()` method
-- Added `getArrivalImageFullUrlAttribute()` accessor
-- Added `deleteArrivalImage()` method
-- Modified `checkAndUpdatePackageStatus()` - no longer auto-triggers packages_complete
-- Modified `markAsComplete()` - no longer auto-triggers packages_complete
-
-**`app/Http/Controllers/AdminOrderController.php`**
-- Added `uploadArrivalImage()` method:
-  - Validates image file (jpeg, jpg, png, webp, max 10MB)
-  - Checks all items are arrived
-  - Stores image in DigitalOcean Spaces
-  - Updates order status to `packages_complete`
-  - Queues `AllPackagesArrived` email to customer
-
-**`routes/api.php`**
-- Added route: `POST /admin/orders/{order}/arrival-image`
-
-### Logic Change
-
-Previously: `packages_complete` status was auto-triggered when all items were marked as arrived.
-
-Now: `packages_complete` status is ONLY triggered when admin uploads the arrival proof image. This ensures:
-1. Admin has physically verified all items
-2. Customer receives a photo proof
-3. Better accountability and communication
-
----
-
-# Feature: Order Consolidation (API)
-
-## Overview
-Allow admins to consolidate multiple orders from the same user into a single order. This fixes the issue where users create multiple orders instead of adding all items to one order.
-
-## Requirements
-- Orders must belong to the same user (user_id) to be consolidated
-- All items from source orders get merged into target order
-- Source orders are deleted after consolidation
-- Order with furthest status becomes target (delivered > shipped > paid > awaiting_packages)
-
-## Status Priority (furthest wins)
-1. `delivered` (highest)
-2. `shipped`
-3. `paid`
-4. `processing`
-5. `awaiting_payment`
-6. `packages_complete`
-7. `awaiting_packages` (lowest)
-
----
-
-## Tasks
-
-- [ ] 1. Create `consolidateOrders` method in AdminOrderController
-  - Accepts: `order_ids[]` (array of order IDs to consolidate)
-  - Validates all orders belong to same user
-  - Auto-selects target order based on furthest status
-  - Moves all items from source orders to target order
-  - Deletes source orders
-  - Returns updated target order with items
-
-- [x] 2. Add route: `POST /admin/orders/merge`
-
----
-
-## Review
-
-### Files Modified
-
-**`routes/api.php`**
-- Added route: `POST /admin/orders/merge` → `AdminOrderController@mergeOrders`
-
-**`app/Http/Controllers/AdminOrderController.php`**
-- Added `mergeOrders()` method with:
-  - Validation: requires 2+ order IDs, all must belong to same user
-  - Status priority logic to auto-select target order (furthest status wins)
-  - Moves all items from source orders to target order
-  - Deletes source orders (including boxes, GIA files, arrival images)
-  - Returns updated target order with success message
-
-### Status Priority (furthest wins)
-1. `delivered` (highest)
-2. `shipped`
-3. `paid`
-4. `processing`
-5. `awaiting_payment`
-6. `packages_complete`
-7. `awaiting_packages`
-8. `collecting` (lowest)
-9. `cancelled` (-1, never selected)
-
-### API Response
-```json
-{
-  "success": true,
-  "message": "Successfully merged 3 orders. Moved 5 items.",
-  "data": { /* target order with items and boxes */ }
-}
 ```
+id
+order_number              unique, auto-generated (e.g. "MKT-A4F92")
+user_id                   FK users.id
+
+status                    enum:
+                            collecting          → items being added; customer can keep buying
+                            ready_to_ship       → customer has requested shipment; admin sees in queue
+                            packing             → admin is packing; some items received, some pending
+                            awaiting_shipping_payment → admin assigned box, invoice sent
+                            shipping_paid       → customer paid shipping
+                            shipped             → out the door
+                            delivered           → received in MX
+                            (cancelled, refunded — at any earlier stage)
+
+# Cumulative items payment — sum of all Checkouts that contributed
+items_subtotal_cents      int (MXN, grows as customer adds purchases)
+items_paid_at             timestamp nullable (set when first purchase paid)
+
+# Box assignment (post-consolidation, by admin)
+box_size                  enum: XS, S, M, L, XL  nullable
+box_price_cents           int nullable
+box_summary               json nullable (admin's packing notes)
+
+# Shipping payment (after consolidation)
+shipping_invoice_id       string nullable (Stripe)
+shipping_payment_link     string nullable
+shipping_paid_at          timestamp nullable
+
+# Delivery
+shipping_address          json (snapshot at checkout)
+guia_number               string nullable
+gia_path / gia_url        string nullable
+estimated_delivery_date   date nullable
+actual_delivery_date      date nullable
+shipped_at                timestamp nullable
+
+# Refund
+refunded_at               timestamp nullable
+refund_amount_cents       int nullable
+refund_reason             text nullable
+
+created_at, updated_at
+```
+
+#### `marketplace_order_items` table
+
+Each item belongs to a marketplace_order. Items are added as the customer makes purchases. Each item tracks which Stripe Checkout paid for it (so refunds work cleanly per-purchase).
+
+```
+id
+marketplace_order_id      FK
+product_id                FK
+
+# Snapshots at purchase time (so historical orders are stable)
+name_snapshot             string
+price_cents_snapshot      int
+weight_kg_snapshot        decimal(6,2)
+image_url_snapshot        string nullable
+
+quantity                  int
+
+# Stripe payment tracking — which Checkout session paid for this item
+stripe_checkout_session_id   string
+stripe_payment_intent_id     string
+
+# Per-item fulfillment
+status                    enum: ordered, received, packed, shipped
+received_at               timestamp nullable
+
+created_at, updated_at
+```
+
+---
+
+## Routes
+
+### Public (no auth)
+```
+GET    /products                  list (with filters: category, search, available_until)
+GET    /products/{slug}           single product detail
+```
+
+### Authenticated customer
+```
+POST   /marketplace/checkout      create Stripe Checkout session for a cart
+GET    /marketplace/orders        list customer's marketplace orders
+GET    /marketplace/orders/{id}   detail
+POST   /marketplace/orders/{id}/pay-shipping   triggers shipping invoice payment
+POST   /marketplace/orders/{id}/cancel         pre-shipping only
+```
+
+### Admin (`admin` middleware)
+```
+# Product CRUD
+GET    /admin/products
+POST   /admin/products
+GET    /admin/products/{id}
+PUT    /admin/products/{id}
+DELETE /admin/products/{id}
+POST   /admin/products/{id}/images
+DELETE /admin/products/{id}/images/{imageId}
+
+# Order management
+GET    /admin/marketplace-orders
+GET    /admin/marketplace-orders/{id}
+PUT    /admin/marketplace-orders/{id}/items/{itemId}/mark-received
+POST   /admin/marketplace-orders/{id}/assign-box       (sets box_size + price, sends shipping invoice)
+POST   /admin/marketplace-orders/{id}/upload-gia
+POST   /admin/marketplace-orders/{id}/mark-shipped
+POST   /admin/marketplace-orders/{id}/refund
+
+# Returns dashboard (7-day window)
+GET    /admin/products/expiring   products with available_until ≤ 7 days from now
+```
+
+---
+
+## Stripe Webhook Changes
+
+`StripeWebhookController` already routes invoices/payments by metadata. Add two new types:
+
+```php
+case 'marketplace_purchase':
+  // From: Stripe Checkout session for cart
+  // Action: marketplace_orders.status = 'items_paid', items_paid_at = now()
+  // Email customer: "We received your order, packing now"
+  break;
+
+case 'marketplace_shipping':
+  // From: shipping invoice (sent when admin assigns box)
+  // Action: marketplace_orders.status = 'shipping_paid', shipping_paid_at = now()
+  // Email customer: "Shipping paid, your box is on its way soon"
+  break;
+```
+
+---
+
+# Phase 1 Tasks — MVP (Boxly-only inventory)
+
+Goal: ship a working storefront with **only Boxly's inventory**. No third-party sellers yet. Each task is roughly one PR-sized unit.
+
+## 1. Database & Models
+
+- [ ] **1.1** Migration: create `products` table with all fields above
+- [ ] **1.2** Migration: create `marketplace_orders` table
+- [ ] **1.3** Migration: create `marketplace_order_items` table
+- [ ] **1.4** `Product` model — fillable, casts (`images` json, `available_until` date), `belongsTo(User::class, 'seller_id')`, scope `available()`, `inStock()`
+- [ ] **1.5** `MarketplaceOrder` model — fillable, casts (`shipping_address`, `box_summary` json), relationships to user + items, status constants, helper `isPaid()`, `needsShippingPayment()`
+- [ ] **1.6** `MarketplaceOrderItem` model — fillable, relationships
+- [ ] **1.7** Seed a few real Boxly inventory products for testing (separate seeder file)
+
+## 2. Public Product API
+
+- [ ] **2.1** `ProductController::index` — paginated, filters: `category`, `search`, `min_price`, `max_price`, defaults to `status=active` and `available_until > now()`
+- [ ] **2.2** `ProductController::show` — by slug, returns full product + images array
+- [ ] **2.3** Add public routes to `routes/api.php`
+- [ ] **2.4** Add `products/*` to `config/cors.php`
+
+## 3. Marketplace Checkout
+
+- [ ] **3.1** `MarketplaceCheckoutController::create`
+  - Receives: `items: [{product_id, quantity}]`, `shipping_address` (optional — only needed if no open order yet)
+  - Validates: stock available, all products active and unexpired
+  - **Find or create open order**: looks up the user's existing `collecting` order; creates one if none exists
+  - Snapshots prices/weights/images at this moment
+  - Creates `MarketplaceOrderItem` rows linked to the open order, tagged with the upcoming Stripe payment intent
+  - Creates Stripe Checkout Session (one line item per cart item, MXN)
+  - Returns `{ checkout_url, order_number }`
+- [ ] **3.2** Stock decrement strategy: reserve at checkout creation (decrement `stock`); restore on session expiry/cancel (Stripe webhook + scheduled cleanup)
+- [ ] **3.3** Add `success_url` and `cancel_url` to checkout session pointing back to app
+- [ ] **3.4** `MarketplaceOrderController::index` — customer's own marketplace orders, paginated
+- [ ] **3.5** `MarketplaceOrderController::show` — detail with items + product snapshots
+- [ ] **3.6** `MarketplaceOrderController::current` — return the user's currently-open `collecting` order (or null) — used by the storefront to show "in your shipment" badge
+- [ ] **3.7** `MarketplaceOrderController::requestShipment` — customer-triggered: moves status from `collecting` → `ready_to_ship`. Validates that all items have been paid for. Sends email to admin/ops queue.
+
+## 4. Webhook Integration
+
+- [ ] **4.1** Add `marketplace_purchase` case to `StripeWebhookController::handleCheckoutSessionCompleted`
+  - Find the order's items by `stripe_checkout_session_id`, mark them paid (`status = ordered → ordered`, set `paid_at`)
+  - Increment the parent order's `items_subtotal_cents` by the purchase amount
+  - Set `items_paid_at` on the order if not already set
+  - Send "Purchase confirmed — added to your shipment" email to customer
+- [ ] **4.2** Add `marketplace_shipping` case
+  - Mark order `shipping_paid`, set `shipping_paid_at`
+  - Send "Shipping paid, prepping for shipment" email
+- [ ] **4.3** Refund handler: on `charge.refunded` for marketplace orders, restore stock + mark order `refunded`
+
+## 5. Admin Product CRUD
+
+- [ ] **5.1** `Admin\AdminProductController::index` — paginated, all statuses, search, sort
+- [ ] **5.2** `AdminProductController::store` — validates required fields including weight + dimensions (used for box estimation)
+- [ ] **5.3** `AdminProductController::update` — partial updates, slug regen if name changes
+- [ ] **5.4** `AdminProductController::destroy` — soft delete or hard delete (recommend soft for audit; status='inactive' is good enough for MVP)
+- [ ] **5.5** Image upload: `POST /admin/products/{id}/images`
+  - Reuse the Spaces upload pattern from `EmployeeOrderController::uploadArrivalImages`
+  - Multi-file, store path under `products/{slug}/`, append to `images` json
+- [ ] **5.6** Image delete: removes from JSON + deletes from Spaces
+- [ ] **5.7** Admin route registration
+
+## 6. Admin Marketplace Order Management
+
+- [ ] **6.1** `Admin\AdminMarketplaceOrderController::index` — list with status filter, default to `ready_to_ship` and `packing` (the work queue). Customers in `collecting` are not in the work queue (still shopping).
+- [ ] **6.2** `show` — full order detail with items + customer + addresses
+- [ ] **6.3** `markItemReceived` — sets item status to `received`, when all items received → order moves to `packing`
+- [ ] **6.4** `assignBox` — admin sets `box_size` + `box_price_cents` + `box_summary`
+  - Creates Stripe invoice with `metadata.type = 'marketplace_shipping'`
+  - Saves `shipping_invoice_id` + `shipping_payment_link`
+  - Sets order status to `awaiting_shipping_payment`
+  - Sends "Shipping invoice ready" email to customer
+- [ ] **6.5** `uploadGia` — same pattern as forwarding orders, stores GIA file + `guia_number`
+- [ ] **6.6** `markShipped` — sets `status='shipped'`, `shipped_at`, optional `estimated_delivery_date`
+- [ ] **6.7** `refund` — Stripe refund call, restore stock, set `refunded_at`, save `refund_reason`
+
+## 7. Refund Policy & Cancellation
+
+- [ ] **7.1** Customer-initiated cancellation endpoint (only allowed before any item is `received`)
+- [ ] **7.2** Refund logic: products refunded; shipping NEVER refunded if already paid
+- [ ] **7.3** Restore stock on cancel/refund
+
+## 8. Returns Dashboard (7-day window)
+
+- [ ] **8.1** `Admin\AdminProductController::expiring` — list products with `available_until` ≤ 7 days
+- [ ] **8.2** Admin can mark a product as "returned to retailer" (status='inactive', archive flag in metadata)
+
+## 9. Validation & Edge Cases
+
+- [ ] **9.1** Reject checkout if any product is sold out, inactive, or expired (race-safe with DB constraints)
+- [ ] **9.2** When the customer's open order weight + new cart weight would exceed 50kg, reject `requestShipment` with a helpful "split into two shipments" message — the cart itself doesn't enforce this since they can keep buying small batches
+- [ ] **9.3** Admin warnings when assigning a box that's smaller than total declared weight (sanity check)
+- [ ] **9.4** Email templates: order received, shipping invoice ready, shipping paid, shipped, delivered, refunded
+
+## 10. Testing & Observability
+
+- [ ] **10.1** Feature tests: full checkout flow happy path
+- [ ] **10.2** Feature tests: refund flow with stock restoration
+- [ ] **10.3** Feature tests: cancel flow before/after items received
+- [ ] **10.4** Log marketplace state transitions for audit
+- [ ] **10.5** Add basic admin dashboard metric: marketplace revenue this period
+
+---
+
+# Phase 1.5 — Ride-Along With Forwarding Orders
+
+The strategic differentiator. While a forwarding order is in `awaiting_packages`, the customer can add Boxly products to that same box for **zero extra shipping**.
+
+- [ ] **1.5.1** New endpoint: `POST /orders/{order}/marketplace-items` — attach products to an existing forwarding order
+- [ ] **1.5.2** Constraint: only allowed when order status is `collecting` or `awaiting_packages`
+- [ ] **1.5.3** Customer pays only product cost (Stripe Checkout, no shipping line)
+- [ ] **1.5.4** Marketplace items appear inside the same forwarding order's pack list
+- [ ] **1.5.5** When the forwarding order ships, marketplace items are included automatically
+- [ ] **1.5.6** Stock decrement applies same as standalone marketplace
+- [ ] **1.5.7** Admin sees marketplace items inline in order detail
+
+---
+
+# Phase 2 — Polish (Post-MVP)
+
+Items that aren't core to the marketplace working but raise quality:
+
+- [ ] Reviews & ratings (`product_reviews` table — buyers can review purchased products)
+- [ ] Categories table (FK on products instead of free-text string)
+- [ ] Search (start with simple LIKE, can add Meilisearch/Typesense later)
+- [ ] Product variants (size, color) — variants table with own stock + price
+- [ ] Wishlist
+- [ ] Inventory low-stock email alerts for admin
+- [ ] Bulk product CSV upload (admin)
+- [ ] Tiered/volume pricing (e.g. 50+ units = 10% off)
+- [ ] Auto-extract product data from `source_url` (scraping helper for admin upload)
+
+---
+
+## Files Affected (Phase 1)
+
+### New files
+
+```
+app/Models/Product.php
+app/Models/MarketplaceOrder.php
+app/Models/MarketplaceOrderItem.php
+
+app/Http/Controllers/ProductController.php                     (public list/detail)
+app/Http/Controllers/MarketplaceCheckoutController.php         (cart → Stripe Checkout)
+app/Http/Controllers/MarketplaceOrderController.php            (customer's own orders)
+app/Http/Controllers/Admin/AdminProductController.php          (Boxly inventory CRUD)
+app/Http/Controllers/Admin/AdminMarketplaceOrderController.php (warehouse workflow)
+
+app/Mail/MarketplaceOrderReceivedMail.php
+app/Mail/MarketplaceShippingInvoiceMail.php
+app/Mail/MarketplaceShippedMail.php
+
+database/migrations/...create_products_table.php
+database/migrations/...create_marketplace_orders_table.php
+database/migrations/...create_marketplace_order_items_table.php
+database/seeders/MarketplaceProductSeeder.php
+```
+
+### Modified files
+
+```
+app/Http/Controllers/StripeWebhookController.php   (new metadata cases)
+routes/api.php                                       (new route groups)
+config/cors.php                                      (add marketplace/* paths)
+```
+
+---
+
+## Open Questions for Team Review
+
+1. **Stock reservation timing** — at checkout session creation (recommended) vs payment success? Reservation prevents oversells but needs cleanup on abandoned carts.
+2. **Soft vs hard delete** for products — recommend soft (status=inactive) so historical orders keep working
+3. **Item-level vs order-level item received tracking** — recommend item-level (matches forwarding pattern)
+4. **Refund policy on shipping** — confirm: never refunded once admin has assigned and paid for box
+5. **Auto-trigger shipment** — should the system ever auto-flip `collecting` → `ready_to_ship`? E.g. if it's been 30 days since first purchase, or weight ≥ XL? Recommend NO for MVP — let the customer always decide. Can add nudges via email later.
+6. **Single open order constraint** — confirm: a customer can have at most one `collecting` order at a time. New purchases always join the existing one.
+7. **Refund timing** — refunds allowed at any stage before `shipped`. Restore stock if item not yet `received`; if already received, admin handles physically.
+
+---
+
+## Frontend Counterpart
+
+See `app/tasks/todo.md` for the Nuxt-side plan (storefront, cart, checkout UI, admin product UI, customer order pages).
+
+---
+
+## Review — Phase 1 Implementation Complete
+
+**Migrations + Models** ✅
+- `2026_04_05_000000_create_products_table.php` — Product catalog
+- `2026_04_05_000001_create_marketplace_orders_table.php` — Shipment lifecycle
+- `2026_04_05_000002_create_marketplace_order_items_table.php` — Line items with Stripe payment tracking
+- `Product`, `MarketplaceOrder`, `MarketplaceOrderItem` models with scopes + helpers
+
+**Public Product API** ✅
+- `StoreProductController` (separate from existing `ProductController` for Stripe boxes)
+- `GET /store/products` — paginated, search, category, sort filters
+- `GET /store/products/{slug}` — detail by slug + related products
+- `GET /store/categories` — pills for filter UI
+
+**Admin Product CRUD** ✅
+- `Admin\AdminProductController` — index/show/store/update/destroy
+- Multi-image upload to Spaces with stored path + url
+- `expiring` endpoint for 7-day clearance dashboard
+
+**Marketplace Checkout** ✅
+- `MarketplaceCheckoutController::create` — find-or-create open order, snapshot items, build Stripe Checkout session
+- Stock decremented at checkout creation (reservation model)
+- Items tagged with `stripe_checkout_session_id` so webhook can flip them paid
+
+**Customer Marketplace Endpoints** ✅
+- `MarketplaceOrderController` — index, show, current, requestShipment, cancel
+- `current` returns the user's open `collecting` order for storefront context
+
+**Admin Marketplace Order Management** ✅
+- `Admin\AdminMarketplaceOrderController` — index, show, mark/unmark item received,
+  assign-box (creates Stripe shipping invoice + emails customer), upload-gia,
+  mark-shipped, mark-delivered, refund
+
+**Webhooks** ✅
+- `checkout.session.completed` → flips items to `ordered`, increments order subtotal,
+  sets items_paid_at, sends order-received email
+- `invoice.paid` with `marketplace_shipping` metadata → status `shipping_paid`,
+  sends shipping-paid email
+
+**Email Mailables** ✅
+- `MarketplaceOrderReceivedMail`, `MarketplaceShippingInvoiceMail`,
+  `MarketplaceShippingPaidMail`, `MarketplaceShippedMail`
+- Blade templates in `resources/views/emails/marketplace/`
+
+**CORS** ✅ — Added `store/*` and `marketplace/*`
+
+**Routes Registered** ✅
+- Public: `/store/*`
+- Customer (auth): `/marketplace/*`
+- Admin (auth + admin): `/admin/products/*`, `/admin/marketplace-orders/*`
+
+**Server-side TODO before launching:**
+- Run `php artisan migrate` in production
+- (Optional) Seed initial products via tinker or admin UI
+
+**Stripe webhook needs** (already supported by current secret):
+- New event subscription: `checkout.session.completed` (added on the existing endpoint)
+
