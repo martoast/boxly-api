@@ -23,6 +23,10 @@ class Product extends Model
         'XL' => ['weight_kg' => 50, 'price_cents' => 625000],
     ];
 
+    const STOCK_UNKNOWN = 'unknown';
+    const STOCK_IN_STOCK = 'in_stock';
+    const STOCK_OUT_OF_STOCK = 'out_of_stock';
+
     protected $fillable = [
         'name',
         'slug',
@@ -30,6 +34,8 @@ class Product extends Model
         'sku',
         'source_url',
         'price_cents',
+        'cost_cents',
+        'markup_percent',
         'weight_kg',
         'length_cm',
         'width_cm',
@@ -39,17 +45,23 @@ class Product extends Model
         'available_until',
         'category',
         'images',
+        'last_stock_check_at',
+        'stock_check_status',
+        'last_stock_check_response',
     ];
 
     protected $casts = [
-        'price_cents'     => 'integer',
-        'weight_kg'       => 'decimal:2',
-        'length_cm'       => 'decimal:1',
-        'width_cm'        => 'decimal:1',
-        'height_cm'       => 'decimal:1',
-        'stock'           => 'integer',
-        'available_until' => 'datetime',
-        'images'          => 'array',
+        'price_cents'         => 'integer',
+        'cost_cents'          => 'integer',
+        'markup_percent'      => 'decimal:2',
+        'weight_kg'           => 'decimal:2',
+        'length_cm'           => 'decimal:1',
+        'width_cm'            => 'decimal:1',
+        'height_cm'           => 'decimal:1',
+        'stock'               => 'integer',
+        'available_until'     => 'datetime',
+        'images'              => 'array',
+        'last_stock_check_at' => 'datetime',
     ];
 
     protected $appends = ['price_formatted', 'first_image_url'];
@@ -81,13 +93,26 @@ class Product extends Model
         return $query->where('status', self::STATUS_ACTIVE);
     }
 
-    public function scopeAvailable($query)
+    /**
+     * Listed = visible in the public storefront (out-of-stock items still shown
+     * with WhatsApp CTA). Excludes drafts/inactive and expired clearance items.
+     */
+    public function scopeListed($query)
     {
         return $query->where('status', self::STATUS_ACTIVE)
-            ->where('stock', '>', 0)
             ->where(function ($q) {
                 $q->whereNull('available_until')->orWhere('available_until', '>', now());
             });
+    }
+
+    /**
+     * Available = purchasable right now. Listed + has stock + source not flagged out_of_stock.
+     */
+    public function scopeAvailable($query)
+    {
+        return $query->listed()
+            ->where('stock', '>', 0)
+            ->where('stock_check_status', '!=', self::STOCK_OUT_OF_STOCK);
     }
 
     public function scopeExpiringSoon($query, int $days = 7)
@@ -113,7 +138,14 @@ class Product extends Model
     {
         if ($this->status !== self::STATUS_ACTIVE) return false;
         if ($this->stock <= 0) return false;
+        if ($this->stock_check_status === self::STOCK_OUT_OF_STOCK) return false;
         if ($this->available_until && $this->available_until->isPast()) return false;
         return true;
+    }
+
+    public function isOutOfStock(): bool
+    {
+        return $this->stock_check_status === self::STOCK_OUT_OF_STOCK
+            || $this->stock <= 0;
     }
 }

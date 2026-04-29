@@ -45,9 +45,12 @@ class MarketplaceCheckoutController extends Controller
                 ], 404);
             }
             if (! $product->isAvailable()) {
+                $reason = $product->isOutOfStock()
+                    ? "{$product->name} está agotado"
+                    : "{$product->name} ya no está disponible";
                 return response()->json([
                     'success' => false,
-                    'message' => "{$product->name} ya no está disponible",
+                    'message' => $reason,
                 ], 400);
             }
             if ($product->stock < $line['quantity']) {

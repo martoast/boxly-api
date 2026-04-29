@@ -8,7 +8,19 @@ use Illuminate\Http\Request;
 class StoreProductController extends Controller
 {
     /**
+     * Fields that must NEVER appear in public responses (admin-only).
+     */
+    private const HIDDEN_FROM_PUBLIC = [
+        'cost_cents',
+        'markup_percent',
+        'source_url',
+        'last_stock_check_response',
+    ];
+
+    /**
      * Public Boxly Store product list — paginated, filterable.
+     * Uses listed() scope so out-of-stock products still show in storefront
+     * (with WhatsApp CTA on the frontend).
      */
     public function index(Request $request)
     {
@@ -21,7 +33,7 @@ class StoreProductController extends Controller
 
         $perPage = (int) $request->input('per_page', 24);
 
-        $query = Product::available();
+        $query = Product::listed();
 
         if ($category = $request->input('category')) {
             $query->where('category', $category);
@@ -42,6 +54,7 @@ class StoreProductController extends Controller
         }
 
         $products = $query->paginate($perPage)->withQueryString();
+        $products->getCollection()->each->makeHidden(self::HIDDEN_FROM_PUBLIC);
 
         return response()->json([
             'success' => true,
@@ -51,18 +64,21 @@ class StoreProductController extends Controller
 
     /**
      * Public product detail by slug. No auth required — shareable links.
+     * Out-of-stock products are still returned so the page can show WhatsApp CTA.
      */
     public function show(string $slug)
     {
-        $product = Product::where('slug', $slug)->firstOrFail();
+        $product = Product::listed()->where('slug', $slug)->firstOrFail();
+        $product->makeHidden(self::HIDDEN_FROM_PUBLIC);
 
         $related = collect();
         if ($product->category) {
-            $related = Product::available()
+            $related = Product::listed()
                 ->where('category', $product->category)
                 ->where('id', '!=', $product->id)
                 ->limit(8)
-                ->get();
+                ->get()
+                ->each->makeHidden(self::HIDDEN_FROM_PUBLIC);
         }
 
         return response()->json([
@@ -76,7 +92,7 @@ class StoreProductController extends Controller
 
     public function categories()
     {
-        $categories = Product::available()
+        $categories = Product::listed()
             ->whereNotNull('category')
             ->distinct()
             ->pluck('category')

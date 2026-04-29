@@ -29,6 +29,11 @@ class MarketplaceOrderItem extends Model
         'paid_at',
         'status',
         'received_at',
+        // Source purchase tracking (admin records after buying from US store)
+        'source_purchased_at',
+        'source_order_id',
+        'source_tracking_number',
+        'source_carrier',
     ];
 
     protected $casts = [
@@ -37,6 +42,7 @@ class MarketplaceOrderItem extends Model
         'quantity'             => 'integer',
         'paid_at'              => 'datetime',
         'received_at'          => 'datetime',
+        'source_purchased_at'  => 'datetime',
     ];
 
     public function order(): BelongsTo
