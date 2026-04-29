@@ -4,11 +4,17 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Str;
 
 class Product extends Model
 {
     use HasFactory;
+
+    public function variants(): HasMany
+    {
+        return $this->hasMany(ProductVariant::class)->orderBy('display_order')->orderBy('id');
+    }
 
     const STATUS_DRAFT = 'draft';
     const STATUS_ACTIVE = 'active';
@@ -138,14 +144,27 @@ class Product extends Model
     {
         if ($this->status !== self::STATUS_ACTIVE) return false;
         if ($this->stock <= 0) return false;
-        if ($this->stock_check_status === self::STOCK_OUT_OF_STOCK) return false;
         if ($this->available_until && $this->available_until->isPast()) return false;
+        if ($this->isOutOfStock()) return false;
         return true;
     }
 
+    /**
+     * A product is out of stock if:
+     *  - It has variants AND every variant is out_of_stock, OR
+     *  - It has no variants AND the product-level stock_check_status is out_of_stock
+     */
     public function isOutOfStock(): bool
     {
-        return $this->stock_check_status === self::STOCK_OUT_OF_STOCK
-            || $this->stock <= 0;
+        $variantCount = $this->variants()->count();
+
+        if ($variantCount > 0) {
+            $availableCount = $this->variants()
+                ->where('stock_check_status', '!=', self::STOCK_OUT_OF_STOCK)
+                ->count();
+            return $availableCount === 0;
+        }
+
+        return $this->stock_check_status === self::STOCK_OUT_OF_STOCK;
     }
 }

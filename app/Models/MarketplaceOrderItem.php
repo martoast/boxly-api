@@ -19,10 +19,13 @@ class MarketplaceOrderItem extends Model
     protected $fillable = [
         'marketplace_order_id',
         'product_id',
+        'variant_id',
         'name_snapshot',
         'price_cents_snapshot',
         'weight_kg_snapshot',
         'image_url_snapshot',
+        'size_snapshot',
+        'color_snapshot',
         'quantity',
         'stripe_checkout_session_id',
         'stripe_payment_intent_id',
@@ -53,6 +56,11 @@ class MarketplaceOrderItem extends Model
     public function product(): BelongsTo
     {
         return $this->belongsTo(Product::class);
+    }
+
+    public function variant(): BelongsTo
+    {
+        return $this->belongsTo(ProductVariant::class, 'variant_id');
     }
 
     public function lineTotalCents(): int
