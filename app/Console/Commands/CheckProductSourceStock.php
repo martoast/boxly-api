@@ -99,24 +99,26 @@ class CheckProductSourceStock extends Command
 
     private function checkProduct(Product $product): string
     {
-        // Always go through ScraperAPI — uniform across all source stores, no
-        // direct/Cloudflare branching to maintain.
+        // Always go through ScraperAPI — uniform across all source stores.
+        //
+        // Try `.json` first — it's universally supported across Shopify stores
+        // (Chubbies, YoungLA, Gymshark, etc.) and gives rich per-variant data.
+        // Fall back to `.js` only if `.json` fails. This saves a ScraperAPI
+        // credit per product on stores where `.json` works (most of them).
 
-        // 1. Try Shopify .js first (cleanest data — returns `available: bool` per variant)
-        $jsUrl = $this->shopifyEndpointUrl($product->source_url, '.js');
-        if ($jsUrl) {
-            $status = $this->checkViaShopifyJson($product, $jsUrl, 'js');
-            if ($status !== null) return $status;
-        }
-
-        // 2. Try Shopify singular .json (returns inventory_quantity — works for stores without .js)
         $jsonUrl = $this->shopifyEndpointUrl($product->source_url, '.json');
         if ($jsonUrl) {
             $status = $this->checkViaShopifyJson($product, $jsonUrl, 'json');
             if ($status !== null) return $status;
         }
 
-        // 3. Last resort: HTML keyword scrape (product-level only, no per-variant data)
+        $jsUrl = $this->shopifyEndpointUrl($product->source_url, '.js');
+        if ($jsUrl) {
+            $status = $this->checkViaShopifyJson($product, $jsUrl, 'js');
+            if ($status !== null) return $status;
+        }
+
+        // Last resort: HTML keyword scrape (product-level only)
         return $this->checkViaHtmlScrape($product);
     }
 
@@ -149,7 +151,12 @@ class CheckProductSourceStock extends Command
                     'User-Agent' => $this->userAgent,
                     'Accept' => 'application/json',
                 ])
-                ->retry(2, 1000, throw: false)
+                // Retry only on transient errors (5xx, timeouts) — never on 4xx
+                // since 404/410 are definitive answers and retrying just burns credits.
+                ->retry(2, 1000, function ($exception, $request) {
+                    if ($exception instanceof \Illuminate\Http\Client\ConnectionException) return true;
+                    return false;
+                }, throw: false)
                 ->get($this->scraperApiWrap($url));
         } catch (Throwable $e) {
             return null;
@@ -284,7 +291,10 @@ class CheckProductSourceStock extends Command
                 'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                 'Accept-Language' => 'en-US,en;q=0.9',
             ])
-            ->retry(2, 1000, throw: false)
+            ->retry(2, 1000, function ($exception, $request) {
+                if ($exception instanceof \Illuminate\Http\Client\ConnectionException) return true;
+                return false;
+            }, throw: false)
             ->get($this->scraperApiWrap($product->source_url));
 
         if ($response->status() === 404) {
