@@ -119,7 +119,8 @@ class CheckProductSourceStock extends Command
      */
     private function shopifyEndpointUrl(string $url, string $suffix): ?string
     {
-        if (! preg_match('#^(https?://[^/]+/products/[^/?#]+)#', $url, $m)) {
+        // Use ~ delimiter so we can safely include / and # inside the char class
+        if (! preg_match('~^(https?://[^/]+/products/[^/?#]+)~', $url, $m)) {
             return null;
         }
         return $m[1] . $suffix;
