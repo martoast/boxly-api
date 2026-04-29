@@ -33,9 +33,8 @@ class Product extends Model
     const STOCK_IN_STOCK = 'in_stock';
     const STOCK_OUT_OF_STOCK = 'out_of_stock';
 
-    const PROTECTION_NONE = 'none';
-    const PROTECTION_CLOUDFLARE = 'cloudflare';
-    const PROTECTION_MANUAL = 'manual';
+    const STOCK_CHECK_AUTO = 'auto';     // Cron runs daily via ScraperAPI
+    const STOCK_CHECK_MANUAL = 'manual'; // Admin team maintains stock by hand
 
     protected $fillable = [
         'name',
@@ -43,7 +42,7 @@ class Product extends Model
         'description',
         'sku',
         'source_url',
-        'source_protection',
+        'stock_check_mode',
         'price_cents',
         'cost_cents',
         'markup_percent',
