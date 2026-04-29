@@ -6,8 +6,6 @@ use App\Models\Order;
 use App\Models\PurchaseRequest;
 use App\Models\Affiliate;
 use App\Models\AffiliateConversion;
-use App\Models\MarketplaceOrder;
-use App\Models\MarketplaceOrderItem;
 use App\Models\Product;
 use Illuminate\Http\Request;
 use Stripe\Event;
@@ -18,8 +16,6 @@ use Illuminate\Support\Facades\DB;
 use App\Mail\PaymentReceived;
 use App\Mail\DepositReceived;
 use App\Mail\PurchaseRequestPaymentReceived;
-use App\Mail\MarketplaceOrderReceivedMail;
-use App\Mail\MarketplaceShippingPaidMail;
 
 class StripeWebhookController extends Controller
 {
@@ -51,7 +47,10 @@ class StripeWebhookController extends Controller
     }
 
     /**
-     * Handle a completed Stripe Checkout Session — fired for marketplace purchases.
+     * Handle a completed Stripe Checkout Session — fired for Boxly Store purchases.
+     * The store checkout creates a PurchaseRequest in `quoted` status; when the
+     * Checkout Session completes we flip it to `paid` so the admin can buy it
+     * from the source store via the existing PR flow.
      */
     protected function handleCheckoutSessionCompleted(Event $event)
     {
@@ -65,72 +64,43 @@ class StripeWebhookController extends Controller
             'metadata' => $metadata,
         ]);
 
-        if ($type === 'marketplace_purchase' && isset($metadata['marketplace_order_id'])) {
-            $this->handleMarketplacePurchasePaid($session, $metadata);
+        if ($type === 'store_purchase' && isset($metadata['purchase_request_id'])) {
+            $this->handleStorePurchasePaid($session, $metadata);
         }
     }
 
-    /**
-     * A marketplace cart was paid — flip those items from pending_payment to ordered,
-     * increment the order's items_subtotal, set items_paid_at if first time.
-     */
-    protected function handleMarketplacePurchasePaid($session, array $metadata)
+    protected function handleStorePurchasePaid($session, array $metadata)
     {
-        $order = MarketplaceOrder::find($metadata['marketplace_order_id']);
-        if (! $order) {
-            Log::warning('Marketplace order not found for checkout completion', [
-                'marketplace_order_id' => $metadata['marketplace_order_id'],
+        $pr = PurchaseRequest::find($metadata['purchase_request_id']);
+        if (! $pr) {
+            Log::warning('Purchase request not found for store checkout completion', [
+                'purchase_request_id' => $metadata['purchase_request_id'],
             ]);
             return;
         }
 
+        if ($pr->status === PurchaseRequest::STATUS_PAID) return;
+
         try {
-            DB::transaction(function () use ($session, $order) {
-                $items = MarketplaceOrderItem::where('marketplace_order_id', $order->id)
-                    ->where('stripe_checkout_session_id', $session->id)
-                    ->where('status', MarketplaceOrderItem::STATUS_PENDING_PAYMENT)
-                    ->get();
-
-                if ($items->isEmpty()) {
-                    Log::info('No pending items to mark paid for session', [
-                        'session_id' => $session->id,
-                    ]);
-                    return;
-                }
-
-                $additionalSubtotal = 0;
-                foreach ($items as $item) {
-                    $item->update([
-                        'status' => MarketplaceOrderItem::STATUS_ORDERED,
-                        'paid_at' => now(),
-                        'stripe_payment_intent_id' => $session->payment_intent ?? null,
-                    ]);
-                    $additionalSubtotal += $item->lineTotalCents();
-                }
-
-                $order->update([
-                    'items_subtotal_cents' => $order->items_subtotal_cents + $additionalSubtotal,
-                    'items_paid_at' => $order->items_paid_at ?? now(),
-                ]);
-            });
-
-            $order->refresh();
+            $pr->update([
+                'status'  => PurchaseRequest::STATUS_PAID,
+                'paid_at' => now(),
+            ]);
 
             try {
-                Mail::to($order->user)->queue(new MarketplaceOrderReceivedMail($order));
+                Mail::to($pr->user)->queue(new PurchaseRequestPaymentReceived($pr));
             } catch (\Exception $e) {
-                Log::error('Failed to queue marketplace purchase email', ['error' => $e->getMessage()]);
+                Log::error('Failed to queue store purchase paid email', ['error' => $e->getMessage()]);
             }
 
-            Log::info('Marketplace purchase recorded', [
-                'marketplace_order_id' => $order->id,
-                'session_id' => $session->id,
-                'items_subtotal_cents' => $order->items_subtotal_cents,
+            Log::info('Store purchase paid', [
+                'purchase_request_id' => $pr->id,
+                'session_id'          => $session->id,
             ]);
         } catch (\Exception $e) {
-            Log::error('Failed to handle marketplace purchase', [
+            Log::error('Failed to handle store purchase paid', [
                 'session_id' => $session->id,
-                'error' => $e->getMessage(),
+                'error'      => $e->getMessage(),
             ]);
         }
     }
@@ -227,12 +197,6 @@ class StripeWebhookController extends Controller
             return;
         }
 
-        // 5. Handle Marketplace Shipping Invoice Paid
-        if ($type === 'marketplace_shipping' && isset($metadata['marketplace_order_id'])) {
-            $this->handleMarketplaceShippingPaid($invoice, $metadata);
-            return;
-        }
-
         // Log unhandled invoice types for debugging
         Log::warning('Invoice paid webhook received but no handler matched', [
             'invoice_id' => $invoice->id,
@@ -295,40 +259,6 @@ class StripeWebhookController extends Controller
         } catch (\Exception $e) {
             Log::error('Order paid handling failed', [
                 'order_id' => $order->id,
-                'error' => $e->getMessage(),
-            ]);
-        }
-    }
-
-    protected function handleMarketplaceShippingPaid($invoice, $metadata)
-    {
-        $order = MarketplaceOrder::find($metadata['marketplace_order_id']);
-        if (! $order) {
-            Log::warning('Marketplace order not found for shipping payment', [
-                'marketplace_order_id' => $metadata['marketplace_order_id'],
-            ]);
-            return;
-        }
-
-        try {
-            $order->update([
-                'status' => MarketplaceOrder::STATUS_SHIPPING_PAID,
-                'shipping_paid_at' => now(),
-            ]);
-
-            try {
-                Mail::to($order->user)->queue(new MarketplaceShippingPaidMail($order));
-            } catch (\Exception $e) {
-                Log::error('Failed to queue marketplace shipping paid email', ['error' => $e->getMessage()]);
-            }
-
-            Log::info('Marketplace shipping paid', [
-                'marketplace_order_id' => $order->id,
-                'invoice_id' => $invoice->id,
-            ]);
-        } catch (\Exception $e) {
-            Log::error('Failed to handle marketplace shipping payment', [
-                'invoice_id' => $invoice->id,
                 'error' => $e->getMessage(),
             ]);
         }

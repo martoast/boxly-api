@@ -29,10 +29,8 @@ use App\Http\Controllers\AdminCampaignController;
 use App\Http\Controllers\CampaignTrackingController;
 use App\Http\Controllers\EmployeeOrderController;
 use App\Http\Controllers\StoreProductController;
-use App\Http\Controllers\MarketplaceCheckoutController;
-use App\Http\Controllers\MarketplaceOrderController;
+use App\Http\Controllers\StoreCheckoutController;
 use App\Http\Controllers\Admin\AdminProductController;
-use App\Http\Controllers\Admin\AdminMarketplaceOrderController;
 
 /*
 |--------------------------------------------------------------------------
@@ -185,15 +183,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/{purchaseRequest}', [PurchaseRequestController::class, 'update']);
     });
 
-    // Boxly Store — Customer marketplace orders + checkout
-    Route::prefix('marketplace')->group(function () {
-        Route::post('/checkout', [MarketplaceCheckoutController::class, 'create']);
-        Route::get('/orders', [MarketplaceOrderController::class, 'index']);
-        Route::get('/orders/current', [MarketplaceOrderController::class, 'current']);
-        Route::get('/orders/{marketplaceOrder}', [MarketplaceOrderController::class, 'show']);
-        Route::post('/orders/{marketplaceOrder}/request-shipment', [MarketplaceOrderController::class, 'requestShipment']);
-        Route::post('/orders/{marketplaceOrder}/cancel', [MarketplaceOrderController::class, 'cancel']);
-    });
+    // Boxly Store — checkout flows directly into the assisted Purchase Request pipeline
+    Route::post('/store/checkout', [StoreCheckoutController::class, 'create']);
 
     Route::prefix('orders')->group(function () {
         Route::get('/', [OrderController::class, 'index']);
@@ -335,21 +326,6 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/{affiliate}/conversions', [AdminAffiliateController::class, 'conversions']);
             Route::get('/{affiliate}/payouts', [AdminAffiliateController::class, 'payouts']);
             Route::post('/{affiliate}/record-payout', [AdminAffiliateController::class, 'recordPayout']);
-        });
-
-        // Boxly Store — Admin Marketplace Order Management
-        Route::prefix('marketplace-orders')->group(function () {
-            Route::get('/', [AdminMarketplaceOrderController::class, 'index']);
-            Route::get('/pending-source-purchase', [AdminMarketplaceOrderController::class, 'pendingSourcePurchase']);
-            Route::get('/{marketplaceOrder}', [AdminMarketplaceOrderController::class, 'show']);
-            Route::put('/{marketplaceOrder}/items/{item}/mark-received', [AdminMarketplaceOrderController::class, 'markItemReceived']);
-            Route::put('/{marketplaceOrder}/items/{item}/unmark-received', [AdminMarketplaceOrderController::class, 'unmarkItemReceived']);
-            Route::post('/{marketplaceOrder}/items/{item}/record-source-purchase', [AdminMarketplaceOrderController::class, 'recordSourcePurchase']);
-            Route::post('/{marketplaceOrder}/assign-box', [AdminMarketplaceOrderController::class, 'assignBox']);
-            Route::post('/{marketplaceOrder}/upload-gia', [AdminMarketplaceOrderController::class, 'uploadGia']);
-            Route::post('/{marketplaceOrder}/mark-shipped', [AdminMarketplaceOrderController::class, 'markShipped']);
-            Route::post('/{marketplaceOrder}/mark-delivered', [AdminMarketplaceOrderController::class, 'markDelivered']);
-            Route::post('/{marketplaceOrder}/refund', [AdminMarketplaceOrderController::class, 'refund']);
         });
 
         // Boxly Store — Admin Product Management
