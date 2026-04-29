@@ -4,7 +4,9 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Product;
+use App\Models\ProductVariant;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -50,10 +52,95 @@ class AdminProductController extends Controller
 
     public function show(Product $product)
     {
+        $product->load(['variants' => fn ($q) => $q->orderBy('display_order')->orderBy('id')]);
         return response()->json([
             'success' => true,
             'data' => $product,
         ]);
+    }
+
+    /**
+     * Replace all variants for a product with the given list. Used at creation time
+     * (via the curator skill) and from the admin form to bulk-edit the variant matrix.
+     *
+     * Body: { variants: [{ size?, color?, shopify_variant_id?, price_cents?, display_order? }, ...] }
+     */
+    public function syncVariants(Request $request, Product $product)
+    {
+        $request->validate([
+            'variants' => 'required|array',
+            'variants.*.size'  => 'nullable|string|max:50',
+            'variants.*.color' => 'nullable|string|max:100',
+            'variants.*.shopify_variant_id' => 'nullable|string|max:100',
+            'variants.*.price_cents' => 'nullable|integer|min:0',
+            'variants.*.display_order' => 'nullable|integer|min:0',
+        ]);
+
+        $rows = $request->input('variants');
+
+        try {
+            DB::transaction(function () use ($product, $rows) {
+                $product->variants()->delete();
+                foreach ($rows as $i => $row) {
+                    if (! ($row['size'] ?? null) && ! ($row['color'] ?? null)) continue;
+                    $product->variants()->create([
+                        'size'  => $row['size']  ?? null,
+                        'color' => $row['color'] ?? null,
+                        'shopify_variant_id' => $row['shopify_variant_id'] ?? null,
+                        'price_cents' => $row['price_cents'] ?? null,
+                        'display_order' => $row['display_order'] ?? $i,
+                        'stock_check_status' => ProductVariant::STATUS_UNKNOWN,
+                    ]);
+                }
+            });
+
+            return response()->json([
+                'success' => true,
+                'data' => $product->fresh(['variants']),
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Failed to sync variants', [
+                'product_id' => $product->id,
+                'error' => $e->getMessage(),
+            ]);
+            return response()->json([
+                'success' => false,
+                'message' => 'No se pudieron guardar las variantes: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    public function addVariant(Request $request, Product $product)
+    {
+        $validated = $request->validate([
+            'size'  => 'nullable|string|max:50',
+            'color' => 'nullable|string|max:100',
+            'shopify_variant_id' => 'nullable|string|max:100',
+            'price_cents' => 'nullable|integer|min:0',
+            'display_order' => 'nullable|integer|min:0',
+        ]);
+
+        if (empty($validated['size']) && empty($validated['color'])) {
+            return response()->json(['success' => false, 'message' => 'Debe especificar talla o color'], 422);
+        }
+
+        $variant = $product->variants()->create(array_merge($validated, [
+            'stock_check_status' => ProductVariant::STATUS_UNKNOWN,
+        ]));
+
+        return response()->json([
+            'success' => true,
+            'data' => $variant,
+        ], 201);
+    }
+
+    public function deleteVariant(Product $product, ProductVariant $variant)
+    {
+        if ($variant->product_id !== $product->id) {
+            return response()->json(['success' => false, 'message' => 'Variant not in this product'], 400);
+        }
+        $variant->delete();
+        return response()->json(['success' => true]);
     }
 
     public function store(Request $request)

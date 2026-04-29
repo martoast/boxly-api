@@ -356,6 +356,10 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::delete('/{product}', [AdminProductController::class, 'destroy']);
             Route::post('/{product}/images', [AdminProductController::class, 'uploadImages']);
             Route::delete('/{product}/images/{index}', [AdminProductController::class, 'deleteImage']);
+            // Variants
+            Route::post('/{product}/variants', [AdminProductController::class, 'addVariant']);
+            Route::post('/{product}/variants/sync', [AdminProductController::class, 'syncVariants']);
+            Route::delete('/{product}/variants/{variant}', [AdminProductController::class, 'deleteVariant']);
         });
 
         Route::prefix('campaigns')->group(function () {

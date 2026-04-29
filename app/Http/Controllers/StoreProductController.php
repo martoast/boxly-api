@@ -17,6 +17,11 @@ class StoreProductController extends Controller
         'last_stock_check_response',
     ];
 
+    private const HIDDEN_VARIANT_FROM_PUBLIC = [
+        'shopify_variant_id',
+        'last_stock_check_response',
+    ];
+
     /**
      * Public Boxly Store product list — paginated, filterable.
      * Uses listed() scope so out-of-stock products still show in storefront
@@ -53,8 +58,13 @@ class StoreProductController extends Controller
             default:           $query->latest();
         }
 
+        $query->with(['variants' => fn ($q) => $q->orderBy('display_order')->orderBy('id')]);
+
         $products = $query->paginate($perPage)->withQueryString();
-        $products->getCollection()->each->makeHidden(self::HIDDEN_FROM_PUBLIC);
+        $products->getCollection()->each(function ($p) {
+            $p->makeHidden(self::HIDDEN_FROM_PUBLIC);
+            $p->variants?->each->makeHidden(self::HIDDEN_VARIANT_FROM_PUBLIC);
+        });
 
         return response()->json([
             'success' => true,
@@ -68,17 +78,25 @@ class StoreProductController extends Controller
      */
     public function show(string $slug)
     {
-        $product = Product::listed()->where('slug', $slug)->firstOrFail();
+        $product = Product::listed()
+            ->with(['variants' => fn ($q) => $q->orderBy('display_order')->orderBy('id')])
+            ->where('slug', $slug)
+            ->firstOrFail();
         $product->makeHidden(self::HIDDEN_FROM_PUBLIC);
+        $product->variants?->each->makeHidden(self::HIDDEN_VARIANT_FROM_PUBLIC);
 
         $related = collect();
         if ($product->category) {
             $related = Product::listed()
+                ->with(['variants' => fn ($q) => $q->orderBy('display_order')])
                 ->where('category', $product->category)
                 ->where('id', '!=', $product->id)
                 ->limit(8)
-                ->get()
-                ->each->makeHidden(self::HIDDEN_FROM_PUBLIC);
+                ->get();
+            $related->each(function ($p) {
+                $p->makeHidden(self::HIDDEN_FROM_PUBLIC);
+                $p->variants?->each->makeHidden(self::HIDDEN_VARIANT_FROM_PUBLIC);
+            });
         }
 
         return response()->json([

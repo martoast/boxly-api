@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\MarketplaceOrder;
 use App\Models\MarketplaceOrderItem;
 use App\Models\Product;
+use App\Models\ProductVariant;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -25,6 +26,7 @@ class MarketplaceCheckoutController extends Controller
         $request->validate([
             'items'                       => 'required|array|min:1',
             'items.*.product_id'          => 'required|integer|exists:products,id',
+            'items.*.variant_id'          => 'nullable|integer|exists:product_variants,id',
             'items.*.quantity'            => 'required|integer|min:1|max:100',
             'shipping_address'            => 'nullable|array',
             'shipping_address.full_address' => 'required_with:shipping_address|string|max:500',
@@ -34,7 +36,13 @@ class MarketplaceCheckoutController extends Controller
 
         // Pre-validate products are available + have stock
         $productIds = collect($request->input('items'))->pluck('product_id')->all();
-        $products = Product::whereIn('id', $productIds)->get()->keyBy('id');
+        $products = Product::with('variants')->whereIn('id', $productIds)->get()->keyBy('id');
+
+        $variantsById = collect();
+        $variantIds = collect($request->input('items'))->pluck('variant_id')->filter()->all();
+        if (! empty($variantIds)) {
+            $variantsById = ProductVariant::whereIn('id', $variantIds)->get()->keyBy('id');
+        }
 
         foreach ($request->input('items') as $line) {
             $product = $products->get($line['product_id']);
@@ -58,6 +66,31 @@ class MarketplaceCheckoutController extends Controller
                     'success' => false,
                     'message' => "Solo quedan {$product->stock} unidades de {$product->name}",
                 ], 400);
+            }
+
+            // If product has variants, a variant_id is required and must belong to this product + be in stock
+            $hasVariants = $product->variants->isNotEmpty();
+            if ($hasVariants) {
+                $variantId = $line['variant_id'] ?? null;
+                if (! $variantId) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => "Selecciona una talla/color para {$product->name}",
+                    ], 422);
+                }
+                $variant = $variantsById->get($variantId);
+                if (! $variant || $variant->product_id !== $product->id) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => "Variante inválida para {$product->name}",
+                    ], 422);
+                }
+                if (! $variant->isAvailable()) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => "La variante {$variant->title} de {$product->name} está agotada",
+                    ], 400);
+                }
             }
         }
 
@@ -83,17 +116,28 @@ class MarketplaceCheckoutController extends Controller
                 $createdItems = [];
                 foreach ($request->input('items') as $line) {
                     $product = $products->get($line['product_id']);
+                    $variant = ! empty($line['variant_id'])
+                        ? $variantsById->get($line['variant_id'])
+                        : null;
 
                     // Decrement stock now (reserve it)
                     $product->decrement('stock', $line['quantity']);
 
+                    // Variant price override if set
+                    $unitPrice = $variant && $variant->price_cents
+                        ? $variant->price_cents
+                        : $product->price_cents;
+
                     $item = MarketplaceOrderItem::create([
                         'marketplace_order_id' => $order->id,
                         'product_id'           => $product->id,
+                        'variant_id'           => $variant?->id,
                         'name_snapshot'        => $product->name,
-                        'price_cents_snapshot' => $product->price_cents,
+                        'price_cents_snapshot' => $unitPrice,
                         'weight_kg_snapshot'   => $product->weight_kg,
                         'image_url_snapshot'   => $product->first_image_url,
+                        'size_snapshot'        => $variant?->size,
+                        'color_snapshot'       => $variant?->color,
                         'quantity'             => $line['quantity'],
                         'status'               => MarketplaceOrderItem::STATUS_PENDING_PAYMENT,
                     ]);
@@ -109,12 +153,18 @@ class MarketplaceCheckoutController extends Controller
             // Build Stripe line items
             $lineItems = [];
             foreach ($items as $item) {
+                // Append size/color into name so customer's Stripe receipt is clear
+                $variantSuffix = trim(implode(' / ', array_filter([$item->size_snapshot, $item->color_snapshot])));
+                $stripeName = $variantSuffix
+                    ? "{$item->name_snapshot} ({$variantSuffix})"
+                    : $item->name_snapshot;
+
                 $lineItems[] = [
                     'price_data' => [
                         'currency' => 'mxn',
                         'unit_amount' => $item->price_cents_snapshot,
                         'product_data' => [
-                            'name' => $item->name_snapshot,
+                            'name' => $stripeName,
                             'images' => $item->image_url_snapshot ? [$item->image_url_snapshot] : [],
                         ],
                     ],
