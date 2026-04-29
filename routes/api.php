@@ -59,10 +59,11 @@ Route::prefix('store')->group(function () {
     Route::get('/products/{slug}', [StoreProductController::class, 'show']);
     Route::get('/categories', [StoreProductController::class, 'categories']);
 
-    // Manual stock recheck — throttled (6 per minute per IP) since it hits the
-    // source store synchronously and we don't want abuse.
+    // Manual stock recheck — throttled per IP. Bumped to 30/min so a user
+    // browsing several products in a row doesn't get blocked by their own
+    // page-load auto-rechecks. Hits the source store synchronously.
     Route::post('/products/{slug}/check-stock', [StoreProductController::class, 'checkStock'])
-        ->middleware('throttle:6,1');
+        ->middleware('throttle:30,1');
 });
 
 Route::get('/user-types', function () {
