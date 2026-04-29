@@ -39,6 +39,7 @@ class Product extends Model
         'description',
         'sku',
         'source_url',
+        'requires_render',
         'price_cents',
         'cost_cents',
         'markup_percent',
@@ -57,6 +58,7 @@ class Product extends Model
     ];
 
     protected $casts = [
+        'requires_render'     => 'boolean',
         'price_cents'         => 'integer',
         'cost_cents'          => 'integer',
         'markup_percent'      => 'decimal:2',

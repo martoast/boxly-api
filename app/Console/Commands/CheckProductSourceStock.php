@@ -104,20 +104,25 @@ class CheckProductSourceStock extends Command
         //   2. Shopify .js     → fallback when .json strips inventory (YoungLA)
         //   3. HTML JSON-LD    → universal for non-Shopify stores (BBW, etc.)
         //   4. HTML keywords   → last resort for non-Shopify with no JSON-LD
+        //
+        // Products with `requires_render = true` skip the Shopify JSON paths
+        // (they're SPAs that don't expose them) and go straight to HTML +
+        // ScraperAPI's render=true mode (~10× credits but actually executes JS).
 
-        $jsonUrl = $this->shopifyEndpointUrl($product->source_url, '.json');
-        if ($jsonUrl) {
-            $status = $this->checkViaShopifyJson($product, $jsonUrl, 'json');
-            if ($status !== null) return $status;
+        if (! $product->requires_render) {
+            $jsonUrl = $this->shopifyEndpointUrl($product->source_url, '.json');
+            if ($jsonUrl) {
+                $status = $this->checkViaShopifyJson($product, $jsonUrl, 'json');
+                if ($status !== null) return $status;
+            }
+
+            $jsUrl = $this->shopifyEndpointUrl($product->source_url, '.js');
+            if ($jsUrl) {
+                $status = $this->checkViaShopifyJson($product, $jsUrl, 'js');
+                if ($status !== null) return $status;
+            }
         }
 
-        $jsUrl = $this->shopifyEndpointUrl($product->source_url, '.js');
-        if ($jsUrl) {
-            $status = $this->checkViaShopifyJson($product, $jsUrl, 'js');
-            if ($status !== null) return $status;
-        }
-
-        // Fetch HTML once and try both JSON-LD (structured) then keyword scraping.
         return $this->checkViaHtmlScrape($product);
     }
 
@@ -297,7 +302,9 @@ class CheckProductSourceStock extends Command
      */
     private function checkViaHtmlScrape(Product $product): string
     {
-        $response = Http::timeout(60)
+        // SPAs need ScraperAPI to execute JS (render=true) before scraping —
+        // costs ~10× credits but is the only way to get the real HTML.
+        $response = Http::timeout($product->requires_render ? 120 : 60)
             ->withHeaders([
                 'User-Agent' => $this->userAgent,
                 'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -307,7 +314,7 @@ class CheckProductSourceStock extends Command
                 if ($exception instanceof \Illuminate\Http\Client\ConnectionException) return true;
                 return false;
             }, throw: false)
-            ->get($this->scraperApiWrap($product->source_url));
+            ->get($this->scraperApiWrap($product->source_url, $product->requires_render));
 
         if ($response->status() === 404) {
             $this->saveProductResult($product, Product::STOCK_OUT_OF_STOCK, '404 Not Found');
@@ -407,17 +414,19 @@ class CheckProductSourceStock extends Command
     /**
      * Wrap a target URL so it goes through ScraperAPI (which handles Cloudflare,
      * TLS fingerprinting, and JS challenges so we get the real content back).
+     *
+     * @param bool $render if true, executes JavaScript before returning the HTML
+     *   (~10× ScraperAPI credits — used for SPAs like Gymshark / Victoria's Secret)
      */
-    private function scraperApiWrap(string $targetUrl): string
+    private function scraperApiWrap(string $targetUrl, bool $render = false): string
     {
         $key = config('services.scraperapi.key');
         if (! $key) {
             throw new \RuntimeException('SCRAPERAPI_KEY not configured');
         }
-        return 'https://api.scraperapi.com/?' . http_build_query([
-            'api_key' => $key,
-            'url' => $targetUrl,
-        ]);
+        $params = ['api_key' => $key, 'url' => $targetUrl];
+        if ($render) $params['render'] = 'true';
+        return 'https://api.scraperapi.com/?' . http_build_query($params);
     }
 
     private function saveProductResult(Product $product, string $status, string $note): void
