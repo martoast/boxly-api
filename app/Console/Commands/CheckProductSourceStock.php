@@ -99,12 +99,11 @@ class CheckProductSourceStock extends Command
 
     private function checkProduct(Product $product): string
     {
-        // Always go through ScraperAPI — uniform across all source stores.
-        //
-        // Try `.json` first — it's universally supported across Shopify stores
-        // (Chubbies, YoungLA, Gymshark, etc.) and gives rich per-variant data.
-        // Fall back to `.js` only if `.json` fails. This saves a ScraperAPI
-        // credit per product on stores where `.json` works (most of them).
+        // Pipeline (all calls go via ScraperAPI):
+        //   1. Shopify .json   → rich per-variant data (most Shopify stores)
+        //   2. Shopify .js     → fallback when .json strips inventory (YoungLA)
+        //   3. HTML JSON-LD    → universal for non-Shopify stores (BBW, etc.)
+        //   4. HTML keywords   → last resort for non-Shopify with no JSON-LD
 
         $jsonUrl = $this->shopifyEndpointUrl($product->source_url, '.json');
         if ($jsonUrl) {
@@ -118,7 +117,7 @@ class CheckProductSourceStock extends Command
             if ($status !== null) return $status;
         }
 
-        // Last resort: HTML keyword scrape (product-level only)
+        // Fetch HTML once and try both JSON-LD (structured) then keyword scraping.
         return $this->checkViaHtmlScrape($product);
     }
 
@@ -292,8 +291,9 @@ class CheckProductSourceStock extends Command
     }
 
     /**
-     * Fallback: scrape the HTML page (via ScraperAPI) for out-of-stock keywords.
-     * Sets only product-level status — no per-variant data.
+     * Fetch the HTML page once and try, in order:
+     *   1. JSON-LD Product schema (universal — Demandware, Magento, custom stores all use it)
+     *   2. Out-of-stock keyword scan (last-resort heuristic)
      */
     private function checkViaHtmlScrape(Product $product): string
     {
@@ -319,7 +319,22 @@ class CheckProductSourceStock extends Command
             return Product::STOCK_UNKNOWN;
         }
 
-        $lower = strtolower($response->body());
+        $body = $response->body();
+
+        // Step 1: try JSON-LD Product schema. This is what Google requires retailers
+        // to publish, so virtually every major non-Shopify store has it.
+        $jsonLdStatus = $this->checkViaJsonLd($body);
+        if ($jsonLdStatus !== null) {
+            $this->saveProductResult(
+                $product,
+                $jsonLdStatus,
+                "JSON-LD · " . ($jsonLdStatus === Product::STOCK_IN_STOCK ? 'InStock' : 'OutOfStock')
+            );
+            return $jsonLdStatus;
+        }
+
+        // Step 2: heuristic keyword scan
+        $lower = strtolower($body);
         foreach ($this->outOfStockPhrases as $phrase) {
             if (str_contains($lower, strtolower($phrase))) {
                 $this->saveProductResult($product, Product::STOCK_OUT_OF_STOCK, "HTML matched: \"{$phrase}\"");
@@ -327,8 +342,66 @@ class CheckProductSourceStock extends Command
             }
         }
 
-        $this->saveProductResult($product, Product::STOCK_IN_STOCK, 'HTML OK · ' . strlen($response->body()) . ' bytes');
+        $this->saveProductResult($product, Product::STOCK_IN_STOCK, 'HTML OK · ' . strlen($body) . ' bytes');
         return Product::STOCK_IN_STOCK;
+    }
+
+    /**
+     * Look for a JSON-LD Product schema in the HTML and read its `offers.availability`.
+     *
+     * Returns Product::STOCK_IN_STOCK / STOCK_OUT_OF_STOCK if a Product schema is
+     * found and we can determine availability. Returns null if no schema found —
+     * caller should fall back to keyword scraping.
+     */
+    private function checkViaJsonLd(string $html): ?string
+    {
+        // Find every <script type="application/ld+json">...</script> block
+        if (! preg_match_all('~<script[^>]*application/ld\+json[^>]*>(.*?)</script>~is', $html, $matches)) {
+            return null;
+        }
+
+        foreach ($matches[1] as $block) {
+            $decoded = json_decode(trim($block), true);
+            if (! $decoded) continue;
+
+            // Schema can be an array, a Graph, or a single object
+            $items = isset($decoded['@graph']) ? $decoded['@graph']
+                : (isset($decoded[0]) ? $decoded : [$decoded]);
+
+            foreach ($items as $item) {
+                if (! is_array($item)) continue;
+                $type = $item['@type'] ?? null;
+                $isProduct = is_string($type) ? $type === 'Product'
+                    : (is_array($type) && in_array('Product', $type, true));
+                if (! $isProduct) continue;
+
+                $offers = $item['offers'] ?? null;
+                if (! $offers) continue;
+
+                // offers can be a single object or an array of variant offers
+                $offerList = isset($offers[0]) ? $offers : [$offers];
+                $anyAvailable = false;
+                $anyOffer = false;
+
+                foreach ($offerList as $offer) {
+                    if (! is_array($offer)) continue;
+                    $anyOffer = true;
+                    $availability = strtolower((string) ($offer['availability'] ?? ''));
+                    // schema.org/InStock = available
+                    if (str_contains($availability, 'instock')
+                        || str_contains($availability, 'limitedavailability')
+                        || str_contains($availability, 'onlineonly')
+                        || str_contains($availability, 'preorder')) {
+                        $anyAvailable = true;
+                    }
+                }
+
+                if (! $anyOffer) continue;
+                return $anyAvailable ? Product::STOCK_IN_STOCK : Product::STOCK_OUT_OF_STOCK;
+            }
+        }
+
+        return null;
     }
 
     /**
