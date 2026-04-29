@@ -173,11 +173,23 @@ class CheckProductSourceStock extends Command
             return null;
         }
 
+        // Some stores (YoungLA, etc.) strip `inventory_quantity` AND `available` from
+        // their public .json — leaving us no way to tell stock status. If neither field
+        // is populated on ANY variant, return null so the caller falls back to .js.
+        $hasUsableStock = false;
+        foreach ($root['variants'] as $v) {
+            if (array_key_exists('available', $v) && $v['available'] !== null) { $hasUsableStock = true; break; }
+            if (array_key_exists('inventory_quantity', $v) && $v['inventory_quantity'] !== null) { $hasUsableStock = true; break; }
+        }
+        if (! $hasUsableStock) return null;
+
         // Normalize availability per variant. .js gives `available` bool; .json gives `inventory_quantity`.
         $remoteVariants = array_map(function ($v) use ($format) {
-            $v['_available'] = $format === 'json'
-                ? ((int) ($v['inventory_quantity'] ?? 0)) > 0
-                : (bool) ($v['available'] ?? false);
+            if ($format === 'json' && array_key_exists('inventory_quantity', $v) && $v['inventory_quantity'] !== null) {
+                $v['_available'] = ((int) $v['inventory_quantity']) > 0;
+            } else {
+                $v['_available'] = (bool) ($v['available'] ?? false);
+            }
             return $v;
         }, $root['variants']);
 
