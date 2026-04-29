@@ -128,6 +128,7 @@ Route::middleware('auth:sanctum')->group(function () {
             'user_type' => $user->user_type,
             'preferred_language' => $user->preferred_language,
             'role' => $user->role,
+            'team' => $user->team,
             'email_verified_at' => $user->email_verified_at,
             'created_at' => $user->created_at,
             'is_affiliate' => $user->isAffiliate(),
@@ -370,6 +371,50 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/orders', [EmployeeOrderController::class, 'index']);
         Route::get('/orders/{order}', [EmployeeOrderController::class, 'show']);
         Route::post('/orders/{order}/arrival-images', [EmployeeOrderController::class, 'uploadArrivalImages']);
+    });
+
+    /*
+    |--------------------------------------------------------------------------
+    | Shopping Team Routes (Velonie — storefront CRUD + PR fulfillment)
+    | Mounts the existing admin controllers; gated so admins (full visibility)
+    | and shopping employees both pass.
+    |--------------------------------------------------------------------------
+    */
+    Route::middleware('shopping')->prefix('shopping')->group(function () {
+
+        Route::prefix('purchase-requests')->group(function () {
+            Route::get('/', [AdminPurchaseRequestController::class, 'index']);
+            Route::post('/', [AdminPurchaseRequestController::class, 'store']);
+
+            Route::delete('/bulk', [AdminPurchaseRequestController::class, 'bulkDestroy']);
+            Route::post('/merge', [AdminPurchaseRequestController::class, 'mergePurchaseRequests']);
+            Route::get('/{purchaseRequest}', [AdminPurchaseRequestController::class, 'show']);
+
+            Route::put('/{purchaseRequest}', [AdminPurchaseRequestController::class, 'update']);
+            Route::delete('/{purchaseRequest}', [AdminPurchaseRequestController::class, 'destroy']);
+
+            Route::post('/{purchaseRequest}/quote', [AdminPurchaseRequestController::class, 'createQuote']);
+            Route::post('/{purchaseRequest}/mark-purchased', [AdminPurchaseRequestController::class, 'markAsPurchased']);
+            Route::put('/{purchaseRequest}/reject', [AdminPurchaseRequestController::class, 'reject']);
+        });
+
+        Route::prefix('products')->group(function () {
+            Route::get('/', [AdminProductController::class, 'index']);
+            Route::post('/', [AdminProductController::class, 'store']);
+            Route::get('/expiring', [AdminProductController::class, 'expiring']);
+            Route::get('/{product}', [AdminProductController::class, 'show']);
+            Route::put('/{product}', [AdminProductController::class, 'update']);
+            Route::delete('/{product}', [AdminProductController::class, 'destroy']);
+            Route::post('/{product}/images', [AdminProductController::class, 'uploadImages']);
+            Route::delete('/{product}/images/{index}', [AdminProductController::class, 'deleteImage']);
+            Route::post('/{product}/variants', [AdminProductController::class, 'addVariant']);
+            Route::post('/{product}/variants/sync', [AdminProductController::class, 'syncVariants']);
+            Route::delete('/{product}/variants/{variant}', [AdminProductController::class, 'deleteVariant']);
+        });
+
+        // Customer lookup — needed by the "create PR for customer" form.
+        // Read-only; full customer CRUD remains admin-only under /admin/customers.
+        Route::get('/customers', [AdminCustomerController::class, 'index']);
     });
 });
 

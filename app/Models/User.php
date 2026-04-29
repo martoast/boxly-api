@@ -23,6 +23,10 @@ class User extends Authenticatable
     const ROLE_ADMIN = 'admin';
     const ROLE_EMPLOYEE = 'employee';
 
+    // Sub-team for employees. Only meaningful when role=employee.
+    const TEAM_WAREHOUSE = 'warehouse';
+    const TEAM_SHOPPING  = 'shopping';
+
     /**
      * The attributes that are mass assignable.
      *
@@ -45,6 +49,7 @@ class User extends Authenticatable
         'full_address',
         'provider',
         'role',
+        'team',
         'user_type',
         'registration_source',
         'form_1583_completed_at',
@@ -223,6 +228,25 @@ class User extends Authenticatable
     public function isEmployee(): bool
     {
         return $this->role === 'employee';
+    }
+
+    public function isWarehouseEmployee(): bool
+    {
+        return $this->isEmployee() && $this->team === self::TEAM_WAREHOUSE;
+    }
+
+    public function isShoppingEmployee(): bool
+    {
+        return $this->isEmployee() && $this->team === self::TEAM_SHOPPING;
+    }
+
+    /**
+     * Can manage the storefront + fulfill purchase requests.
+     * Admin sees everything; shopping employees see their slice.
+     */
+    public function canManageShopping(): bool
+    {
+        return $this->isAdmin() || $this->isShoppingEmployee();
     }
 
     /**
