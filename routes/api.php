@@ -334,9 +334,11 @@ Route::middleware('auth:sanctum')->group(function () {
         // Boxly Store — Admin Marketplace Order Management
         Route::prefix('marketplace-orders')->group(function () {
             Route::get('/', [AdminMarketplaceOrderController::class, 'index']);
+            Route::get('/pending-source-purchase', [AdminMarketplaceOrderController::class, 'pendingSourcePurchase']);
             Route::get('/{marketplaceOrder}', [AdminMarketplaceOrderController::class, 'show']);
             Route::put('/{marketplaceOrder}/items/{item}/mark-received', [AdminMarketplaceOrderController::class, 'markItemReceived']);
             Route::put('/{marketplaceOrder}/items/{item}/unmark-received', [AdminMarketplaceOrderController::class, 'unmarkItemReceived']);
+            Route::post('/{marketplaceOrder}/items/{item}/record-source-purchase', [AdminMarketplaceOrderController::class, 'recordSourcePurchase']);
             Route::post('/{marketplaceOrder}/assign-box', [AdminMarketplaceOrderController::class, 'assignBox']);
             Route::post('/{marketplaceOrder}/upload-gia', [AdminMarketplaceOrderController::class, 'uploadGia']);
             Route::post('/{marketplaceOrder}/mark-shipped', [AdminMarketplaceOrderController::class, 'markShipped']);

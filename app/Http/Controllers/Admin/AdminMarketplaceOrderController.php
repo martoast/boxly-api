@@ -90,6 +90,56 @@ class AdminMarketplaceOrderController extends Controller
         ]);
     }
 
+    /**
+     * Items waiting to be purchased from their source store (US retailer).
+     * After customer pays Boxly, admin opens this list to go buy from each retailer.
+     */
+    public function pendingSourcePurchase(Request $request)
+    {
+        $request->validate([
+            'per_page' => 'nullable|integer|min:1|max:200',
+        ]);
+
+        $perPage = (int) $request->input('per_page', 30);
+
+        $items = MarketplaceOrderItem::with(['order.user', 'product:id,name,source_url,images'])
+            ->whereNotNull('paid_at')
+            ->whereNull('source_purchased_at')
+            ->whereIn('status', [MarketplaceOrderItem::STATUS_ORDERED, MarketplaceOrderItem::STATUS_PENDING_PAYMENT])
+            ->orderBy('paid_at', 'asc')
+            ->paginate($perPage);
+
+        return response()->json([
+            'success' => true,
+            'data' => $items,
+        ]);
+    }
+
+    /**
+     * Admin records the purchase they made at the US source store.
+     */
+    public function recordSourcePurchase(Request $request, MarketplaceOrder $marketplaceOrder, MarketplaceOrderItem $item)
+    {
+        if ($item->marketplace_order_id !== $marketplaceOrder->id) {
+            return response()->json(['success' => false, 'message' => 'Item not in this order'], 400);
+        }
+
+        $validated = $request->validate([
+            'source_order_id'        => 'nullable|string|max:100',
+            'source_tracking_number' => 'nullable|string|max:100',
+            'source_carrier'         => 'nullable|string|max:50',
+        ]);
+
+        $item->update(array_merge($validated, [
+            'source_purchased_at' => now(),
+        ]));
+
+        return response()->json([
+            'success' => true,
+            'data' => $item->fresh(['order.user', 'product']),
+        ]);
+    }
+
     public function unmarkItemReceived(Request $request, MarketplaceOrder $marketplaceOrder, MarketplaceOrderItem $item)
     {
         if ($item->marketplace_order_id !== $marketplaceOrder->id) {
