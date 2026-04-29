@@ -94,36 +94,44 @@ class CheckProductSourceStock extends Command
 
     private function checkProduct(Product $product): string
     {
-        // 1. If product has variants OR source URL looks like Shopify, try the JSON endpoint.
-        $shopifyJsonUrl = $this->shopifyJsUrl($product->source_url);
-        if ($shopifyJsonUrl) {
-            $shopifyStatus = $this->checkViaShopifyJson($product, $shopifyJsonUrl);
-            if ($shopifyStatus !== null) return $shopifyStatus;
-            // If Shopify check failed (e.g. 403), fall through to HTML scrape.
+        // 1. Try Shopify .js first (returns `available: bool` per variant — cleanest format)
+        $jsUrl = $this->shopifyEndpointUrl($product->source_url, '.js');
+        if ($jsUrl) {
+            $status = $this->checkViaShopifyJson($product, $jsUrl, 'js');
+            if ($status !== null) return $status;
         }
 
-        // 2. Fallback: HTML keyword scrape (no per-variant data — sets product-level only)
+        // 2. Try Shopify singular .json (returns `inventory_quantity` per variant — works for Chubbies, etc.)
+        $jsonUrl = $this->shopifyEndpointUrl($product->source_url, '.json');
+        if ($jsonUrl) {
+            $status = $this->checkViaShopifyJson($product, $jsonUrl, 'json');
+            if ($status !== null) return $status;
+        }
+
+        // 3. Fallback: HTML keyword scrape (product-level only, no per-variant data)
         return $this->checkViaHtmlScrape($product);
     }
 
     /**
-     * Convert a Shopify product URL to its .js endpoint:
-     *   https://www.youngla.com/products/2093  →  https://www.youngla.com/products/2093.js
+     * Build a Shopify product endpoint URL by appending a suffix to a /products/{handle} URL.
+     *   https://store.com/products/abc  →  https://store.com/products/abc.js  (or .json)
      * Returns null if the URL doesn't look like a Shopify product page.
      */
-    private function shopifyJsUrl(string $url): ?string
+    private function shopifyEndpointUrl(string $url, string $suffix): ?string
     {
         if (! preg_match('#^(https?://[^/]+/products/[^/?#]+)#', $url, $m)) {
             return null;
         }
-        return $m[1] . '.js';
+        return $m[1] . $suffix;
     }
 
     /**
-     * Hit Shopify `.js` endpoint, update each variant's stock, return product-level status.
+     * Hit Shopify `.js` or `.json` endpoint, update each variant's stock, return product-level status.
      * Returns null on transport failure (caller should fall back).
+     *
+     * @param string $format 'js' or 'json' — controls how we read availability
      */
-    private function checkViaShopifyJson(Product $product, string $jsUrl): ?string
+    private function checkViaShopifyJson(Product $product, string $url, string $format): ?string
     {
         try {
             $response = Http::timeout(20)
@@ -132,7 +140,7 @@ class CheckProductSourceStock extends Command
                     'Accept' => 'application/json',
                 ])
                 ->retry(2, 1000, throw: false)
-                ->get($jsUrl);
+                ->get($url);
         } catch (Throwable $e) {
             return null;
         }
@@ -140,9 +148,24 @@ class CheckProductSourceStock extends Command
         if (! $response->successful()) return null;
 
         $json = $response->json();
-        if (! is_array($json) || empty($json['variants']) || ! is_array($json['variants'])) {
+
+        // .js returns the product at root; .json nests it under "product"
+        $root = $format === 'json' ? ($json['product'] ?? null) : $json;
+
+        if (! is_array($root) || empty($root['variants']) || ! is_array($root['variants'])) {
             return null;
         }
+
+        // Normalize availability per variant. .js gives `available` bool; .json gives `inventory_quantity`.
+        $remoteVariants = array_map(function ($v) use ($format) {
+            $v['_available'] = $format === 'json'
+                ? ((int) ($v['inventory_quantity'] ?? 0)) > 0
+                : (bool) ($v['available'] ?? false);
+            return $v;
+        }, $root['variants']);
+
+        // Replace the array used downstream
+        $json = ['variants' => $remoteVariants];
 
         // Index Shopify variants by id and by option1/option2
         $byId = [];
@@ -189,7 +212,7 @@ class CheckProductSourceStock extends Command
             }
 
             $matchedAny = true;
-            $available = (bool) ($remote['available'] ?? false);
+            $available = (bool) ($remote['_available'] ?? false);
             $newStatus = $available
                 ? ProductVariant::STATUS_IN_STOCK
                 : ProductVariant::STATUS_OUT_OF_STOCK;
@@ -197,7 +220,7 @@ class CheckProductSourceStock extends Command
             $local->update([
                 'stock_check_status' => $newStatus,
                 'last_stock_check_at' => now(),
-                'last_stock_check_response' => 'Shopify .js · available=' . ($available ? 'true' : 'false'),
+                'last_stock_check_response' => "Shopify {$format} · available=" . ($available ? 'true' : 'false'),
                 // Backfill shopify_variant_id if we matched via options
                 'shopify_variant_id' => $local->shopify_variant_id ?: ($remote['id'] ?? null),
             ]);
@@ -210,23 +233,22 @@ class CheckProductSourceStock extends Command
         if ($localVariants->isEmpty()) {
             $anyAvailable = false;
             foreach ($json['variants'] as $v) {
-                if (! empty($v['available'])) { $anyAvailable = true; break; }
+                if (! empty($v['_available'])) { $anyAvailable = true; break; }
             }
             $product->update([
                 'last_stock_check_at' => now(),
                 'stock_check_status' => $anyAvailable ? Product::STOCK_IN_STOCK : Product::STOCK_OUT_OF_STOCK,
-                'last_stock_check_response' => 'Shopify .js · no local variants · ' . count($json['variants']) . ' remote variants · any_available=' . ($anyAvailable ? 'true' : 'false'),
+                'last_stock_check_response' => "Shopify {$format} · no local variants · " . count($json['variants']) . ' remote variants · any_available=' . ($anyAvailable ? 'true' : 'false'),
             ]);
             return $product->stock_check_status;
         }
 
         // With local variants: product is in_stock if any variant is available.
         if (! $matchedAny) {
-            // Couldn't match any local variant to remote — keep product status as unknown
             $product->update([
                 'last_stock_check_at' => now(),
                 'stock_check_status' => Product::STOCK_UNKNOWN,
-                'last_stock_check_response' => 'Shopify .js · no variant matches found',
+                'last_stock_check_response' => "Shopify {$format} · no variant matches found",
             ]);
             return Product::STOCK_UNKNOWN;
         }
@@ -234,7 +256,7 @@ class CheckProductSourceStock extends Command
         $product->update([
             'last_stock_check_at' => now(),
             'stock_check_status' => $totalAvailableLocal > 0 ? Product::STOCK_IN_STOCK : Product::STOCK_OUT_OF_STOCK,
-            'last_stock_check_response' => "Shopify .js · {$totalAvailableLocal}/" . $localVariants->count() . ' variants in stock',
+            'last_stock_check_response' => "Shopify {$format} · {$totalAvailableLocal}/" . $localVariants->count() . ' variants in stock',
         ]);
 
         return $product->stock_check_status;
