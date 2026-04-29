@@ -236,6 +236,59 @@ class AdminPurchaseRequestController extends Controller
         }
     }
 
+    /**
+     * Bulk-update the status of multiple purchase requests.
+     *
+     * Excludes `purchased` on purpose — that transition creates an Order and
+     * needs the per-PR markAsPurchased flow so each customer's Order is built
+     * correctly. For everything else (reject, cancel, quoted, paid,
+     * pending_review), a flat status flip is fine.
+     */
+    public function bulkUpdateStatus(Request $request)
+    {
+        $request->validate([
+            'ids'    => 'required|array|min:1',
+            'ids.*'  => 'required|integer|exists:purchase_requests,id',
+            'status' => 'required|in:pending_review,quoted,paid,rejected,cancelled',
+        ]);
+
+        $newStatus = $request->input('status');
+        $now = now();
+
+        DB::beginTransaction();
+        try {
+            $updates = ['status' => $newStatus];
+            // Mirror the single-PR transitions for timestamp fields when relevant.
+            if ($newStatus === PurchaseRequest::STATUS_PAID) {
+                $updates['paid_at'] = $now;
+            }
+
+            $count = PurchaseRequest::whereIn('id', $request->input('ids'))->update($updates);
+
+            DB::commit();
+
+            Log::info('Bulk-updated purchase request status', [
+                'ids'    => $request->input('ids'),
+                'status' => $newStatus,
+                'count'  => $count,
+                'admin_id' => $request->user()->id,
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => "{$count} requests updated to {$newStatus}",
+                'count'   => $count,
+            ]);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Failed to bulk-update purchase request status', ['error' => $e->getMessage()]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to update requests: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
     public function bulkDestroy(Request $request)
     {
         $request->validate([

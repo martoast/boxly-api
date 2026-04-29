@@ -225,12 +225,13 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/', [AdminPurchaseRequestController::class, 'store']);
 
             Route::delete('/bulk', [AdminPurchaseRequestController::class, 'bulkDestroy']);
+            Route::put('/bulk-status', [AdminPurchaseRequestController::class, 'bulkUpdateStatus']);
             Route::post('/merge', [AdminPurchaseRequestController::class, 'mergePurchaseRequests']);
             Route::get('/{purchaseRequest}', [AdminPurchaseRequestController::class, 'show']);
-            
+
             Route::put('/{purchaseRequest}', [AdminPurchaseRequestController::class, 'update']);
             Route::delete('/{purchaseRequest}', [AdminPurchaseRequestController::class, 'destroy']);
-            
+
             Route::post('/{purchaseRequest}/quote', [AdminPurchaseRequestController::class, 'createQuote']);
             Route::post('/{purchaseRequest}/mark-purchased', [AdminPurchaseRequestController::class, 'markAsPurchased']);
             Route::put('/{purchaseRequest}/reject', [AdminPurchaseRequestController::class, 'reject']);
@@ -387,6 +388,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/', [AdminPurchaseRequestController::class, 'store']);
 
             Route::delete('/bulk', [AdminPurchaseRequestController::class, 'bulkDestroy']);
+            Route::put('/bulk-status', [AdminPurchaseRequestController::class, 'bulkUpdateStatus']);
             Route::post('/merge', [AdminPurchaseRequestController::class, 'mergePurchaseRequests']);
             Route::get('/{purchaseRequest}', [AdminPurchaseRequestController::class, 'show']);
 
