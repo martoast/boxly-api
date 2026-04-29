@@ -45,8 +45,8 @@ return [
         'affiliate/*',
         'campaign/*',
         'employee/*',
+        'shopping/*',
         'store/*',
-        'marketplace/*',
     ],
 
     'allowed_methods' => ['*'],
