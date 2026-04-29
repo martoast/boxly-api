@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Product;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Artisan;
 
 class StoreProductController extends Controller
 {
@@ -105,6 +106,39 @@ class StoreProductController extends Controller
                 'product' => $product,
                 'related' => $related,
             ],
+        ]);
+    }
+
+    /**
+     * Manual stock check — anyone on the storefront can hit this to re-verify
+     * a product's availability against the source store right now. Throttled
+     * via the route definition.
+     */
+    public function checkStock(string $slug)
+    {
+        $product = Product::listed()->where('slug', $slug)->firstOrFail();
+
+        if (! $product->source_url) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No source URL on file for this product.',
+            ], 422);
+        }
+
+        // Run the same logic the daily cron uses, scoped to just this product.
+        Artisan::call('products:check-source-stock', ['--id' => $product->id]);
+
+        $product = Product::listed()
+            ->with(['variants' => fn ($q) => $q->orderBy('display_order')->orderBy('id')])
+            ->where('id', $product->id)
+            ->firstOrFail();
+
+        $product->makeHidden(self::HIDDEN_FROM_PUBLIC);
+        $product->variants?->each->makeHidden(self::HIDDEN_VARIANT_FROM_PUBLIC);
+
+        return response()->json([
+            'success' => true,
+            'data' => $product,
         ]);
     }
 
