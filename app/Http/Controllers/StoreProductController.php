@@ -110,9 +110,13 @@ class StoreProductController extends Controller
     }
 
     /**
-     * Manual stock check — anyone on the storefront can hit this to re-verify
-     * a product's availability against the source store right now. Throttled
-     * via the route definition.
+     * Manual / auto stock check — anyone on the storefront hits this to re-verify
+     * a product's availability against the source store. Triggered by the page-load
+     * auto-recheck when cron data is stale (>15 min). Throttled via the route.
+     *
+     * Server-side concurrency guard: if another request already updated this
+     * product within the last 60 seconds (another visitor's recheck just finished),
+     * we skip the external call and return the fresh data immediately.
      */
     public function checkStock(string $slug)
     {
@@ -125,8 +129,15 @@ class StoreProductController extends Controller
             ], 422);
         }
 
-        // Run the same logic the daily cron uses, scoped to just this product.
-        Artisan::call('products:check-source-stock', ['--id' => $product->id]);
+        // Concurrency guard: if another visitor just checked this product within
+        // the last minute, skip the external call and reuse their result.
+        $alreadyFresh = $product->last_stock_check_at
+            && $product->last_stock_check_at->gt(now()->subMinute());
+
+        if (! $alreadyFresh) {
+            // Run the same logic the daily cron uses, scoped to just this product.
+            Artisan::call('products:check-source-stock', ['--id' => $product->id]);
+        }
 
         $product = Product::listed()
             ->with(['variants' => fn ($q) => $q->orderBy('display_order')->orderBy('id')])
@@ -139,6 +150,7 @@ class StoreProductController extends Controller
         return response()->json([
             'success' => true,
             'data' => $product,
+            'cached' => $alreadyFresh,
         ]);
     }
 
