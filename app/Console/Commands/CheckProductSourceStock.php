@@ -36,9 +36,24 @@ class CheckProductSourceStock extends Command
 
     private string $userAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
+    /**
+     * Phrases in an HTML response that indicate Cloudflare is challenging us
+     * (rather than the actual store responding).
+     */
+    private array $cloudflareSignals = [
+        'verifying your connection',
+        'just a moment',
+        'cf-challenge',
+        '__cf_chl_',
+        'cf_chl_opt',
+        'attention required',
+    ];
+
     public function handle(): int
     {
-        $query = Product::active()->whereNotNull('source_url');
+        $query = Product::active()
+            ->whereNotNull('source_url')
+            ->where('source_protection', '!=', Product::PROTECTION_MANUAL);
 
         if ($id = $this->option('id')) {
             $query->where('id', $id);
@@ -94,22 +109,44 @@ class CheckProductSourceStock extends Command
 
     private function checkProduct(Product $product): string
     {
-        // 1. Try Shopify .js first (returns `available: bool` per variant — cleanest format)
+        $useScraperApi = $product->source_protection === Product::PROTECTION_CLOUDFLARE;
+
+        // 1. Try Shopify .js first (cleanest data — returns `available: bool` per variant)
         $jsUrl = $this->shopifyEndpointUrl($product->source_url, '.js');
         if ($jsUrl) {
-            $status = $this->checkViaShopifyJson($product, $jsUrl, 'js');
+            $status = $this->checkViaShopifyJson($product, $jsUrl, 'js', $useScraperApi);
             if ($status !== null) return $status;
         }
 
-        // 2. Try Shopify singular .json (returns `inventory_quantity` per variant — works for Chubbies, etc.)
+        // 2. Try Shopify singular .json (returns inventory_quantity — works for Chubbies, etc.)
         $jsonUrl = $this->shopifyEndpointUrl($product->source_url, '.json');
         if ($jsonUrl) {
-            $status = $this->checkViaShopifyJson($product, $jsonUrl, 'json');
+            $status = $this->checkViaShopifyJson($product, $jsonUrl, 'json', $useScraperApi);
             if ($status !== null) return $status;
         }
 
-        // 3. Fallback: HTML keyword scrape (product-level only, no per-variant data)
-        return $this->checkViaHtmlScrape($product);
+        // 3. Direct attempts failed AND we weren't already using ScraperAPI.
+        //    Likely Cloudflare-protected. Auto-promote and retry through ScraperAPI.
+        if (! $useScraperApi && config('services.scraperapi.key')) {
+            $product->update(['source_protection' => Product::PROTECTION_CLOUDFLARE]);
+            Log::info('Auto-promoted product to ScraperAPI', [
+                'product_id' => $product->id,
+                'slug' => $product->slug,
+            ]);
+
+            // Retry both endpoints now via ScraperAPI
+            if ($jsUrl) {
+                $status = $this->checkViaShopifyJson($product, $jsUrl, 'js', true);
+                if ($status !== null) return $status;
+            }
+            if ($jsonUrl) {
+                $status = $this->checkViaShopifyJson($product, $jsonUrl, 'json', true);
+                if ($status !== null) return $status;
+            }
+        }
+
+        // 4. Last resort: HTML keyword scrape (product-level only, no per-variant data)
+        return $this->checkViaHtmlScrape($product, $useScraperApi);
     }
 
     /**
@@ -128,25 +165,32 @@ class CheckProductSourceStock extends Command
 
     /**
      * Hit Shopify `.js` or `.json` endpoint, update each variant's stock, return product-level status.
-     * Returns null on transport failure (caller should fall back).
+     * Returns null on transport failure / Cloudflare block (caller should fall back).
      *
      * @param string $format 'js' or 'json' — controls how we read availability
+     * @param bool   $viaScraperApi — route the request through ScraperAPI (for Cloudflare-protected stores)
      */
-    private function checkViaShopifyJson(Product $product, string $url, string $format): ?string
+    private function checkViaShopifyJson(Product $product, string $url, string $format, bool $viaScraperApi = false): ?string
     {
         try {
-            $response = Http::timeout(20)
+            $response = Http::timeout($viaScraperApi ? 60 : 20)
                 ->withHeaders([
                     'User-Agent' => $this->userAgent,
                     'Accept' => 'application/json',
                 ])
                 ->retry(2, 1000, throw: false)
-                ->get($url);
+                ->get($viaScraperApi ? $this->scraperApiWrap($url) : $url);
         } catch (Throwable $e) {
             return null;
         }
 
         if (! $response->successful()) return null;
+
+        // Cloudflare often returns 200 + an HTML challenge page even when blocked.
+        // If we get HTML back from a JSON endpoint, treat it as a blocked transport.
+        if ($this->looksLikeCloudflareChallenge($response->body())) {
+            return null;
+        }
 
         $json = $response->json();
 
@@ -267,16 +311,18 @@ class CheckProductSourceStock extends Command
      * Fallback: scrape the HTML page for out-of-stock keywords.
      * Sets only product-level status — no per-variant data.
      */
-    private function checkViaHtmlScrape(Product $product): string
+    private function checkViaHtmlScrape(Product $product, bool $viaScraperApi = false): string
     {
-        $response = Http::timeout(20)
+        $url = $viaScraperApi ? $this->scraperApiWrap($product->source_url) : $product->source_url;
+
+        $response = Http::timeout($viaScraperApi ? 60 : 20)
             ->withHeaders([
                 'User-Agent' => $this->userAgent,
                 'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                 'Accept-Language' => 'en-US,en;q=0.9',
             ])
             ->retry(2, 1000, throw: false)
-            ->get($product->source_url);
+            ->get($url);
 
         if ($response->status() === 404) {
             $this->saveProductResult($product, Product::STOCK_OUT_OF_STOCK, '404 Not Found');
@@ -288,10 +334,16 @@ class CheckProductSourceStock extends Command
             return Product::STOCK_UNKNOWN;
         }
 
-        $body = strtolower($response->body());
+        $body = $response->body();
 
+        if ($this->looksLikeCloudflareChallenge($body)) {
+            $this->saveProductResult($product, Product::STOCK_UNKNOWN, 'Cloudflare challenge — needs ScraperAPI');
+            return Product::STOCK_UNKNOWN;
+        }
+
+        $lower = strtolower($body);
         foreach ($this->outOfStockPhrases as $phrase) {
-            if (str_contains($body, strtolower($phrase))) {
+            if (str_contains($lower, strtolower($phrase))) {
                 $this->saveProductResult($product, Product::STOCK_OUT_OF_STOCK, "HTML matched: \"{$phrase}\"");
                 return Product::STOCK_OUT_OF_STOCK;
             }
@@ -299,6 +351,36 @@ class CheckProductSourceStock extends Command
 
         $this->saveProductResult($product, Product::STOCK_IN_STOCK, 'HTML OK · ' . strlen($body) . ' bytes');
         return Product::STOCK_IN_STOCK;
+    }
+
+    /**
+     * Wrap a target URL so it goes through ScraperAPI (which solves Cloudflare for us).
+     */
+    private function scraperApiWrap(string $targetUrl): string
+    {
+        $key = config('services.scraperapi.key');
+        if (! $key) {
+            throw new \RuntimeException('SCRAPERAPI_KEY not configured');
+        }
+        return 'https://api.scraperapi.com/?' . http_build_query([
+            'api_key' => $key,
+            'url' => $targetUrl,
+        ]);
+    }
+
+    /**
+     * Detect whether a response body is actually a Cloudflare challenge page rather
+     * than the real content we asked for. Cloudflare often returns 200 OK with HTML
+     * even when blocking, so we have to inspect the body.
+     */
+    private function looksLikeCloudflareChallenge(string $body): bool
+    {
+        $sample = strtolower(substr($body, 0, 4000));
+        if (! str_starts_with(ltrim($sample), '<')) return false; // looks like JSON, fine
+        foreach ($this->cloudflareSignals as $signal) {
+            if (str_contains($sample, $signal)) return true;
+        }
+        return false;
     }
 
     private function saveProductResult(Product $product, string $status, string $note): void

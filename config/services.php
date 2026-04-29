@@ -12,6 +12,14 @@ return [
         'token' => env('POSTMARK_TOKEN'),
     ],
 
+    /**
+     * ScraperAPI — bypasses Cloudflare on protected store pages so the stock-check
+     * cron can still reach .json/.js endpoints on stores like YoungLA, Gymshark, Alo.
+     */
+    'scraperapi' => [
+        'key' => env('SCRAPERAPI_KEY'),
+    ],
+
     'resend' => [
         'key' => env('RESEND_KEY'),
     ],
