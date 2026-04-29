@@ -33,16 +33,12 @@ class Product extends Model
     const STOCK_IN_STOCK = 'in_stock';
     const STOCK_OUT_OF_STOCK = 'out_of_stock';
 
-    const STOCK_CHECK_AUTO = 'auto';     // Cron runs daily via ScraperAPI
-    const STOCK_CHECK_MANUAL = 'manual'; // Admin team maintains stock by hand
-
     protected $fillable = [
         'name',
         'slug',
         'description',
         'sku',
         'source_url',
-        'stock_check_mode',
         'price_cents',
         'cost_cents',
         'markup_percent',

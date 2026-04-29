@@ -43,9 +43,7 @@ class CheckProductSourceStock extends Command
             return self::FAILURE;
         }
 
-        $query = Product::active()
-            ->whereNotNull('source_url')
-            ->where('stock_check_mode', '!=', Product::STOCK_CHECK_MANUAL);
+        $query = Product::active()->whereNotNull('source_url');
 
         if ($id = $this->option('id')) {
             $query->where('id', $id);
