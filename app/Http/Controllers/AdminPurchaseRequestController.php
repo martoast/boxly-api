@@ -239,38 +239,90 @@ class AdminPurchaseRequestController extends Controller
     /**
      * Bulk-update the status of multiple purchase requests.
      *
-     * Excludes `purchased` on purpose — that transition creates an Order and
-     * needs the per-PR markAsPurchased flow so each customer's Order is built
-     * correctly. For everything else (reject, cancel, quoted, paid,
-     * pending_review), a flat status flip is fine.
+     * For `purchased`, runs the same processPurchase() logic per PR — creates
+     * a follow-up Order in awaiting_packages, mails the customer. PRs not in
+     * `paid` state are skipped (returned in `skipped`). For all other
+     * statuses, a flat status flip is fine.
      */
     public function bulkUpdateStatus(Request $request)
     {
         $request->validate([
             'ids'    => 'required|array|min:1',
             'ids.*'  => 'required|integer|exists:purchase_requests,id',
-            'status' => 'required|in:pending_review,quoted,paid,rejected,cancelled',
+            'status' => 'required|in:pending_review,quoted,paid,purchased,rejected,cancelled',
         ]);
 
         $newStatus = $request->input('status');
-        $now = now();
+        $ids = $request->input('ids');
 
+        // `purchased` needs the per-PR Order-creation flow.
+        if ($newStatus === PurchaseRequest::STATUS_PURCHASED) {
+            $prs = PurchaseRequest::with('items', 'user')->whereIn('id', $ids)->get();
+
+            $processed = [];
+            $skipped = [];
+
+            foreach ($prs as $pr) {
+                if ($pr->status !== PurchaseRequest::STATUS_PAID) {
+                    $skipped[] = ['id' => $pr->id, 'reason' => "not paid (was {$pr->status})"];
+                    continue;
+                }
+
+                DB::beginTransaction();
+                try {
+                    $order = $this->processPurchase($pr);
+                    DB::commit();
+
+                    try {
+                        Mail::to($pr->user)->queue(new PurchaseRequestItemsPurchased($pr, $order));
+                    } catch (\Exception $e) {
+                        Log::error('Failed to queue items purchased email (bulk)', ['pr_id' => $pr->id, 'error' => $e->getMessage()]);
+                    }
+
+                    $processed[] = ['id' => $pr->id, 'order_number' => $order->order_number];
+                } catch (\Exception $e) {
+                    DB::rollBack();
+                    Log::error('Bulk markAsPurchased failed for PR', ['pr_id' => $pr->id, 'error' => $e->getMessage()]);
+                    $skipped[] = ['id' => $pr->id, 'reason' => 'error: ' . $e->getMessage()];
+                }
+            }
+
+            Log::info('Bulk markAsPurchased complete', [
+                'processed' => count($processed),
+                'skipped'   => count($skipped),
+                'admin_id'  => $request->user()->id,
+            ]);
+
+            $msg = count($processed) . " marcadas como compradas";
+            if (count($skipped) > 0) {
+                $msg .= " · " . count($skipped) . " omitidas (no estaban pagadas)";
+            }
+
+            return response()->json([
+                'success'   => true,
+                'message'   => $msg,
+                'count'     => count($processed),
+                'processed' => $processed,
+                'skipped'   => $skipped,
+            ]);
+        }
+
+        // Flat status flip for the simple transitions.
         DB::beginTransaction();
         try {
             $updates = ['status' => $newStatus];
-            // Mirror the single-PR transitions for timestamp fields when relevant.
             if ($newStatus === PurchaseRequest::STATUS_PAID) {
-                $updates['paid_at'] = $now;
+                $updates['paid_at'] = now();
             }
 
-            $count = PurchaseRequest::whereIn('id', $request->input('ids'))->update($updates);
+            $count = PurchaseRequest::whereIn('id', $ids)->update($updates);
 
             DB::commit();
 
             Log::info('Bulk-updated purchase request status', [
-                'ids'    => $request->input('ids'),
-                'status' => $newStatus,
-                'count'  => $count,
+                'ids'      => $ids,
+                'status'   => $newStatus,
+                'count'    => $count,
                 'admin_id' => $request->user()->id,
             ]);
 
@@ -571,11 +623,64 @@ class AdminPurchaseRequestController extends Controller
         }
     }
 
+    /**
+     * Transition a paid PurchaseRequest to purchased + create the follow-up Order.
+     * Caller MUST verify the PR is in `paid` state. Throws on failure so callers
+     * (single + bulk) can wrap in their own transaction/error handling.
+     */
+    private function processPurchase(PurchaseRequest $purchaseRequest): Order
+    {
+        $user = $purchaseRequest->user;
+
+        $order = Order::create([
+            'user_id'         => $user->id,
+            'order_number'    => Order::generateOrderNumber(),
+            'tracking_number' => Order::generateTrackingNumber(),
+            'status'          => Order::STATUS_AWAITING_PACKAGES,
+            'delivery_address'=> $user->address,
+            'is_rural'        => false,
+            'currency'        => 'mxn',
+            'completed_at'    => now(),
+        ]);
+
+        foreach ($purchaseRequest->items as $prItem) {
+            $imageUrl = null;
+            if ($prItem->image_url) {
+                $imageUrl = $prItem->image_full_url;
+            } elseif ($prItem->product_image_url) {
+                $imageUrl = $prItem->product_image_url;
+            }
+
+            (new OrderItem([
+                'order_id'                => $order->id,
+                'product_name'            => $prItem->product_name,
+                'product_url'             => $prItem->product_url,
+                'product_image_url'       => $imageUrl,
+                'quantity'                => $prItem->quantity,
+                'declared_value'          => $prItem->price,
+                'purchase_request_item_id'=> $prItem->id,
+                'is_assisted_purchase'    => true,
+            ]))->save();
+        }
+
+        $purchaseRequest->update([
+            'status'       => PurchaseRequest::STATUS_PURCHASED,
+            'purchased_at' => now(),
+        ]);
+
+        $order->update([
+            'declared_value' => $order->calculateTotalDeclaredValue(),
+            'iva_amount'     => $order->calculateIVA(),
+        ]);
+
+        return $order;
+    }
+
     public function markAsPurchased(Request $request, PurchaseRequest $purchaseRequest)
     {
         if ($purchaseRequest->status !== PurchaseRequest::STATUS_PAID) {
             return response()->json([
-                'success' => false, 
+                'success' => false,
                 'message' => 'Request must be paid before purchasing. Current status: ' . $purchaseRequest->status
             ], 400);
         }
@@ -583,65 +688,12 @@ class AdminPurchaseRequestController extends Controller
         DB::beginTransaction();
 
         try {
-            $user = $purchaseRequest->user;
-
-            // Create new order (awaiting_packages)
-            $order = Order::create([
-                'user_id' => $user->id,
-                'order_number' => Order::generateOrderNumber(),
-                'tracking_number' => Order::generateTrackingNumber(),
-                'status' => Order::STATUS_AWAITING_PACKAGES,
-                'delivery_address' => $user->address,
-                'is_rural' => false,
-                'currency' => 'mxn',
-                'completed_at' => now(),
-            ]);
-
-            // Convert Items
-            foreach ($purchaseRequest->items as $prItem) {
-                
-                // Logic to get the best available image URL
-                $imageUrl = null;
-                if ($prItem->image_url) {
-                    // If we have a file upload URL, use it
-                    $imageUrl = $prItem->image_full_url; 
-                } elseif ($prItem->product_image_url) {
-                    // Fallback to original scraped/provided URL
-                    $imageUrl = $prItem->product_image_url;
-                }
-
-                $orderItem = new OrderItem([
-                    'order_id' => $order->id,
-                    'product_name' => $prItem->product_name,
-                    'product_url' => $prItem->product_url,
-                    
-                    // CRITICAL FIX: Map the image URL here
-                    'product_image_url' => $imageUrl,
-                    
-                    'quantity' => $prItem->quantity,
-                    'declared_value' => $prItem->price,
-                    'purchase_request_item_id' => $prItem->id,
-                    'is_assisted_purchase' => true,
-                ]);
-                
-                $orderItem->save();
-            }
-
-            // Update Request Status
-            $purchaseRequest->update([
-                'status' => PurchaseRequest::STATUS_PURCHASED,
-                'purchased_at' => now(),
-            ]);
-
-            // Calculate totals
-            $order->update([
-                'declared_value' => $order->calculateTotalDeclaredValue(),
-                'iva_amount' => $order->calculateIVA()
-            ]);
+            $order = $this->processPurchase($purchaseRequest);
 
             DB::commit();
 
-            // Send Notification Email
+            $user = $purchaseRequest->user;
+
             try {
                 Mail::to($user)->queue(new PurchaseRequestItemsPurchased($purchaseRequest, $order));
                 Log::info('Items purchased email queued for ' . $user->email);
