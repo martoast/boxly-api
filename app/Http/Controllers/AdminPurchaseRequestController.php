@@ -273,11 +273,8 @@ class AdminPurchaseRequestController extends Controller
                     $order = $this->processPurchase($pr);
                     DB::commit();
 
-                    try {
-                        Mail::to($pr->user)->queue(new PurchaseRequestItemsPurchased($pr, $order));
-                    } catch (\Exception $e) {
-                        Log::error('Failed to queue items purchased email (bulk)', ['pr_id' => $pr->id, 'error' => $e->getMessage()]);
-                    }
+                    // Bulk does NOT email customers — admin housekeeping should be silent.
+                    // Single-PR markAsPurchased still queues PurchaseRequestItemsPurchased.
 
                     $processed[] = ['id' => $pr->id, 'order_number' => $order->order_number];
                 } catch (\Exception $e) {
