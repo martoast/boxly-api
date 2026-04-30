@@ -31,6 +31,7 @@ use App\Http\Controllers\EmployeeOrderController;
 use App\Http\Controllers\StoreProductController;
 use App\Http\Controllers\StoreCheckoutController;
 use App\Http\Controllers\Admin\AdminProductController;
+use App\Http\Controllers\Admin\AdminTokenController;
 
 /*
 |--------------------------------------------------------------------------
@@ -318,6 +319,11 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/', [AdminOrderBoxController::class, 'index']);
             Route::get('/{box}', [AdminOrderBoxController::class, 'show']);
         });
+
+        // Sanctum personal access tokens — for CLI / service auth
+        Route::get('/users/{user}/cli-tokens',           [AdminTokenController::class, 'index']);
+        Route::post('/users/{user}/cli-tokens',          [AdminTokenController::class, 'store']);
+        Route::delete('/users/{user}/cli-tokens/{tokenId}', [AdminTokenController::class, 'destroy']);
 
         Route::prefix('affiliates')->group(function () {
             Route::get('/', [AdminAffiliateController::class, 'index']);
