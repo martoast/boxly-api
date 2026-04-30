@@ -417,6 +417,21 @@ Route::middleware('auth:sanctum')->group(function () {
         // Customer lookup — needed by the "create PR for customer" form.
         // Read-only; full customer CRUD remains admin-only under /admin/customers.
         Route::get('/customers', [AdminCustomerController::class, 'index']);
+
+        Route::prefix('campaigns')->group(function () {
+            Route::get('/', [AdminCampaignController::class, 'index']);
+            Route::post('/', [AdminCampaignController::class, 'store']);
+            Route::get('/preview-audience', [AdminCampaignController::class, 'previewAudience']);
+            Route::get('/{campaign}', [AdminCampaignController::class, 'show']);
+            Route::put('/{campaign}', [AdminCampaignController::class, 'update']);
+            Route::delete('/{campaign}', [AdminCampaignController::class, 'destroy']);
+            Route::post('/{campaign}/start', [AdminCampaignController::class, 'start']);
+            Route::post('/{campaign}/pause', [AdminCampaignController::class, 'pause']);
+            Route::post('/{campaign}/resume', [AdminCampaignController::class, 'resume']);
+            Route::post('/{campaign}/cancel', [AdminCampaignController::class, 'cancel']);
+            Route::get('/{campaign}/recipients', [AdminCampaignController::class, 'recipients']);
+            Route::get('/{campaign}/preview-recipients', [AdminCampaignController::class, 'previewRecipients']);
+        });
     });
 });
 
