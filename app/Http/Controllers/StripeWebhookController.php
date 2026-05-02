@@ -16,6 +16,8 @@ use Illuminate\Support\Facades\DB;
 use App\Mail\PaymentReceived;
 use App\Mail\DepositReceived;
 use App\Mail\PurchaseRequestPaymentReceived;
+use App\Mail\StoreSaleTeamNotification;
+use App\Models\User;
 
 class StripeWebhookController extends Controller
 {
@@ -91,6 +93,31 @@ class StripeWebhookController extends Controller
                 Mail::to($pr->user)->queue(new PurchaseRequestPaymentReceived($pr));
             } catch (\Exception $e) {
                 Log::error('Failed to queue store purchase paid email', ['error' => $e->getMessage()]);
+            }
+
+            // Notify admins + shopping team so they can act on the source-store
+            // purchase quickly. Eager-load items + user for the email body.
+            try {
+                $pr->load(['items', 'user']);
+                $teamEmails = User::query()
+                    ->where(function ($q) {
+                        $q->where('role', User::ROLE_ADMIN)
+                          ->orWhere(function ($qq) {
+                              $qq->where('role', User::ROLE_EMPLOYEE)
+                                 ->where('team', User::TEAM_SHOPPING);
+                          });
+                    })
+                    ->pluck('email')
+                    ->all();
+
+                if (! empty($teamEmails)) {
+                    Mail::to($teamEmails)->queue(new StoreSaleTeamNotification($pr));
+                }
+            } catch (\Exception $e) {
+                Log::error('Failed to queue store sale team notification', [
+                    'pr_id' => $pr->id,
+                    'error' => $e->getMessage(),
+                ]);
             }
 
             Log::info('Store purchase paid', [
