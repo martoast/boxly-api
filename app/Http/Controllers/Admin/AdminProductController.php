@@ -31,6 +31,10 @@ class AdminProductController extends Controller
 
         if ($status = $request->input('status')) {
             $query->where('status', $status);
+        } else {
+            // Default view hides soft-deleted products; users surface them
+            // explicitly by filtering for status=inactive.
+            $query->where('status', '!=', Product::STATUS_INACTIVE);
         }
         if ($category = $request->input('category')) {
             $query->where('category', $category);
@@ -238,6 +242,32 @@ class AdminProductController extends Controller
         return response()->json([
             'success' => true,
             'message' => "{$count} products deactivated",
+            'count'   => $count,
+        ]);
+    }
+
+    /**
+     * Bulk restore — flip status from inactive back to active. Companion to
+     * bulkDestroy() for un-doing soft deletes.
+     */
+    public function bulkRestore(Request $request)
+    {
+        $validated = $request->validate([
+            'ids'   => 'required|array|min:1',
+            'ids.*' => 'required|integer|exists:products,id',
+        ]);
+
+        $count = Product::whereIn('id', $validated['ids'])
+            ->update(['status' => Product::STATUS_ACTIVE]);
+
+        Log::info('Bulk-restored products', [
+            'count'    => $count,
+            'admin_id' => $request->user()->id,
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => "{$count} products restored",
             'count'   => $count,
         ]);
     }
