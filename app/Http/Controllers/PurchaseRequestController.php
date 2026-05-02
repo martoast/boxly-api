@@ -5,6 +5,8 @@ namespace App\Http\Controllers;
 use App\Models\PurchaseRequest;
 use App\Models\PurchaseRequestItem;
 use App\Mail\PurchaseRequestCreated;
+use App\Mail\PurchaseRequestCreatedTeamNotification;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -117,12 +119,28 @@ class PurchaseRequestController extends Controller
 
             Log::info('Purchase Request created', ['id' => $pr->id, 'user_id' => $user->id]);
 
-            // Send Notification
+            // Customer confirmation
             try {
                 Mail::to($user)->queue(new PurchaseRequestCreated($pr));
                 Log::info('Purchase Request confirmation email queued for ' . $user->email);
             } catch (\Exception $e) {
                 Log::error('Failed to queue purchase request email: ' . $e->getMessage());
+            }
+
+            // Internal alert to the shopping team — Velonie can review and quote
+            // right away. Admins excluded (they have the dashboard).
+            try {
+                $pr->load(['items', 'user']);
+                $teamEmails = User::query()
+                    ->where('role', User::ROLE_EMPLOYEE)
+                    ->where('team', User::TEAM_SHOPPING)
+                    ->pluck('email')
+                    ->all();
+                if (! empty($teamEmails)) {
+                    Mail::to($teamEmails)->queue(new PurchaseRequestCreatedTeamNotification($pr));
+                }
+            } catch (\Exception $e) {
+                Log::error('Failed to queue PR-created team notification: ' . $e->getMessage());
             }
 
             return response()->json([
