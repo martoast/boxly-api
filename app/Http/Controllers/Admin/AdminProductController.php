@@ -19,15 +19,16 @@ class AdminProductController extends Controller
     public function index(Request $request)
     {
         $request->validate([
-            'per_page' => 'nullable|integer|min:1|max:200',
-            'status'   => 'nullable|in:draft,active,inactive,sold_out',
-            'category' => 'nullable|string',
-            'search'   => 'nullable|string|max:200',
+            'per_page'    => 'nullable|integer|min:1|max:200',
+            'status'      => 'nullable|in:draft,active,inactive,sold_out',
+            'store_id'    => 'nullable|integer|exists:stores,id',
+            'category_id' => 'nullable|integer|exists:categories,id',
+            'search'      => 'nullable|string|max:200',
         ]);
 
         $perPage = (int) $request->input('per_page', 20);
 
-        $query = Product::query();
+        $query = Product::query()->with(['store', 'categories']);
 
         if ($status = $request->input('status')) {
             $query->where('status', $status);
@@ -36,8 +37,11 @@ class AdminProductController extends Controller
             // explicitly by filtering for status=inactive.
             $query->where('status', '!=', Product::STATUS_INACTIVE);
         }
-        if ($category = $request->input('category')) {
-            $query->where('category', $category);
+        if ($storeId = $request->input('store_id')) {
+            $query->where('store_id', $storeId);
+        }
+        if ($categoryId = $request->input('category_id')) {
+            $query->whereHas('categories', fn ($q) => $q->where('categories.id', $categoryId));
         }
         if ($search = $request->input('search')) {
             $query->where(function ($q) use ($search) {
@@ -56,7 +60,11 @@ class AdminProductController extends Controller
 
     public function show(Product $product)
     {
-        $product->load(['variants' => fn ($q) => $q->orderBy('display_order')->orderBy('id')]);
+        $product->load([
+            'variants' => fn ($q) => $q->orderBy('display_order')->orderBy('id'),
+            'store',
+            'categories',
+        ]);
         return response()->json([
             'success' => true,
             'data' => $product,
@@ -166,16 +174,23 @@ class AdminProductController extends Controller
             'stock'           => 'required|integer|min:0',
             'status'          => 'nullable|in:draft,active,inactive,sold_out',
             'available_until' => 'nullable|date|after:now',
-            'category'        => 'nullable|string|max:100',
+            'store_id'        => 'nullable|integer|exists:stores,id',
+            'category_ids'    => 'nullable|array',
+            'category_ids.*'  => 'integer|exists:categories,id',
         ]);
 
         $validated['status'] = $validated['status'] ?? Product::STATUS_DRAFT;
+        $categoryIds = $validated['category_ids'] ?? null;
+        unset($validated['category_ids']);
 
         $product = Product::create($validated);
+        if ($categoryIds !== null) {
+            $product->categories()->sync($categoryIds);
+        }
 
         return response()->json([
             'success' => true,
-            'data' => $product,
+            'data' => $product->load(['store', 'categories']),
         ], 201);
     }
 
@@ -198,14 +213,25 @@ class AdminProductController extends Controller
             'stock'           => 'sometimes|integer|min:0',
             'status'          => 'sometimes|in:draft,active,inactive,sold_out',
             'available_until' => 'nullable|date',
-            'category'        => 'nullable|string|max:100',
+            'store_id'        => 'nullable|integer|exists:stores,id',
+            'category_ids'    => 'nullable|array',
+            'category_ids.*'  => 'integer|exists:categories,id',
         ]);
+
+        $categoryIds = $validated['category_ids'] ?? null;
+        unset($validated['category_ids']);
 
         $product->update($validated);
 
+        // Only sync if the request actually included category_ids — otherwise
+        // the field is silently overwritten when the form omits it.
+        if ($request->has('category_ids')) {
+            $product->categories()->sync($categoryIds ?? []);
+        }
+
         return response()->json([
             'success' => true,
-            'data' => $product->fresh(),
+            'data' => $product->fresh(['store', 'categories']),
         ]);
     }
 

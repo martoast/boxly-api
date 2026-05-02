@@ -31,6 +31,8 @@ use App\Http\Controllers\EmployeeOrderController;
 use App\Http\Controllers\StoreProductController;
 use App\Http\Controllers\StoreCheckoutController;
 use App\Http\Controllers\Admin\AdminProductController;
+use App\Http\Controllers\Admin\AdminStoreController;
+use App\Http\Controllers\Admin\AdminCategoryController;
 use App\Http\Controllers\Admin\AdminTokenController;
 
 /*
@@ -57,6 +59,7 @@ Route::prefix('store')->group(function () {
     Route::get('/products', [StoreProductController::class, 'index']);
     Route::get('/products/{slug}', [StoreProductController::class, 'show']);
     Route::get('/categories', [StoreProductController::class, 'categories']);
+    Route::get('/stores', [StoreProductController::class, 'stores']);
 
     // Manual stock recheck — throttled per IP. Bumped to 30/min so a user
     // browsing several products in a row doesn't get blocked by their own
@@ -336,6 +339,26 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/{affiliate}/record-payout', [AdminAffiliateController::class, 'recordPayout']);
         });
 
+        // Boxly Store — Stores (brands)
+        Route::prefix('stores')->group(function () {
+            Route::get('/', [AdminStoreController::class, 'index']);
+            Route::post('/', [AdminStoreController::class, 'store']);
+            Route::get('/{store}', [AdminStoreController::class, 'show']);
+            Route::put('/{store}', [AdminStoreController::class, 'update']);
+            Route::delete('/{store}', [AdminStoreController::class, 'destroy']);
+            Route::post('/{store}/logo', [AdminStoreController::class, 'uploadLogo']);
+        });
+
+        // Boxly Store — Categories
+        Route::prefix('categories')->group(function () {
+            Route::get('/', [AdminCategoryController::class, 'index']);
+            Route::post('/', [AdminCategoryController::class, 'store']);
+            Route::get('/{category}', [AdminCategoryController::class, 'show']);
+            Route::put('/{category}', [AdminCategoryController::class, 'update']);
+            Route::delete('/{category}', [AdminCategoryController::class, 'destroy']);
+            Route::post('/{category}/image', [AdminCategoryController::class, 'uploadImage']);
+        });
+
         // Boxly Store — Admin Product Management
         Route::prefix('products')->group(function () {
             Route::get('/', [AdminProductController::class, 'index']);
@@ -426,6 +449,24 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/{product}/variants', [AdminProductController::class, 'addVariant']);
             Route::post('/{product}/variants/sync', [AdminProductController::class, 'syncVariants']);
             Route::delete('/{product}/variants/{variant}', [AdminProductController::class, 'deleteVariant']);
+        });
+
+        Route::prefix('stores')->group(function () {
+            Route::get('/', [AdminStoreController::class, 'index']);
+            Route::post('/', [AdminStoreController::class, 'store']);
+            Route::get('/{store}', [AdminStoreController::class, 'show']);
+            Route::put('/{store}', [AdminStoreController::class, 'update']);
+            Route::delete('/{store}', [AdminStoreController::class, 'destroy']);
+            Route::post('/{store}/logo', [AdminStoreController::class, 'uploadLogo']);
+        });
+
+        Route::prefix('categories')->group(function () {
+            Route::get('/', [AdminCategoryController::class, 'index']);
+            Route::post('/', [AdminCategoryController::class, 'store']);
+            Route::get('/{category}', [AdminCategoryController::class, 'show']);
+            Route::put('/{category}', [AdminCategoryController::class, 'update']);
+            Route::delete('/{category}', [AdminCategoryController::class, 'destroy']);
+            Route::post('/{category}/image', [AdminCategoryController::class, 'uploadImage']);
         });
 
         // Customer lookup — needed by the "create PR for customer" form.

@@ -2,7 +2,9 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Category;
 use App\Models\Product;
+use App\Models\Store;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Artisan;
 
@@ -31,18 +33,36 @@ class StoreProductController extends Controller
     public function index(Request $request)
     {
         $request->validate([
-            'per_page' => 'nullable|integer|min:1|max:60',
-            'category' => 'nullable|string|max:100',
-            'search'   => 'nullable|string|max:200',
-            'sort'     => 'nullable|in:newest,price_asc,price_desc',
+            'per_page'      => 'nullable|integer|min:1|max:60',
+            'category_id'   => 'nullable|integer|exists:categories,id',
+            'category_slug' => 'nullable|string|max:120',
+            'store_id'      => 'nullable|integer|exists:stores,id',
+            'store_slug'    => 'nullable|string|max:120',
+            'search'        => 'nullable|string|max:200',
+            'sort'          => 'nullable|in:newest,price_asc,price_desc',
         ]);
 
         $perPage = (int) $request->input('per_page', 24);
 
-        $query = Product::listed();
+        $query = Product::listed()->with([
+            'variants' => fn ($q) => $q->orderBy('display_order')->orderBy('id'),
+            'store',
+            'categories',
+        ]);
 
-        if ($category = $request->input('category')) {
-            $query->where('category', $category);
+        // Store filter — accepts id or slug
+        if ($storeId = $request->input('store_id')) {
+            $query->where('store_id', $storeId);
+        } elseif ($storeSlug = $request->input('store_slug')) {
+            $store = Store::active()->where('slug', $storeSlug)->first();
+            $query->where('store_id', $store?->id ?? 0);
+        }
+
+        // Category filter — accepts id or slug
+        if ($categoryId = $request->input('category_id')) {
+            $query->whereHas('categories', fn ($q) => $q->where('categories.id', $categoryId));
+        } elseif ($categorySlug = $request->input('category_slug')) {
+            $query->whereHas('categories', fn ($q) => $q->where('categories.slug', $categorySlug));
         }
 
         if ($search = $request->input('search')) {
@@ -58,8 +78,6 @@ class StoreProductController extends Controller
             case 'price_desc': $query->orderBy('price_cents', 'desc'); break;
             default:           $query->latest();
         }
-
-        $query->with(['variants' => fn ($q) => $q->orderBy('display_order')->orderBy('id')]);
 
         $products = $query->paginate($perPage)->withQueryString();
         $products->getCollection()->each(function ($p) {
@@ -80,17 +98,27 @@ class StoreProductController extends Controller
     public function show(string $slug)
     {
         $product = Product::listed()
-            ->with(['variants' => fn ($q) => $q->orderBy('display_order')->orderBy('id')])
+            ->with([
+                'variants' => fn ($q) => $q->orderBy('display_order')->orderBy('id'),
+                'store',
+                'categories',
+            ])
             ->where('slug', $slug)
             ->firstOrFail();
         $product->makeHidden(self::HIDDEN_FROM_PUBLIC);
         $product->variants?->each->makeHidden(self::HIDDEN_VARIANT_FROM_PUBLIC);
 
+        // Related = other products sharing any of this product's categories
+        $categoryIds = $product->categories->pluck('id');
         $related = collect();
-        if ($product->category) {
+        if ($categoryIds->isNotEmpty()) {
             $related = Product::listed()
-                ->with(['variants' => fn ($q) => $q->orderBy('display_order')])
-                ->where('category', $product->category)
+                ->with([
+                    'variants' => fn ($q) => $q->orderBy('display_order'),
+                    'store',
+                    'categories',
+                ])
+                ->whereHas('categories', fn ($q) => $q->whereIn('categories.id', $categoryIds))
                 ->where('id', '!=', $product->id)
                 ->limit(8)
                 ->get();
@@ -154,17 +182,30 @@ class StoreProductController extends Controller
         ]);
     }
 
+    /**
+     * Public list of active categories — used by storefront filter dropdowns.
+     */
     public function categories()
     {
-        $categories = Product::listed()
-            ->whereNotNull('category')
-            ->distinct()
-            ->pluck('category')
-            ->values();
+        $categories = Category::active()
+            ->orderBy('sort_order')
+            ->orderBy('name')
+            ->get(['id', 'name', 'slug', 'description', 'image_url']);
 
-        return response()->json([
-            'success' => true,
-            'data' => $categories,
-        ]);
+        return response()->json(['success' => true, 'data' => $categories]);
+    }
+
+    /**
+     * Public list of active stores — used by storefront filter dropdowns
+     * and the brand index page.
+     */
+    public function stores()
+    {
+        $stores = Store::active()
+            ->orderBy('sort_order')
+            ->orderBy('name')
+            ->get(['id', 'name', 'slug', 'base_url', 'logo_url', 'description']);
+
+        return response()->json(['success' => true, 'data' => $stores]);
     }
 }
