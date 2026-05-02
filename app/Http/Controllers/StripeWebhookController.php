@@ -95,18 +95,14 @@ class StripeWebhookController extends Controller
                 Log::error('Failed to queue store purchase paid email', ['error' => $e->getMessage()]);
             }
 
-            // Notify admins + shopping team so they can act on the source-store
-            // purchase quickly. Eager-load items + user for the email body.
+            // Notify the shopping team (Velonie + future shopping employees)
+            // so they can buy the source-store items right away. Admins are
+            // intentionally excluded — they have the dashboard for visibility.
             try {
                 $pr->load(['items', 'user']);
                 $teamEmails = User::query()
-                    ->where(function ($q) {
-                        $q->where('role', User::ROLE_ADMIN)
-                          ->orWhere(function ($qq) {
-                              $qq->where('role', User::ROLE_EMPLOYEE)
-                                 ->where('team', User::TEAM_SHOPPING);
-                          });
-                    })
+                    ->where('role', User::ROLE_EMPLOYEE)
+                    ->where('team', User::TEAM_SHOPPING)
                     ->pluck('email')
                     ->all();
 
