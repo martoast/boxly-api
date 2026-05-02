@@ -95,26 +95,7 @@ class StripeWebhookController extends Controller
                 Log::error('Failed to queue store purchase paid email', ['error' => $e->getMessage()]);
             }
 
-            // Notify the shopping team (Velonie + future shopping employees)
-            // so they can buy the source-store items right away. Admins are
-            // intentionally excluded — they have the dashboard for visibility.
-            try {
-                $pr->load(['items', 'user']);
-                $teamEmails = User::query()
-                    ->where('role', User::ROLE_EMPLOYEE)
-                    ->where('team', User::TEAM_SHOPPING)
-                    ->pluck('email')
-                    ->all();
-
-                if (! empty($teamEmails)) {
-                    Mail::to($teamEmails)->queue(new StoreSaleTeamNotification($pr));
-                }
-            } catch (\Exception $e) {
-                Log::error('Failed to queue store sale team notification', [
-                    'pr_id' => $pr->id,
-                    'error' => $e->getMessage(),
-                ]);
-            }
+            $this->notifyShoppingTeamOfPaidPR($pr);
 
             Log::info('Store purchase paid', [
                 'purchase_request_id' => $pr->id,
@@ -295,8 +276,37 @@ class StripeWebhookController extends Controller
         try {
             $pr->update(['status' => PurchaseRequest::STATUS_PAID, 'paid_at' => now()]);
             Mail::to($pr->user)->queue(new PurchaseRequestPaymentReceived($pr));
+
+            $this->notifyShoppingTeamOfPaidPR($pr);
         } catch (\Exception $e) {
             Log::error('PR paid handling failed', ['error' => $e->getMessage()]);
+        }
+    }
+
+    /**
+     * Internal alert to the shopping team when a PR (store-checkout OR
+     * assisted) flips to paid. Admins are excluded — they use the dashboard.
+     * Failures are logged, never thrown — the PR status flip is the
+     * critical write; emails are best-effort.
+     */
+    protected function notifyShoppingTeamOfPaidPR(PurchaseRequest $pr): void
+    {
+        try {
+            $pr->load(['items', 'user']);
+            $teamEmails = User::query()
+                ->where('role', User::ROLE_EMPLOYEE)
+                ->where('team', User::TEAM_SHOPPING)
+                ->pluck('email')
+                ->all();
+
+            if (! empty($teamEmails)) {
+                Mail::to($teamEmails)->queue(new StoreSaleTeamNotification($pr));
+            }
+        } catch (\Exception $e) {
+            Log::error('Failed to queue shopping team paid-PR notification', [
+                'pr_id' => $pr->id,
+                'error' => $e->getMessage(),
+            ]);
         }
     }
 
