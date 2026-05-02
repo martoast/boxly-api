@@ -340,6 +340,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::prefix('products')->group(function () {
             Route::get('/', [AdminProductController::class, 'index']);
             Route::post('/', [AdminProductController::class, 'store']);
+            Route::delete('/bulk', [AdminProductController::class, 'bulkDestroy']);
             Route::get('/expiring', [AdminProductController::class, 'expiring']);
             Route::get('/{product}', [AdminProductController::class, 'show']);
             Route::put('/{product}', [AdminProductController::class, 'update']);
@@ -409,6 +410,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::prefix('products')->group(function () {
             Route::get('/', [AdminProductController::class, 'index']);
             Route::post('/', [AdminProductController::class, 'store']);
+            Route::delete('/bulk', [AdminProductController::class, 'bulkDestroy']);
             Route::get('/expiring', [AdminProductController::class, 'expiring']);
             Route::get('/{product}', [AdminProductController::class, 'show']);
             Route::put('/{product}', [AdminProductController::class, 'update']);

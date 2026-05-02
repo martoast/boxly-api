@@ -217,6 +217,32 @@ class AdminProductController extends Controller
     }
 
     /**
+     * Bulk soft-delete — flip status to inactive for many products at once.
+     * Mirrors the single destroy() so order history is preserved.
+     */
+    public function bulkDestroy(Request $request)
+    {
+        $validated = $request->validate([
+            'ids'   => 'required|array|min:1',
+            'ids.*' => 'required|integer|exists:products,id',
+        ]);
+
+        $count = Product::whereIn('id', $validated['ids'])
+            ->update(['status' => Product::STATUS_INACTIVE]);
+
+        Log::info('Bulk-deactivated products', [
+            'count'    => $count,
+            'admin_id' => $request->user()->id,
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => "{$count} products deactivated",
+            'count'   => $count,
+        ]);
+    }
+
+    /**
      * Multi-image upload to Spaces. Appends to product.images JSON.
      */
     public function uploadImages(Request $request, Product $product)
