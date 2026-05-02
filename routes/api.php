@@ -342,10 +342,12 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/', [AdminProductController::class, 'store']);
             Route::delete('/bulk', [AdminProductController::class, 'bulkDestroy']);
             Route::put('/bulk-restore', [AdminProductController::class, 'bulkRestore']);
+            Route::delete('/bulk-force', [AdminProductController::class, 'bulkForceDestroy']);
             Route::get('/expiring', [AdminProductController::class, 'expiring']);
             Route::get('/{product}', [AdminProductController::class, 'show']);
             Route::put('/{product}', [AdminProductController::class, 'update']);
             Route::delete('/{product}', [AdminProductController::class, 'destroy']);
+            Route::delete('/{product}/force', [AdminProductController::class, 'forceDestroy']);
             Route::post('/{product}/images', [AdminProductController::class, 'uploadImages']);
             Route::delete('/{product}/images/{index}', [AdminProductController::class, 'deleteImage']);
             // Variants
@@ -413,10 +415,12 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/', [AdminProductController::class, 'store']);
             Route::delete('/bulk', [AdminProductController::class, 'bulkDestroy']);
             Route::put('/bulk-restore', [AdminProductController::class, 'bulkRestore']);
+            Route::delete('/bulk-force', [AdminProductController::class, 'bulkForceDestroy']);
             Route::get('/expiring', [AdminProductController::class, 'expiring']);
             Route::get('/{product}', [AdminProductController::class, 'show']);
             Route::put('/{product}', [AdminProductController::class, 'update']);
             Route::delete('/{product}', [AdminProductController::class, 'destroy']);
+            Route::delete('/{product}/force', [AdminProductController::class, 'forceDestroy']);
             Route::post('/{product}/images', [AdminProductController::class, 'uploadImages']);
             Route::delete('/{product}/images/{index}', [AdminProductController::class, 'deleteImage']);
             Route::post('/{product}/variants', [AdminProductController::class, 'addVariant']);

@@ -273,6 +273,105 @@ class AdminProductController extends Controller
     }
 
     /**
+     * Permanently delete a product (the row, its variants, and its Spaces
+     * images). Only allowed for already-inactive products — the soft-delete
+     * step is a deliberate safety net users have to pass through first.
+     *
+     * Order history is unaffected: order_items snapshot product_name,
+     * product_url, and product_image_url, so deleting the source product
+     * doesn't break past order pages.
+     */
+    public function forceDestroy(Product $product)
+    {
+        if ($product->status !== Product::STATUS_INACTIVE) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Product must be inactive (soft-deleted) before it can be permanently deleted.',
+            ], 422);
+        }
+
+        $this->deleteProductImagesFromSpaces($product);
+        $product->delete(); // cascades product_variants
+
+        Log::info('Force-deleted product', ['product_id' => $product->id]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Product permanently deleted',
+        ]);
+    }
+
+    public function bulkForceDestroy(Request $request)
+    {
+        $validated = $request->validate([
+            'ids'   => 'required|array|min:1',
+            'ids.*' => 'required|integer|exists:products,id',
+        ]);
+
+        $products = Product::whereIn('id', $validated['ids'])->get();
+
+        $deleted = [];
+        $skipped = [];
+
+        foreach ($products as $product) {
+            if ($product->status !== Product::STATUS_INACTIVE) {
+                $skipped[] = ['id' => $product->id, 'reason' => "not inactive (was {$product->status})"];
+                continue;
+            }
+
+            try {
+                $this->deleteProductImagesFromSpaces($product);
+                $product->delete();
+                $deleted[] = $product->id;
+            } catch (\Exception $e) {
+                Log::error('Force-delete failed for product', ['product_id' => $product->id, 'error' => $e->getMessage()]);
+                $skipped[] = ['id' => $product->id, 'reason' => 'error: ' . $e->getMessage()];
+            }
+        }
+
+        Log::info('Bulk force-deleted products', [
+            'deleted'  => count($deleted),
+            'skipped'  => count($skipped),
+            'admin_id' => $request->user()->id,
+        ]);
+
+        $msg = count($deleted) . " products permanently deleted";
+        if (count($skipped) > 0) {
+            $msg .= " · " . count($skipped) . " skipped (not inactive)";
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => $msg,
+            'count'   => count($deleted),
+            'deleted' => $deleted,
+            'skipped' => $skipped,
+        ]);
+    }
+
+    /**
+     * Best-effort delete of every image file in product.images from Spaces.
+     * Failures are logged but don't block the row delete — once the row is
+     * gone, the URLs are unreachable anyway.
+     */
+    private function deleteProductImagesFromSpaces(Product $product): void
+    {
+        $images = $product->images ?? [];
+        foreach ($images as $img) {
+            if (empty($img['path'])) continue;
+            try {
+                Storage::disk('spaces')->delete($img['path']);
+            } catch (\Exception $e) {
+                Log::warning('Failed to delete product image from Spaces', [
+                    'product_id' => $product->id,
+                    'path'       => $img['path'],
+                    'error'      => $e->getMessage(),
+                ]);
+            }
+        }
+    }
+
+    /**
      * Multi-image upload to Spaces. Appends to product.images JSON.
      */
     public function uploadImages(Request $request, Product $product)
