@@ -106,6 +106,7 @@ class StoreCheckoutController extends Controller
                     'user_id'        => $user->id,
                     'request_number' => PurchaseRequest::generateRequestNumber(),
                     'status'         => PurchaseRequest::STATUS_QUOTED,
+                    'source'         => PurchaseRequest::SOURCE_STORE,
                     'currency'       => 'mxn',
                     'payment_method' => PurchaseRequest::PAYMENT_METHOD_STRIPE,
                     'items_total'    => $itemsTotal,

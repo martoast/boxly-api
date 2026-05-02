@@ -33,6 +33,7 @@ use App\Http\Controllers\StoreCheckoutController;
 use App\Http\Controllers\Admin\AdminProductController;
 use App\Http\Controllers\Admin\AdminStoreController;
 use App\Http\Controllers\Admin\AdminCategoryController;
+use App\Http\Controllers\Admin\AdminStoreSalesController;
 use App\Http\Controllers\Admin\AdminTokenController;
 
 /*
@@ -359,6 +360,12 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/{category}/image', [AdminCategoryController::class, 'uploadImage']);
         });
 
+        // Boxly Store — Sales (read-only view over store-checkout PRs)
+        Route::prefix('store-sales')->group(function () {
+            Route::get('/', [AdminStoreSalesController::class, 'index']);
+            Route::get('/stats', [AdminStoreSalesController::class, 'stats']);
+        });
+
         // Boxly Store — Admin Product Management
         Route::prefix('products')->group(function () {
             Route::get('/', [AdminProductController::class, 'index']);
@@ -467,6 +474,11 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::put('/{category}', [AdminCategoryController::class, 'update']);
             Route::delete('/{category}', [AdminCategoryController::class, 'destroy']);
             Route::post('/{category}/image', [AdminCategoryController::class, 'uploadImage']);
+        });
+
+        Route::prefix('store-sales')->group(function () {
+            Route::get('/', [AdminStoreSalesController::class, 'index']);
+            Route::get('/stats', [AdminStoreSalesController::class, 'stats']);
         });
 
         // Customer lookup — needed by the "create PR for customer" form.

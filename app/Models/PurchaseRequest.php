@@ -16,6 +16,7 @@ class PurchaseRequest extends Model
         'user_id',
         'request_number',
         'status',
+        'source',
         'items_total',
         'shipping_cost',
         'sales_tax',
@@ -51,6 +52,11 @@ class PurchaseRequest extends Model
 
     const PAYMENT_METHOD_STRIPE = 'stripe';
     const PAYMENT_METHOD_MANUAL_DEPOSIT = 'manual_deposit';
+
+    // Origin of the request: store-checkout (customer paid through /shop)
+    // vs assisted (admin manually created on behalf of a customer).
+    const SOURCE_STORE = 'store';
+    const SOURCE_ASSISTED = 'assisted';
 
     public static function generateRequestNumber(): string
     {
