@@ -28,6 +28,11 @@ class AdminPurchaseRequestController extends Controller
             $query->where('status', $request->status);
         }
 
+        if ($request->filled('source')) {
+            // 'store' or 'assisted' — lets Velonie filter to her store queue
+            $query->where('source', $request->source);
+        }
+
         if ($request->has('search')) {
             $search = $request->search;
             $query->where(function($q) use ($search) {
@@ -39,6 +44,43 @@ class AdminPurchaseRequestController extends Controller
         return response()->json([
             'success' => true,
             'data' => $query->latest()->paginate(20)
+        ]);
+    }
+
+    /**
+     * Per-item stock-status update (store-source PRs).
+     *
+     * Velonie hits this from the PR detail page for each line. Items marked
+     * `unavailable` stay on the PR (so the customer can see what was out of
+     * stock) but get excluded from the Stripe invoice when createQuote runs.
+     * Once the PR is quoted/paid/purchased, item stock state is locked.
+     */
+    public function updateItemStockStatus(Request $request, PurchaseRequest $purchaseRequest, PurchaseRequestItem $item)
+    {
+        if ($item->purchase_request_id !== $purchaseRequest->id) {
+            return response()->json(['success' => false, 'message' => 'Item does not belong to this PR'], 404);
+        }
+
+        if ($purchaseRequest->status !== PurchaseRequest::STATUS_PENDING_REVIEW) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Stock status can only be changed while the PR is in pending_review',
+            ], 400);
+        }
+
+        $validated = $request->validate([
+            'stock_status' => 'required|in:unverified,available,unavailable',
+        ]);
+
+        $item->update([
+            'stock_status'     => $validated['stock_status'],
+            'stock_checked_at' => $validated['stock_status'] === PurchaseRequestItem::STOCK_UNVERIFIED ? null : now(),
+            'stock_checked_by' => $validated['stock_status'] === PurchaseRequestItem::STOCK_UNVERIFIED ? null : $request->user()->id,
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'data'    => $item->fresh(),
         ]);
     }
 
@@ -486,6 +528,21 @@ class AdminPurchaseRequestController extends Controller
 
     public function createQuote(Request $request, PurchaseRequest $purchaseRequest)
     {
+        if ($purchaseRequest->status !== PurchaseRequest::STATUS_PENDING_REVIEW) {
+            return response()->json(['success' => false, 'message' => 'Request is not in pending review state'], 400);
+        }
+
+        // Store-source PRs follow a different quote path:
+        //  • prices are already in MXN with markup baked in (set at checkout)
+        //  • Velonie verified each item's availability beforehand
+        //  • only items marked `available` get billed (unavailable stay
+        //    visible on the PR but skip the Stripe invoice)
+        //  • no manual items_total/shipping/sales_tax input required
+        if ($purchaseRequest->isStore()) {
+            return $this->createStoreQuote($request, $purchaseRequest);
+        }
+
+        // ---- Original assisted-PR quote logic (unchanged) ----
         $validated = $request->validate([
             'items_total' => 'required|numeric|min:0',
             'shipping_cost' => 'required|numeric|min:0',
@@ -493,10 +550,6 @@ class AdminPurchaseRequestController extends Controller
             'admin_notes' => 'nullable|string',
             'payment_method' => 'nullable|in:stripe,manual_deposit',
         ]);
-
-        if ($purchaseRequest->status !== PurchaseRequest::STATUS_PENDING_REVIEW) {
-            return response()->json(['success' => false, 'message' => 'Request is not in pending review state'], 400);
-        }
 
         DB::beginTransaction();
 
@@ -621,6 +674,122 @@ class AdminPurchaseRequestController extends Controller
     }
 
     /**
+     * Quote a STORE-source PR: items are already priced in MXN with markup
+     * baked in, Velonie has just confirmed which ones are actually in stock,
+     * so we just need to (1) validate every item was checked, (2) sum the
+     * available items, (3) generate a Stripe invoice with one line per
+     * available item, (4) flip status to `quoted`.
+     */
+    private function createStoreQuote(Request $request, PurchaseRequest $purchaseRequest)
+    {
+        $validated = $request->validate([
+            'admin_notes' => 'nullable|string',
+        ]);
+
+        // Reload items so we have the freshest stock_status values
+        $purchaseRequest->load('items');
+
+        if (! $purchaseRequest->allItemsStockChecked()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Verifica el stock de cada producto antes de cotizar',
+            ], 422);
+        }
+
+        $availableItems = $purchaseRequest->availableItems();
+        if ($availableItems->isEmpty()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Ningún producto disponible — no se puede generar cotización',
+            ], 422);
+        }
+
+        $totalMxn = $availableItems->sum(fn($item) => floatval($item->price) * (int) $item->quantity);
+        $totalMxn = round($totalMxn, 2);
+
+        DB::beginTransaction();
+
+        try {
+            $user = $purchaseRequest->user;
+            if (! $user->stripe_id) {
+                $user->createAsStripeCustomer();
+            }
+
+            $stripe = Cashier::stripe();
+
+            $stripeInvoice = $stripe->invoices->create([
+                'customer'          => $user->stripe_id,
+                'currency'          => 'mxn',
+                'collection_method' => 'send_invoice',
+                'days_until_due'    => 3,
+                'description'       => "Boxly Store - {$purchaseRequest->request_number}",
+                'metadata'          => [
+                    'type'                => 'purchase_request_invoice',
+                    'purchase_request_id' => $purchaseRequest->id,
+                    'request_number'      => $purchaseRequest->request_number,
+                    'source'              => PurchaseRequest::SOURCE_STORE,
+                ],
+                'auto_advance' => false,
+            ]);
+
+            // One Stripe invoice line per available item — gives the
+            // customer a clean breakdown of what they're paying for.
+            foreach ($availableItems as $item) {
+                $opts = $item->options ?? [];
+                $suffix = trim(implode(' / ', array_filter([$opts['size'] ?? null, $opts['color'] ?? null])));
+                $name = $suffix ? "{$item->product_name} ({$suffix})" : $item->product_name;
+
+                $stripe->invoiceItems->create([
+                    'customer'    => $user->stripe_id,
+                    'invoice'     => $stripeInvoice->id,
+                    'amount'      => intval(round($item->price * 100)) * (int) $item->quantity,
+                    'currency'    => 'mxn',
+                    'description' => $item->quantity > 1 ? "{$name} × {$item->quantity}" : $name,
+                ]);
+            }
+
+            $stripe->invoices->finalizeInvoice($stripeInvoice->id);
+            $sentInvoice = $stripe->invoices->sendInvoice($stripeInvoice->id);
+
+            $purchaseRequest->update([
+                'items_total'       => $totalMxn,
+                'shipping_cost'     => 0,
+                'sales_tax'         => 0,
+                'processing_fee'    => 0, // markup already in product price
+                'total_amount'      => $totalMxn,
+                'currency'          => 'mxn',
+                'payment_method'    => PurchaseRequest::PAYMENT_METHOD_STRIPE,
+                'status'            => PurchaseRequest::STATUS_QUOTED,
+                'stripe_invoice_id' => $stripeInvoice->id,
+                'payment_link'      => $sentInvoice->hosted_invoice_url,
+                'quote_sent_at'     => now(),
+                'admin_notes'       => $validated['admin_notes'] ?? $purchaseRequest->admin_notes,
+            ]);
+
+            DB::commit();
+
+            try {
+                Mail::to($user)->queue(new PurchaseRequestQuoteSent($purchaseRequest));
+            } catch (\Exception $e) {
+                Log::error('Failed to queue store quote email: ' . $e->getMessage());
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Cotización enviada al cliente',
+                'data'    => $purchaseRequest->fresh()->load(['items', 'user']),
+            ]);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Failed to quote store PR', [
+                'pr_id' => $purchaseRequest->id,
+                'error' => $e->getMessage(),
+            ]);
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
      * Transition a paid PurchaseRequest to purchased + create the follow-up Order.
      * Caller MUST verify the PR is in `paid` state. Throws on failure so callers
      * (single + bulk) can wrap in their own transaction/error handling.
@@ -640,7 +809,15 @@ class AdminPurchaseRequestController extends Controller
             'completed_at'    => now(),
         ]);
 
-        foreach ($purchaseRequest->items as $prItem) {
+        // For store-source PRs, only the items Velonie marked `available`
+        // get added to the Order (they're the only ones the customer paid
+        // for). Unavailable items stay on the PR for visibility but don't
+        // become Order items. Assisted PRs ignore stock_status (it's null).
+        $itemsToCopy = $purchaseRequest->isStore()
+            ? $purchaseRequest->availableItems()
+            : $purchaseRequest->items;
+
+        foreach ($itemsToCopy as $prItem) {
             $imageUrl = null;
             if ($prItem->image_url) {
                 $imageUrl = $prItem->image_full_url;

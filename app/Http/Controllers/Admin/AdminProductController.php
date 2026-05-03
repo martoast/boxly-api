@@ -101,7 +101,6 @@ class AdminProductController extends Controller
                         'shopify_variant_id' => $row['shopify_variant_id'] ?? null,
                         'price_cents' => $row['price_cents'] ?? null,
                         'display_order' => $row['display_order'] ?? $i,
-                        'stock_check_status' => ProductVariant::STATUS_UNKNOWN,
                     ]);
                 }
             });
@@ -136,9 +135,7 @@ class AdminProductController extends Controller
             return response()->json(['success' => false, 'message' => 'Debe especificar talla o color'], 422);
         }
 
-        $variant = $product->variants()->create(array_merge($validated, [
-            'stock_check_status' => ProductVariant::STATUS_UNKNOWN,
-        ]));
+        $variant = $product->variants()->create($validated);
 
         return response()->json([
             'success' => true,

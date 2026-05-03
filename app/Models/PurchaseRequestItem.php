@@ -12,6 +12,12 @@ class PurchaseRequestItem extends Model
 {
     use HasFactory;
 
+    // Stock-verification states (used by store-source PRs while Velonie
+    // confirms availability before generating the Stripe invoice).
+    public const STOCK_UNVERIFIED = 'unverified';
+    public const STOCK_AVAILABLE = 'available';
+    public const STOCK_UNAVAILABLE = 'unavailable';
+
     protected $fillable = [
         'purchase_request_id',
         'product_name',
@@ -21,7 +27,12 @@ class PurchaseRequestItem extends Model
         'quantity',
         'options',
         'notes',
-        
+
+        // Stock verification (store flow)
+        'stock_status',
+        'stock_checked_at',
+        'stock_checked_by',
+
         // New File Upload Fields
         'image_path',
         'image_filename',
@@ -35,6 +46,7 @@ class PurchaseRequestItem extends Model
         'quantity' => 'integer',
         'options' => 'array',
         'image_size' => 'integer',
+        'stock_checked_at' => 'datetime',
     ];
 
     protected $appends = ['image_full_url'];

@@ -61,12 +61,6 @@ Route::prefix('store')->group(function () {
     Route::get('/products/{slug}', [StoreProductController::class, 'show']);
     Route::get('/categories', [StoreProductController::class, 'categories']);
     Route::get('/stores', [StoreProductController::class, 'stores']);
-
-    // Manual stock recheck — throttled per IP. Bumped to 30/min so a user
-    // browsing several products in a row doesn't get blocked by their own
-    // page-load auto-rechecks. Hits the source store synchronously.
-    Route::post('/products/{slug}/check-stock', [StoreProductController::class, 'checkStock'])
-        ->middleware('throttle:30,1');
 });
 
 Route::get('/user-types', function () {
@@ -240,6 +234,11 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/{purchaseRequest}/quote', [AdminPurchaseRequestController::class, 'createQuote']);
             Route::post('/{purchaseRequest}/mark-purchased', [AdminPurchaseRequestController::class, 'markAsPurchased']);
             Route::put('/{purchaseRequest}/reject', [AdminPurchaseRequestController::class, 'reject']);
+
+            // Per-item stock verification — Velonie marks each line available/unavailable
+            // before quoting a store-source PR. Available items get billed via Stripe;
+            // unavailable items stay visible on the PR but are excluded from the invoice.
+            Route::put('/{purchaseRequest}/items/{item}/stock-status', [AdminPurchaseRequestController::class, 'updateItemStockStatus']);
         });
 
         Route::prefix('management')->group(function () {
@@ -438,6 +437,11 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/{purchaseRequest}/quote', [AdminPurchaseRequestController::class, 'createQuote']);
             Route::post('/{purchaseRequest}/mark-purchased', [AdminPurchaseRequestController::class, 'markAsPurchased']);
             Route::put('/{purchaseRequest}/reject', [AdminPurchaseRequestController::class, 'reject']);
+
+            // Per-item stock verification — Velonie marks each line available/unavailable
+            // before quoting a store-source PR. Available items get billed via Stripe;
+            // unavailable items stay visible on the PR but are excluded from the invoice.
+            Route::put('/{purchaseRequest}/items/{item}/stock-status', [AdminPurchaseRequestController::class, 'updateItemStockStatus']);
         });
 
         Route::prefix('products')->group(function () {

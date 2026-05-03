@@ -6,7 +6,6 @@ use App\Models\Category;
 use App\Models\Product;
 use App\Models\Store;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Artisan;
 
 class StoreProductController extends Controller
 {
@@ -17,12 +16,10 @@ class StoreProductController extends Controller
         'cost_cents',
         'markup_percent',
         'source_url',
-        'last_stock_check_response',
     ];
 
     private const HIDDEN_VARIANT_FROM_PUBLIC = [
         'shopify_variant_id',
-        'last_stock_check_response',
     ];
 
     /**
@@ -134,51 +131,6 @@ class StoreProductController extends Controller
                 'product' => $product,
                 'related' => $related,
             ],
-        ]);
-    }
-
-    /**
-     * Manual / auto stock check — anyone on the storefront hits this to re-verify
-     * a product's availability against the source store. Triggered by the page-load
-     * auto-recheck when cron data is stale (>15 min). Throttled via the route.
-     *
-     * Server-side concurrency guard: if another request already updated this
-     * product within the last 60 seconds (another visitor's recheck just finished),
-     * we skip the external call and return the fresh data immediately.
-     */
-    public function checkStock(string $slug)
-    {
-        $product = Product::listed()->where('slug', $slug)->firstOrFail();
-
-        if (! $product->source_url) {
-            return response()->json([
-                'success' => false,
-                'message' => 'No source URL on file for this product.',
-            ], 422);
-        }
-
-        // Concurrency guard: if another visitor just checked this product within
-        // the last minute, skip the external call and reuse their result.
-        $alreadyFresh = $product->last_stock_check_at
-            && $product->last_stock_check_at->gt(now()->subMinute());
-
-        if (! $alreadyFresh) {
-            // Run the same logic the daily cron uses, scoped to just this product.
-            Artisan::call('products:check-source-stock', ['--id' => $product->id]);
-        }
-
-        $product = Product::listed()
-            ->with(['variants' => fn ($q) => $q->orderBy('display_order')->orderBy('id')])
-            ->where('id', $product->id)
-            ->firstOrFail();
-
-        $product->makeHidden(self::HIDDEN_FROM_PUBLIC);
-        $product->variants?->each->makeHidden(self::HIDDEN_VARIANT_FROM_PUBLIC);
-
-        return response()->json([
-            'success' => true,
-            'data' => $product,
-            'cached' => $alreadyFresh,
         ]);
     }
 

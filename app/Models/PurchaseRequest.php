@@ -81,4 +81,34 @@ class PurchaseRequest extends Model
     {
         return $this->hasMany(PurchaseRequestItem::class);
     }
+
+    // ---- Source-aware helpers ----
+
+    public function isStore(): bool
+    {
+        return $this->source === self::SOURCE_STORE;
+    }
+
+    /**
+     * True only when every item has been stock-checked (available or unavailable).
+     * Used as the gate for createQuote on store-source PRs.
+     */
+    public function allItemsStockChecked(): bool
+    {
+        return ! $this->items->contains(function ($item) {
+            return $item->stock_status === PurchaseRequestItem::STOCK_UNVERIFIED;
+        });
+    }
+
+    /**
+     * Items eligible for billing — only the ones Velonie marked available.
+     * Items marked unavailable stay on the PR (so the customer can see them)
+     * but are excluded from the Stripe invoice line items.
+     */
+    public function availableItems()
+    {
+        return $this->items->filter(function ($item) {
+            return $item->stock_status === PurchaseRequestItem::STOCK_AVAILABLE;
+        })->values();
+    }
 }

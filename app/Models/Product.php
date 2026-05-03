@@ -41,10 +41,6 @@ class Product extends Model
         'XL' => ['weight_kg' => 50, 'price_cents' => 625000],
     ];
 
-    const STOCK_UNKNOWN = 'unknown';
-    const STOCK_IN_STOCK = 'in_stock';
-    const STOCK_OUT_OF_STOCK = 'out_of_stock';
-
     protected $fillable = [
         'name',
         'slug',
@@ -64,24 +60,20 @@ class Product extends Model
         'available_until',
         'store_id',
         'images',
-        'last_stock_check_at',
-        'stock_check_status',
-        'last_stock_check_response',
     ];
 
     protected $casts = [
-        'requires_render'     => 'boolean',
-        'price_cents'         => 'integer',
-        'cost_cents'          => 'integer',
-        'markup_percent'      => 'decimal:2',
-        'weight_kg'           => 'decimal:2',
-        'length_cm'           => 'decimal:1',
-        'width_cm'            => 'decimal:1',
-        'height_cm'           => 'decimal:1',
-        'stock'               => 'integer',
-        'available_until'     => 'datetime',
-        'images'              => 'array',
-        'last_stock_check_at' => 'datetime',
+        'requires_render' => 'boolean',
+        'price_cents'     => 'integer',
+        'cost_cents'      => 'integer',
+        'markup_percent'  => 'decimal:2',
+        'weight_kg'       => 'decimal:2',
+        'length_cm'       => 'decimal:1',
+        'width_cm'        => 'decimal:1',
+        'height_cm'       => 'decimal:1',
+        'stock'           => 'integer',
+        'available_until' => 'datetime',
+        'images'          => 'array',
     ];
 
     protected $appends = ['price_formatted', 'first_image_url'];
@@ -126,13 +118,13 @@ class Product extends Model
     }
 
     /**
-     * Available = purchasable right now. Listed + has stock + source not flagged out_of_stock.
+     * Available = purchasable right now. Listed + has stock count > 0.
+     * (Source-store availability is no longer auto-checked here — Velonie
+     * verifies it per-PR after the customer creates a request.)
      */
     public function scopeAvailable($query)
     {
-        return $query->listed()
-            ->where('stock', '>', 0)
-            ->where('stock_check_status', '!=', self::STOCK_OUT_OF_STOCK);
+        return $query->listed()->where('stock', '>', 0);
     }
 
     public function scopeExpiringSoon($query, int $days = 7)
@@ -159,26 +151,6 @@ class Product extends Model
         if ($this->status !== self::STATUS_ACTIVE) return false;
         if ($this->stock <= 0) return false;
         if ($this->available_until && $this->available_until->isPast()) return false;
-        if ($this->isOutOfStock()) return false;
         return true;
-    }
-
-    /**
-     * A product is out of stock if:
-     *  - It has variants AND every variant is out_of_stock, OR
-     *  - It has no variants AND the product-level stock_check_status is out_of_stock
-     */
-    public function isOutOfStock(): bool
-    {
-        $variantCount = $this->variants()->count();
-
-        if ($variantCount > 0) {
-            $availableCount = $this->variants()
-                ->where('stock_check_status', '!=', self::STOCK_OUT_OF_STOCK)
-                ->count();
-            return $availableCount === 0;
-        }
-
-        return $this->stock_check_status === self::STOCK_OUT_OF_STOCK;
     }
 }

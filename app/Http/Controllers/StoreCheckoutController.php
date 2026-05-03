@@ -2,24 +2,35 @@
 
 namespace App\Http\Controllers;
 
+use App\Mail\PurchaseRequestCreated;
+use App\Mail\PurchaseRequestCreatedTeamNotification;
 use App\Models\Product;
 use App\Models\ProductVariant;
 use App\Models\PurchaseRequest;
 use App\Models\PurchaseRequestItem;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
 
 class StoreCheckoutController extends Controller
 {
     /**
-     * Boxly Store checkout — folds straight into the assisted Purchase Request flow.
+     * Boxly Store checkout — creates a Purchase Request in pending_review.
      *
-     * Creates a PR in `quoted` status with cart items prefilled (size/color in options,
-     * source URL on each item so admin knows what to buy at the source store), then
-     * opens a Stripe Checkout Session in MXN. The webhook flips the PR to `paid`.
-     * Admin then proceeds with the existing "Mark as Purchased" flow → creates an
-     * Order in awaiting_packages → standard shipping pipeline takes over.
+     * NOT a Stripe checkout anymore. The customer doesn't pay at this step.
+     * Velonie reviews the PR, marks each item available/unavailable (some
+     * source retailers run out between when we listed the product and when
+     * the customer ordered), then generates a Stripe invoice for ONLY the
+     * available items via the existing AdminPurchaseRequestController::createQuote
+     * flow. Customer pays the invoice → webhook flips status → Velonie
+     * "Mark as Purchased" creates the Order. Same final pipeline as assisted
+     * PRs from this point on.
+     *
+     * Pricing note: store products have markup baked into their listing
+     * price already, so processing_fee stays 0 for store PRs (createQuote
+     * branches on source).
      */
     public function create(Request $request)
     {
@@ -41,17 +52,17 @@ class StoreCheckoutController extends Controller
             $variantsById = ProductVariant::whereIn('id', $variantIds)->get()->keyBy('id');
         }
 
-        // Pre-validate availability + variant selection
+        // Pre-validate that the cart references real, listable products.
+        // Stock-availability at the SOURCE retailer is now Velonie's review
+        // step (not auto-blocked here) — so we don't reject on out_of_stock.
         foreach ($request->input('items') as $line) {
             $product = $products->get($line['product_id']);
-            if (! $product || ! $product->isAvailable()) {
-                $name = $product->name ?? "Producto {$line['product_id']}";
-                $reason = $product && $product->isOutOfStock()
-                    ? "{$name} está agotado"
-                    : "{$name} ya no está disponible";
-                return response()->json(['success' => false, 'message' => $reason], 400);
+            if (! $product) {
+                return response()->json([
+                    'success' => false,
+                    'message' => "Producto {$line['product_id']} no existe",
+                ], 422);
             }
-
             if ($product->variants->isNotEmpty()) {
                 $variant = $variantsById->get($line['variant_id'] ?? null);
                 if (! $variant || $variant->product_id !== $product->id) {
@@ -59,12 +70,6 @@ class StoreCheckoutController extends Controller
                         'success' => false,
                         'message' => "Selecciona una talla/color para {$product->name}",
                     ], 422);
-                }
-                if (! $variant->isAvailable()) {
-                    return response()->json([
-                        'success' => false,
-                        'message' => "La variante {$variant->title} de {$product->name} está agotada",
-                    ], 400);
                 }
             }
         }
@@ -97,6 +102,7 @@ class StoreCheckoutController extends Controller
                         'price'             => $unitCents / 100,
                         'quantity'          => $line['quantity'],
                         'options'           => $options ?: null,
+                        'stock_status'      => PurchaseRequestItem::STOCK_UNVERIFIED,
                     ];
                 }
 
@@ -105,16 +111,15 @@ class StoreCheckoutController extends Controller
                 $pr = PurchaseRequest::create([
                     'user_id'        => $user->id,
                     'request_number' => PurchaseRequest::generateRequestNumber(),
-                    'status'         => PurchaseRequest::STATUS_QUOTED,
+                    'status'         => PurchaseRequest::STATUS_PENDING_REVIEW,
                     'source'         => PurchaseRequest::SOURCE_STORE,
                     'currency'       => 'mxn',
                     'payment_method' => PurchaseRequest::PAYMENT_METHOD_STRIPE,
                     'items_total'    => $itemsTotal,
                     'shipping_cost'  => 0,
                     'sales_tax'      => 0,
-                    'processing_fee' => 0,
+                    'processing_fee' => 0, // markup is baked into product price
                     'total_amount'   => $itemsTotal,
-                    'quote_sent_at'  => now(),
                     'admin_notes'    => 'Boxly Store checkout — markup already in product price.',
                 ]);
 
@@ -127,59 +132,40 @@ class StoreCheckoutController extends Controller
                 return $pr;
             });
 
-            // Build Stripe line items from the saved PR items so receipt matches DB exactly
-            $lineItems = $pr->items->map(function ($item) {
-                $opts = $item->options ?? [];
-                $suffix = trim(implode(' / ', array_filter([$opts['size'] ?? null, $opts['color'] ?? null])));
-                $name = $suffix ? "{$item->product_name} ({$suffix})" : $item->product_name;
+            // Notify the customer that we got their request
+            try {
+                Mail::to($user)->queue(new PurchaseRequestCreated($pr));
+            } catch (\Exception $e) {
+                Log::warning('Failed to queue store PR customer email', ['error' => $e->getMessage()]);
+            }
 
-                return [
-                    'price_data' => [
-                        'currency'    => 'mxn',
-                        'unit_amount' => (int) round($item->price * 100),
-                        'product_data' => [
-                            'name'   => $name,
-                            'images' => $item->product_image_url ? [$item->product_image_url] : [],
-                        ],
-                    ],
-                    'quantity' => $item->quantity,
-                ];
-            })->all();
+            // Notify the shopping team so Velonie can verify stock
+            try {
+                $teamRecipients = User::where('role', 'employee')
+                    ->where('team', 'shopping')
+                    ->whereNotNull('email')
+                    ->get();
+                foreach ($teamRecipients as $recipient) {
+                    Mail::to($recipient)->queue(new PurchaseRequestCreatedTeamNotification($pr));
+                }
+            } catch (\Exception $e) {
+                Log::warning('Failed to queue store PR team email', ['error' => $e->getMessage()]);
+            }
 
-            $checkout = $user->checkout($lineItems, [
-                'success_url' => config('app.frontend_url') . '/app/purchase-requests/' . $pr->id . '?status=success',
-                'cancel_url'  => config('app.frontend_url') . '/cart?status=cancelled',
-                'payment_method_types' => ['card'],
-                'metadata' => [
-                    'type'                => 'store_purchase',
-                    'purchase_request_id' => $pr->id,
-                    'user_id'             => $user->id,
-                ],
-                'payment_intent_data' => [
-                    'description' => "Boxly Store — {$pr->request_number}",
-                    'metadata' => [
-                        'type'                => 'store_purchase',
-                        'purchase_request_id' => $pr->id,
-                        'user_id'             => $user->id,
-                    ],
-                ],
-                'locale' => 'es-419',
-            ]);
-
-            $pr->update(['payment_link' => $checkout->url]);
-
-            Log::info('Store checkout session created', [
-                'session_id'          => $checkout->id,
+            Log::info('Store PR created (pending review)', [
                 'purchase_request_id' => $pr->id,
+                'request_number'      => $pr->request_number,
                 'user_id'             => $user->id,
-                'total_mxn'           => $pr->total_amount,
+                'item_count'          => count($pr->items),
+                'items_total_mxn'     => $pr->total_amount,
             ]);
 
             return response()->json([
-                'success'       => true,
-                'checkout_url'  => $checkout->url,
-                'session_id'    => $checkout->id,
-                'request_number' => $pr->request_number,
+                'success'             => true,
+                'purchase_request_id' => $pr->id,
+                'request_number'      => $pr->request_number,
+                'redirect_url'        => '/app/purchase-requests/' . $pr->id,
+                'message'             => 'Solicitud creada — Velonie verificará disponibilidad pronto.',
             ]);
         } catch (\Exception $e) {
             Log::error('Store checkout failed', [
@@ -188,7 +174,7 @@ class StoreCheckoutController extends Controller
             ]);
             return response()->json([
                 'success' => false,
-                'message' => 'No se pudo crear la sesión de pago: ' . $e->getMessage(),
+                'message' => 'No se pudo crear la solicitud: ' . $e->getMessage(),
             ], 500);
         }
     }
