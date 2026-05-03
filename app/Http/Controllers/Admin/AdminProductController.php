@@ -28,7 +28,16 @@ class AdminProductController extends Controller
 
         $perPage = (int) $request->input('per_page', 20);
 
-        $query = Product::query()->with(['store', 'categories']);
+        // Eager-load just enough variant data to render counts + distinct
+        // colors/sizes in the admin table — without shipping price_cents,
+        // shopify_variant_id, etc. Categories pivot is small (4-5 rows max).
+        $query = Product::query()
+            ->with([
+                'store',
+                'categories:id,name,slug',
+                'variants:id,product_id,size,color',
+            ])
+            ->withCount('variants');
 
         if ($status = $request->input('status')) {
             $query->where('status', $status);
