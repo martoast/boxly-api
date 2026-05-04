@@ -734,7 +734,11 @@ class AdminPurchaseRequestController extends Controller
             // customer a clean breakdown of what they're paying for.
             foreach ($availableItems as $item) {
                 $opts = $item->options ?? [];
-                $suffix = trim(implode(' / ', array_filter([$opts['size'] ?? null, $opts['color'] ?? null])));
+                $suffix = trim(implode(' / ', array_filter([
+                    $opts['size']   ?? null,
+                    $opts['color']  ?? null,
+                    $opts['length'] ?? null,
+                ])));
                 $name = $suffix ? "{$item->product_name} ({$suffix})" : $item->product_name;
 
                 $stripe->invoiceItems->create([

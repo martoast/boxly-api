@@ -14,6 +14,7 @@ class ProductVariant extends Model
         'product_id',
         'size',
         'color',
+        'length',
         'shopify_variant_id',
         'price_cents',
         'display_order',
@@ -32,11 +33,11 @@ class ProductVariant extends Model
     }
 
     /**
-     * Human-readable variant title — "M / Olive Wash", "Black", "L", etc.
+     * Human-readable variant title — "M / Olive Wash / 28\"", "Black", "L", etc.
      */
     public function getTitleAttribute(): string
     {
-        $parts = array_filter([$this->size, $this->color]);
+        $parts = array_filter([$this->size, $this->color, $this->length]);
         return implode(' / ', $parts) ?: 'Default';
     }
 }

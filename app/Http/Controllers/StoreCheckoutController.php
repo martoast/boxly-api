@@ -92,6 +92,7 @@ class StoreCheckoutController extends Controller
                     $options = array_filter([
                         'size'               => $variant?->size,
                         'color'              => $variant?->color,
+                        'length'             => $variant?->length,
                         'shopify_variant_id' => $variant?->shopify_variant_id,
                     ]);
 

@@ -90,8 +90,9 @@ class AdminProductController extends Controller
     {
         $request->validate([
             'variants' => 'required|array',
-            'variants.*.size'  => 'nullable|string|max:50',
-            'variants.*.color' => 'nullable|string|max:100',
+            'variants.*.size'   => 'nullable|string|max:50',
+            'variants.*.color'  => 'nullable|string|max:100',
+            'variants.*.length' => 'nullable|string|max:50',
             'variants.*.shopify_variant_id' => 'nullable|string|max:100',
             'variants.*.price_cents' => 'nullable|integer|min:0',
             'variants.*.display_order' => 'nullable|integer|min:0',
@@ -103,10 +104,14 @@ class AdminProductController extends Controller
             DB::transaction(function () use ($product, $rows) {
                 $product->variants()->delete();
                 foreach ($rows as $i => $row) {
-                    if (! ($row['size'] ?? null) && ! ($row['color'] ?? null)) continue;
+                    $size   = $row['size']   ?? null;
+                    $color  = $row['color']  ?? null;
+                    $length = $row['length'] ?? null;
+                    if (! $size && ! $color && ! $length) continue;
                     $product->variants()->create([
-                        'size'  => $row['size']  ?? null,
-                        'color' => $row['color'] ?? null,
+                        'size'   => $size,
+                        'color'  => $color,
+                        'length' => $length,
                         'shopify_variant_id' => $row['shopify_variant_id'] ?? null,
                         'price_cents' => $row['price_cents'] ?? null,
                         'display_order' => $row['display_order'] ?? $i,
@@ -133,15 +138,16 @@ class AdminProductController extends Controller
     public function addVariant(Request $request, Product $product)
     {
         $validated = $request->validate([
-            'size'  => 'nullable|string|max:50',
-            'color' => 'nullable|string|max:100',
+            'size'   => 'nullable|string|max:50',
+            'color'  => 'nullable|string|max:100',
+            'length' => 'nullable|string|max:50',
             'shopify_variant_id' => 'nullable|string|max:100',
             'price_cents' => 'nullable|integer|min:0',
             'display_order' => 'nullable|integer|min:0',
         ]);
 
-        if (empty($validated['size']) && empty($validated['color'])) {
-            return response()->json(['success' => false, 'message' => 'Debe especificar talla o color'], 422);
+        if (empty($validated['size']) && empty($validated['color']) && empty($validated['length'])) {
+            return response()->json(['success' => false, 'message' => 'Debe especificar talla, color o largo'], 422);
         }
 
         $variant = $product->variants()->create($validated);
