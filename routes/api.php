@@ -117,6 +117,12 @@ Route::middleware(['web'])->group(function () {
 |--------------------------------------------------------------------------
 */
 Route::middleware('auth:sanctum')->group(function () {
+    // Self-issued Sanctum token for the Chrome extension. Any authenticated
+    // user (admin, shopping, or customer) can mint one for themselves —
+    // no admin intervention needed. Used by the extension's web-based
+    // connect flow to skip the manual copy/paste of a token.
+    Route::post('/me/extension-token', [\App\Http\Controllers\ExtensionTokenController::class, 'issue']);
+
     Route::get('/user', function (Request $request) {
         $user = $request->user();
         $response = [
