@@ -222,10 +222,34 @@ class AdminProductController extends Controller
             'store_id'        => 'nullable|integer|exists:stores,id',
             'category_ids'    => 'nullable|array',
             'category_ids.*'  => 'integer|exists:categories,id',
+            // Allow re-tagging colors on existing images. Full replacement
+            // payload — same shape as what's stored: [{path, url, order, color?}, ...].
+            'images'          => 'sometimes|array',
+            'images.*.path'   => 'required_with:images|string',
+            'images.*.url'    => 'required_with:images|string',
+            'images.*.order'  => 'sometimes|integer|min:0',
+            'images.*.color'  => 'nullable|string|max:80',
         ]);
 
         $categoryIds = $validated['category_ids'] ?? null;
         unset($validated['category_ids']);
+
+        // Normalize image payload — strip empty colors so untagged stays
+        // untagged (no `color` key), and re-number `order` so it matches array index.
+        if (isset($validated['images'])) {
+            $validated['images'] = array_values(array_map(function ($img, $i) {
+                $entry = [
+                    'path'  => $img['path'],
+                    'url'   => $img['url'],
+                    'order' => $i,
+                ];
+                $color = trim((string) ($img['color'] ?? ''));
+                if ($color !== '') {
+                    $entry['color'] = $color;
+                }
+                return $entry;
+            }, $validated['images'], array_keys($validated['images'])));
+        }
 
         $product->update($validated);
 
@@ -411,23 +435,34 @@ class AdminProductController extends Controller
         $request->validate([
             'images'    => 'required|array|min:1|max:10',
             'images.*'  => 'required|image|mimes:jpeg,jpg,png,webp|max:10240',
+            // Parallel colors[] array — colors[i] is the variant color for
+            // images[i]. Optional: if the product has no color variants the
+            // whole array can be omitted. Empty string / null = untagged.
+            'colors'    => 'nullable|array',
+            'colors.*'  => 'nullable|string|max:80',
         ]);
 
         try {
             $storagePath = "products/{$product->slug}";
             $existing = $product->images ?? [];
             $startOrder = count($existing);
+            $colors = $request->input('colors', []);
 
             foreach ($request->file('images') as $i => $file) {
                 $filename = "img-" . ($startOrder + $i + 1) . "-" . time() . "." . $file->getClientOriginalExtension();
                 $path = Storage::disk('spaces')->putFileAs($storagePath, $file, $filename, 'public');
                 $url  = config('filesystems.disks.spaces.url') . '/' . $path;
 
-                $existing[] = [
+                $entry = [
                     'path'  => $path,
                     'url'   => $url,
                     'order' => $startOrder + $i,
                 ];
+                $color = trim((string) ($colors[$i] ?? ''));
+                if ($color !== '') {
+                    $entry['color'] = $color;
+                }
+                $existing[] = $entry;
             }
 
             $product->update(['images' => $existing]);
