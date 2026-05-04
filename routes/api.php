@@ -43,6 +43,7 @@ use App\Http\Controllers\Admin\AdminTokenController;
 */
 
 Route::post('/webhooks/stripe', [StripeWebhookController::class, 'handle']);
+Route::post('/webhooks/stripe-shopping', [StripeWebhookController::class, 'handleShopping']);
 
 // Public Affiliate Routes
 Route::get('/affiliate/validate/{code}', [AffiliateController::class, 'validateCode']);

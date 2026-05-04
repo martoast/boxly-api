@@ -21,11 +21,39 @@ use App\Models\User;
 
 class StripeWebhookController extends Controller
 {
+    /**
+     * Webhook for the MAIN Stripe account (boxes / shipping).
+     *
+     * Configured in Stripe Dashboard at:
+     *   https://api.boxly.mx/webhooks/stripe
+     */
     public function handle(Request $request)
+    {
+        return $this->process($request, config('cashier.webhook.secret'));
+    }
+
+    /**
+     * Webhook for the SHOPPING Stripe account (Boxly Store / Purchase
+     * Request invoices). Separate signing secret = separate verification.
+     *
+     * Configured in Stripe Dashboard at:
+     *   https://api.boxly.mx/webhooks/stripe-shopping
+     */
+    public function handleShopping(Request $request)
+    {
+        return $this->process($request, config('services.stripe_shopping.webhook_secret'));
+    }
+
+    /**
+     * Shared verification + dispatch. Each account uses its own signing
+     * secret but the event handlers are the same — they branch on the
+     * metadata `type` already, so they don't need to know which account
+     * delivered the event.
+     */
+    protected function process(Request $request, ?string $webhookSecret)
     {
         $payload = $request->getContent();
         $sigHeader = $request->header('Stripe-Signature');
-        $webhookSecret = config('cashier.webhook.secret');
 
         try {
             $event = Webhook::constructEvent($payload, $sigHeader, $webhookSecret);

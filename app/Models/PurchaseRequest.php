@@ -25,6 +25,7 @@ class PurchaseRequest extends Model
         'currency',
         'payment_method',
         'stripe_invoice_id',
+        'stripe_account',
         'payment_link',
         'quote_sent_at',
         'paid_at',
@@ -57,6 +58,23 @@ class PurchaseRequest extends Model
     // vs assisted (admin manually created on behalf of a customer).
     const SOURCE_STORE = 'store';
     const SOURCE_ASSISTED = 'assisted';
+
+    // Which Stripe account this PR's invoice lives on. Null/'main' = legacy
+    // (created before the shopping account was split out). 'shopping' = new.
+    const STRIPE_ACCOUNT_MAIN = 'main';
+    const STRIPE_ACCOUNT_SHOPPING = 'shopping';
+
+    /**
+     * Return the Stripe SDK client whose API keys match the account this
+     * PR's invoice was created on. Used everywhere we retrieve / void /
+     * inspect the invoice so we don't accidentally hit the wrong account.
+     */
+    public function stripeClient(): \Stripe\StripeClient
+    {
+        return $this->stripe_account === self::STRIPE_ACCOUNT_SHOPPING
+            ? \App\Services\StripeAccount::shopping()
+            : \App\Services\StripeAccount::main();
+    }
 
     public static function generateRequestNumber(): string
     {

@@ -16,7 +16,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
-use Laravel\Cashier\Cashier;
+use App\Services\StripeAccount;
 
 class AdminPurchaseRequestController extends Controller
 {
@@ -253,7 +253,7 @@ class AdminPurchaseRequestController extends Controller
         try {
             if ($purchaseRequest->stripe_invoice_id && $purchaseRequest->status !== PurchaseRequest::STATUS_PAID) {
                 try {
-                    $stripe = Cashier::stripe();
+                    $stripe = $purchaseRequest->stripeClient();
                     $invoice = $stripe->invoices->retrieve($purchaseRequest->stripe_invoice_id);
                     if ($invoice->status === 'open') {
                         $stripe->invoices->voidInvoice($purchaseRequest->stripe_invoice_id);
@@ -396,7 +396,7 @@ class AdminPurchaseRequestController extends Controller
             foreach ($requests as $pr) {
                 if ($pr->stripe_invoice_id && $pr->status !== PurchaseRequest::STATUS_PAID) {
                     try {
-                        $stripe = Cashier::stripe();
+                        $stripe = $pr->stripeClient();
                         $invoice = $stripe->invoices->retrieve($pr->stripe_invoice_id);
                         if ($invoice->status === 'open') {
                             $stripe->invoices->voidInvoice($pr->stripe_invoice_id);
@@ -487,7 +487,7 @@ class AdminPurchaseRequestController extends Controller
                 // Void any open Stripe invoices on source requests
                 if ($sourceRequest->stripe_invoice_id && $sourceRequest->status !== PurchaseRequest::STATUS_PAID) {
                     try {
-                        $stripe = Cashier::stripe();
+                        $stripe = $sourceRequest->stripeClient();
                         $invoice = $stripe->invoices->retrieve($sourceRequest->stripe_invoice_id);
                         if ($invoice->status === 'open') {
                             $stripe->invoices->voidInvoice($sourceRequest->stripe_invoice_id);
@@ -572,16 +572,15 @@ class AdminPurchaseRequestController extends Controller
                 $subtotalMxn = round($subtotalUsd * $exchangeRate, 2);
                 $feeMxn = round($feeUsd * $exchangeRate, 2);
 
-                // Create Stripe customer if needed
+                // Shopping Stripe account — separate customer record from
+                // the main account. Lazily created on first invoice.
                 $user = $purchaseRequest->user;
-                if (!$user->stripe_id) {
-                    $user->createAsStripeCustomer();
-                }
+                $shoppingCustomerId = $user->stripeShoppingCustomerId();
 
-                $stripe = Cashier::stripe();
+                $stripe = StripeAccount::shopping();
 
                 $stripeInvoice = $stripe->invoices->create([
-                    'customer' => $user->stripe_id,
+                    'customer' => $shoppingCustomerId,
                     'currency' => 'mxn',
                     'collection_method' => 'send_invoice',
                     'days_until_due' => 3,
@@ -595,7 +594,7 @@ class AdminPurchaseRequestController extends Controller
                 ]);
 
                 $stripe->invoiceItems->create([
-                    'customer' => $user->stripe_id,
+                    'customer' => $shoppingCustomerId,
                     'invoice' => $stripeInvoice->id,
                     'amount' => intval($subtotalMxn * 100),
                     'currency' => 'mxn',
@@ -603,7 +602,7 @@ class AdminPurchaseRequestController extends Controller
                 ]);
 
                 $stripe->invoiceItems->create([
-                    'customer' => $user->stripe_id,
+                    'customer' => $shoppingCustomerId,
                     'invoice' => $stripeInvoice->id,
                     'amount' => intval($feeMxn * 100),
                     'currency' => 'mxn',
@@ -624,6 +623,7 @@ class AdminPurchaseRequestController extends Controller
                     'payment_method' => PurchaseRequest::PAYMENT_METHOD_STRIPE,
                     'status' => PurchaseRequest::STATUS_QUOTED,
                     'stripe_invoice_id' => $stripeInvoice->id,
+                    'stripe_account' => PurchaseRequest::STRIPE_ACCOUNT_SHOPPING,
                     'payment_link' => $sentInvoice->hosted_invoice_url,
                     'quote_sent_at' => now(),
                     'admin_notes' => $validated['admin_notes'],
@@ -711,14 +711,12 @@ class AdminPurchaseRequestController extends Controller
 
         try {
             $user = $purchaseRequest->user;
-            if (! $user->stripe_id) {
-                $user->createAsStripeCustomer();
-            }
+            $shoppingCustomerId = $user->stripeShoppingCustomerId();
 
-            $stripe = Cashier::stripe();
+            $stripe = StripeAccount::shopping();
 
             $stripeInvoice = $stripe->invoices->create([
-                'customer'          => $user->stripe_id,
+                'customer'          => $shoppingCustomerId,
                 'currency'          => 'mxn',
                 'collection_method' => 'send_invoice',
                 'days_until_due'    => 3,
@@ -740,7 +738,7 @@ class AdminPurchaseRequestController extends Controller
                 $name = $suffix ? "{$item->product_name} ({$suffix})" : $item->product_name;
 
                 $stripe->invoiceItems->create([
-                    'customer'    => $user->stripe_id,
+                    'customer'    => $shoppingCustomerId,
                     'invoice'     => $stripeInvoice->id,
                     'amount'      => intval(round($item->price * 100)) * (int) $item->quantity,
                     'currency'    => 'mxn',
@@ -761,6 +759,7 @@ class AdminPurchaseRequestController extends Controller
                 'payment_method'    => PurchaseRequest::PAYMENT_METHOD_STRIPE,
                 'status'            => PurchaseRequest::STATUS_QUOTED,
                 'stripe_invoice_id' => $stripeInvoice->id,
+                'stripe_account'    => PurchaseRequest::STRIPE_ACCOUNT_SHOPPING,
                 'payment_link'      => $sentInvoice->hosted_invoice_url,
                 'quote_sent_at'     => now(),
                 'admin_notes'       => $validated['admin_notes'] ?? $purchaseRequest->admin_notes,
@@ -902,7 +901,7 @@ class AdminPurchaseRequestController extends Controller
 
         if ($purchaseRequest->stripe_invoice_id) {
             try {
-                Cashier::stripe()->invoices->voidInvoice($purchaseRequest->stripe_invoice_id);
+                $purchaseRequest->stripeClient()->invoices->voidInvoice($purchaseRequest->stripe_invoice_id);
             } catch (\Exception $e) {
                 Log::warning('Could not void invoice on rejection', ['id' => $purchaseRequest->stripe_invoice_id]);
             }

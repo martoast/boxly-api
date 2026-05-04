@@ -70,4 +70,15 @@ return [
         'clave' => env('HSBC_CLAVE'),
     ],
 
+    /**
+     * Second Stripe account — used exclusively for the Boxly Store /
+     * Purchase Request payment flow. Keeps the shopping books separate
+     * from the main shipping/box account (which Cashier owns).
+     */
+    'stripe_shopping' => [
+        'key'            => env('STRIPE_SHOPPING_KEY'),
+        'secret'         => env('STRIPE_SHOPPING_SECRET'),
+        'webhook_secret' => env('STRIPE_SHOPPING_WEBHOOK_SECRET'),
+    ],
+
 ];

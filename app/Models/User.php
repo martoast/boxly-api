@@ -53,6 +53,7 @@ class User extends Authenticatable
         'user_type',
         'registration_source',
         'form_1583_completed_at',
+        'stripe_shopping_id',
     ];
 
     /**
@@ -308,5 +309,30 @@ class User extends Authenticatable
     public function wasReferred(): bool
     {
         return $this->affiliateReferral()->exists();
+    }
+
+    /**
+     * Customer ID in the SHOPPING Stripe account (separate from $stripe_id
+     * which lives on the main account via Cashier).
+     *
+     * Lazily creates the customer on the shopping account the first time
+     * we need to invoice this user there, then caches the ID on the row.
+     */
+    public function stripeShoppingCustomerId(): string
+    {
+        if ($this->stripe_shopping_id) {
+            return $this->stripe_shopping_id;
+        }
+
+        $stripe = \App\Services\StripeAccount::shopping();
+        $customer = $stripe->customers->create([
+            'email'    => $this->email,
+            'name'     => $this->name,
+            'phone'    => $this->phone,
+            'metadata' => ['user_id' => (string) $this->id],
+        ]);
+
+        $this->update(['stripe_shopping_id' => $customer->id]);
+        return $customer->id;
     }
 }
