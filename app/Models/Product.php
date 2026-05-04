@@ -55,7 +55,6 @@ class Product extends Model
         'length_cm',
         'width_cm',
         'height_cm',
-        'stock',
         'status',
         'available_until',
         'store_id',
@@ -71,7 +70,6 @@ class Product extends Model
         'length_cm'       => 'decimal:1',
         'width_cm'        => 'decimal:1',
         'height_cm'       => 'decimal:1',
-        'stock'           => 'integer',
         'available_until' => 'datetime',
         'images'          => 'array',
     ];
@@ -118,13 +116,13 @@ class Product extends Model
     }
 
     /**
-     * Available = purchasable right now. Listed + has stock count > 0.
-     * (Source-store availability is no longer auto-checked here — Velonie
-     * verifies it per-PR after the customer creates a request.)
+     * Available = purchasable right now. We no longer track inventory on the
+     * Boxly side — Velonie verifies real-time availability at the source
+     * retailer when reviewing each PR — so this is just an alias for listed().
      */
     public function scopeAvailable($query)
     {
-        return $query->listed()->where('stock', '>', 0);
+        return $query->listed();
     }
 
     public function scopeExpiringSoon($query, int $days = 7)
