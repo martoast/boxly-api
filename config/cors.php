@@ -47,6 +47,7 @@ return [
         'employee/*',
         'shopping/*',
         'store/*',
+        'me/*',
     ],
 
     'allowed_methods' => ['*'],
