@@ -33,6 +33,13 @@ class PurchaseRequestItem extends Model
         'stock_checked_at',
         'stock_checked_by',
 
+        // New per-item cost breakdown (Velonie fills these in during PR
+        // review on store-source PRs — see AdminPurchaseRequestController).
+        'tax_usd',
+        'shipping_usd',
+        'commission_percent',
+        'final_usd',
+
         // New File Upload Fields
         'image_path',
         'image_filename',
@@ -43,11 +50,29 @@ class PurchaseRequestItem extends Model
 
     protected $casts = [
         'price' => 'decimal:2',
+        'tax_usd' => 'decimal:2',
+        'shipping_usd' => 'decimal:2',
+        'commission_percent' => 'decimal:2',
+        'final_usd' => 'decimal:2',
         'quantity' => 'integer',
         'options' => 'array',
         'image_size' => 'integer',
         'stock_checked_at' => 'datetime',
     ];
+
+    /**
+     * Final USD line cost = (unit_price + tax + shipping) * (1 + commission%) * quantity.
+     * Velonie's three inputs feed this; the result is what we sum to get
+     * the PR's USD subtotal before FX conversion.
+     */
+    public function computeFinalUsd(): float
+    {
+        $unit = (float) $this->price;
+        $tax  = (float) ($this->tax_usd ?? 0);
+        $ship = (float) ($this->shipping_usd ?? 0);
+        $comm = (float) ($this->commission_percent ?? 0);
+        return round(($unit + $tax + $ship) * (1 + $comm / 100) * (int) $this->quantity, 2);
+    }
 
     protected $appends = ['image_full_url'];
 

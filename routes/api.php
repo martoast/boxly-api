@@ -45,6 +45,11 @@ use App\Http\Controllers\Admin\AdminTokenController;
 Route::post('/webhooks/stripe', [StripeWebhookController::class, 'handle']);
 Route::post('/webhooks/stripe-shopping', [StripeWebhookController::class, 'handleShopping']);
 
+// Public live FX rate (USD→MXN). 10-min cached, used by the storefront
+// for the "approx in pesos" hint and by the cost-breakdown UI on
+// Velonie's PR review screen.
+Route::get('/fx-rate', [\App\Http\Controllers\FxRateController::class, 'show']);
+
 // Public Affiliate Routes
 Route::get('/affiliate/validate/{code}', [AffiliateController::class, 'validateCode']);
 
@@ -246,6 +251,11 @@ Route::middleware('auth:sanctum')->group(function () {
             // before quoting a store-source PR. Available items get billed via Stripe;
             // unavailable items stay visible on the PR but are excluded from the invoice.
             Route::put('/{purchaseRequest}/items/{item}/stock-status', [AdminPurchaseRequestController::class, 'updateItemStockStatus']);
+
+            // Per-item cost breakdown — Velonie enters tax + shipping + commission %
+            // (in USD, what the source store actually charged her at checkout).
+            // Marking via this endpoint also flips the item to "available".
+            Route::put('/{purchaseRequest}/items/{item}/cost-breakdown', [AdminPurchaseRequestController::class, 'updateItemCostBreakdown']);
         });
 
         Route::prefix('management')->group(function () {
@@ -450,6 +460,11 @@ Route::middleware('auth:sanctum')->group(function () {
             // before quoting a store-source PR. Available items get billed via Stripe;
             // unavailable items stay visible on the PR but are excluded from the invoice.
             Route::put('/{purchaseRequest}/items/{item}/stock-status', [AdminPurchaseRequestController::class, 'updateItemStockStatus']);
+
+            // Per-item cost breakdown — Velonie enters tax + shipping + commission %
+            // (in USD, what the source store actually charged her at checkout).
+            // Marking via this endpoint also flips the item to "available".
+            Route::put('/{purchaseRequest}/items/{item}/cost-breakdown', [AdminPurchaseRequestController::class, 'updateItemCostBreakdown']);
         });
 
         Route::prefix('products')->group(function () {

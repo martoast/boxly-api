@@ -18,12 +18,22 @@ class AdminCustomerController extends Controller
         $request->validate([
             'per_page' => 'nullable|integer|min:1|max:500',
             'limit' => 'nullable|integer|min:1|max:500',
+            'registered_after' => 'nullable|date',
+            'registered_before' => 'nullable|date',
         ]);
 
         $perPage = $request->input('per_page') ?? $request->input('limit') ?? 20;
 
         $query = User::withCount(['orders', 'activeOrders'])
             ->where('role', 'customer');
+
+        if ($request->has('registered_after')) {
+            $query->where('created_at', '>=', $request->input('registered_after'));
+        }
+
+        if ($request->has('registered_before')) {
+            $query->where('created_at', '<=', $request->input('registered_before'));
+        }
 
         if ($request->has('search')) {
             $search = $request->search;

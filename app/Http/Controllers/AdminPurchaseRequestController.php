@@ -11,7 +11,9 @@ use App\Mail\PurchaseRequestQuoteSent;
 use App\Mail\PurchaseRequestItemsPurchased;
 // Removed PurchaseRequestCreated import to prevent notification on admin create
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
@@ -77,6 +79,51 @@ class AdminPurchaseRequestController extends Controller
             'stock_checked_at' => $validated['stock_status'] === PurchaseRequestItem::STOCK_UNVERIFIED ? null : now(),
             'stock_checked_by' => $validated['stock_status'] === PurchaseRequestItem::STOCK_UNVERIFIED ? null : $request->user()->id,
         ]);
+
+        return response()->json([
+            'success' => true,
+            'data'    => $item->fresh(),
+        ]);
+    }
+
+    /**
+     * Per-item cost breakdown — Velonie's new step on store-source PRs.
+     *
+     * After verifying availability at the source store, she enters the
+     * actual taxes + shipping the store charged her at checkout, plus a
+     * Boxly commission % (default 8% — defined in services.commission).
+     * The system computes the per-item final USD on save and persists
+     * it so the quote step can sum it up cleanly.
+     *
+     * Marking an item available via this endpoint also flips the
+     * stock_status, so it replaces updateItemStockStatus for the
+     * "happy path" — the older endpoint stays around for unavailable.
+     */
+    public function updateItemCostBreakdown(Request $request, PurchaseRequest $purchaseRequest, PurchaseRequestItem $item)
+    {
+        if ($item->purchase_request_id !== $purchaseRequest->id) {
+            return response()->json(['success' => false, 'message' => 'Item not in this PR'], 422);
+        }
+        if ($purchaseRequest->status !== PurchaseRequest::STATUS_PENDING_REVIEW) {
+            return response()->json(['success' => false, 'message' => 'Cost breakdown can only be edited while PR is in pending_review'], 400);
+        }
+
+        $validated = $request->validate([
+            'tax_usd'             => 'required|numeric|min:0',
+            'shipping_usd'        => 'required|numeric|min:0',
+            'commission_percent'  => 'required|numeric|min:0|max:100',
+        ]);
+
+        $item->fill([
+            'tax_usd'            => $validated['tax_usd'],
+            'shipping_usd'       => $validated['shipping_usd'],
+            'commission_percent' => $validated['commission_percent'],
+            'stock_status'       => PurchaseRequestItem::STOCK_AVAILABLE,
+            'stock_checked_at'   => now(),
+            'stock_checked_by'   => $request->user()->id,
+        ]);
+        $item->final_usd = $item->computeFinalUsd();
+        $item->save();
 
         return response()->json([
             'success' => true,
@@ -674,11 +721,13 @@ class AdminPurchaseRequestController extends Controller
     }
 
     /**
-     * Quote a STORE-source PR: items are already priced in MXN with markup
-     * baked in, Velonie has just confirmed which ones are actually in stock,
-     * so we just need to (1) validate every item was checked, (2) sum the
-     * available items, (3) generate a Stripe invoice with one line per
-     * available item, (4) flip status to `quoted`.
+     * Quote a STORE-source PR.
+     *
+     * New transparent-pricing flow: each available item carries a USD
+     * cost breakdown that Velonie filled in during review (source-store
+     * unit price + tax + shipping + Boxly commission %). We sum those
+     * USD totals, fetch the live USD→MXN rate, snapshot it on the PR,
+     * convert, and create the Stripe invoice in MXN.
      */
     private function createStoreQuote(Request $request, PurchaseRequest $purchaseRequest)
     {
@@ -686,7 +735,7 @@ class AdminPurchaseRequestController extends Controller
             'admin_notes' => 'nullable|string',
         ]);
 
-        // Reload items so we have the freshest stock_status values
+        // Reload items so we have the freshest stock_status / cost-breakdown values
         $purchaseRequest->load('items');
 
         if (! $purchaseRequest->allItemsStockChecked()) {
@@ -704,8 +753,35 @@ class AdminPurchaseRequestController extends Controller
             ], 422);
         }
 
-        $totalMxn = $availableItems->sum(fn($item) => floatval($item->price) * (int) $item->quantity);
-        $totalMxn = round($totalMxn, 2);
+        // Every available item must have its cost breakdown completed —
+        // that's how we know Velonie did the source-store checkout
+        // research before invoicing.
+        $missing = $availableItems->filter(
+            fn($i) => $i->tax_usd === null || $i->shipping_usd === null || $i->commission_percent === null
+        );
+        if ($missing->isNotEmpty()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Captura impuestos, envío y comisión para cada producto disponible antes de cotizar',
+            ], 422);
+        }
+
+        // Recompute final_usd at quote time so any last-minute edits are
+        // reflected even if the PUT to the cost-breakdown endpoint
+        // missed an updated row for some reason.
+        $totalUsd = 0.0;
+        foreach ($availableItems as $item) {
+            $item->final_usd = $item->computeFinalUsd();
+            $item->save();
+            $totalUsd += (float) $item->final_usd;
+        }
+        $totalUsd = round($totalUsd, 2);
+
+        // Live FX. Fall back to configured static rate if the upstream
+        // is down — better to ship a quote off by a few centavos than to
+        // block Velonie's queue.
+        $fxRate = $this->fetchLiveFxRate();
+        $totalMxn = round($totalUsd * $fxRate, 2);
 
         DB::beginTransaction();
 
@@ -726,12 +802,14 @@ class AdminPurchaseRequestController extends Controller
                     'purchase_request_id' => $purchaseRequest->id,
                     'request_number'      => $purchaseRequest->request_number,
                     'source'              => PurchaseRequest::SOURCE_STORE,
+                    'fx_rate_used'        => (string) $fxRate,
                 ],
                 'auto_advance' => false,
             ]);
 
-            // One Stripe invoice line per available item — gives the
-            // customer a clean breakdown of what they're paying for.
+            // One Stripe invoice line per available item, in MXN. Each
+            // line description spells out the underlying USD figure so
+            // the customer can audit the conversion if they want.
             foreach ($availableItems as $item) {
                 $opts = $item->options ?? [];
                 $suffix = trim(implode(' / ', array_filter([
@@ -740,13 +818,15 @@ class AdminPurchaseRequestController extends Controller
                     $opts['length'] ?? null,
                 ])));
                 $name = $suffix ? "{$item->product_name} ({$suffix})" : $item->product_name;
+                $lineMxn = round(((float) $item->final_usd) * $fxRate, 2);
 
                 $stripe->invoiceItems->create([
                     'customer'    => $shoppingCustomerId,
                     'invoice'     => $stripeInvoice->id,
-                    'amount'      => intval(round($item->price * 100)) * (int) $item->quantity,
+                    'amount'      => (int) round($lineMxn * 100),
                     'currency'    => 'mxn',
-                    'description' => $item->quantity > 1 ? "{$name} × {$item->quantity}" : $name,
+                    'description' => ($item->quantity > 1 ? "{$name} × {$item->quantity}" : $name)
+                                   . " — \${$item->final_usd} USD @ {$fxRate} MXN/USD",
                 ]);
             }
 
@@ -757,8 +837,10 @@ class AdminPurchaseRequestController extends Controller
                 'items_total'       => $totalMxn,
                 'shipping_cost'     => 0,
                 'sales_tax'         => 0,
-                'processing_fee'    => 0, // markup already in product price
+                'processing_fee'    => 0,
                 'total_amount'      => $totalMxn,
+                'total_usd'         => $totalUsd,
+                'fx_rate_used'      => $fxRate,
                 'currency'          => 'mxn',
                 'payment_method'    => PurchaseRequest::PAYMENT_METHOD_STRIPE,
                 'status'            => PurchaseRequest::STATUS_QUOTED,
@@ -912,5 +994,27 @@ class AdminPurchaseRequestController extends Controller
         }
 
         return response()->json(['success' => true, 'message' => 'Request rejected']);
+    }
+
+    /**
+     * Live USD→MXN rate. Cached 10min so a quote burst doesn't hammer
+     * Frankfurter and so all line items in one PR see the same rate.
+     * Falls back to services.exchange_rate.usd_to_mxn if upstream is
+     * unreachable.
+     */
+    protected function fetchLiveFxRate(): float
+    {
+        return Cache::remember('fx:usd-mxn', now()->addMinutes(10), function () {
+            try {
+                $res = Http::timeout(5)->get('https://api.frankfurter.dev/v1/latest', [
+                    'base' => 'USD', 'symbols' => 'MXN',
+                ]);
+                $rate = (float) ($res->json('rates.MXN') ?? 0);
+                if ($rate > 0) return round($rate, 4);
+            } catch (\Throwable $e) {
+                Log::warning('FX rate fetch failed during quote', ['error' => $e->getMessage()]);
+            }
+            return (float) config('services.exchange_rate.usd_to_mxn', 17.5);
+        });
     }
 }

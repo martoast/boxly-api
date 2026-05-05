@@ -22,6 +22,8 @@ class PurchaseRequest extends Model
         'sales_tax',
         'processing_fee',
         'total_amount',
+        'total_usd',
+        'fx_rate_used',
         'currency',
         'payment_method',
         'stripe_invoice_id',

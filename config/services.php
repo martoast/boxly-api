@@ -57,6 +57,16 @@ return [
         'usd_to_mxn' => env('EXCHANGE_RATE_USD_TO_MXN', 18.00),
     ],
 
+    /**
+     * Boxly's default commission percentage applied per-item on
+     * store-source PRs. The Velonie review form pre-fills this so
+     * she just hits "available" for normal items; she can override
+     * for premium / discounted items.
+     */
+    'commission' => [
+        'default_percent' => env('BOXLY_COMMISSION_PERCENT', 8),
+    ],
+
     'nu_bank' => [
         'beneficiary_name' => env('NU_BENEFICIARY_NAME'),
         'bank_name' => env('NU_BANK_NAME'),

@@ -116,14 +116,14 @@ class StoreCheckoutController extends Controller
                     'request_number' => PurchaseRequest::generateRequestNumber(),
                     'status'         => PurchaseRequest::STATUS_PENDING_REVIEW,
                     'source'         => PurchaseRequest::SOURCE_STORE,
-                    'currency'       => 'mxn',
+                    'currency'       => 'usd', // source-store USD subtotal until Velonie quotes
                     'payment_method' => PurchaseRequest::PAYMENT_METHOD_STRIPE,
                     'items_total'    => $itemsTotal,
                     'shipping_cost'  => 0,
                     'sales_tax'      => 0,
-                    'processing_fee' => 0, // markup is baked into product price
+                    'processing_fee' => 0,
                     'total_amount'   => $itemsTotal,
-                    'admin_notes'    => 'Boxly Store checkout — markup already in product price.',
+                    'admin_notes'    => 'Boxly Store checkout — pending Velonie cost breakdown (tax + shipping + commission).',
                 ]);
 
                 foreach ($itemRows as $row) {
