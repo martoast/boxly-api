@@ -36,13 +36,13 @@ return new class extends Migration
                 foreach ($products as $p) {
                     $usdCents = (int) round($p->cost_cents / $assumedRate);
                     if ($usdCents <= 0) continue;
+                    // Only flip price_cents to source-store USD. Leave
+                    // cost_cents / markup_percent in place — they're NOT
+                    // NULL columns on the legacy schema and nothing reads
+                    // them anymore, so there's no need to wipe them.
                     DB::table('products')
                         ->where('id', $p->id)
-                        ->update([
-                            'price_cents'    => $usdCents,
-                            'cost_cents'     => null,
-                            'markup_percent' => null,
-                        ]);
+                        ->update(['price_cents' => $usdCents]);
                     $migrated++;
                 }
             });
