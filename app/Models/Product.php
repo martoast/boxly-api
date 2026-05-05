@@ -25,7 +25,11 @@ class Product extends Model
 
     public function categories(): BelongsToMany
     {
-        return $this->belongsToMany(Category::class);
+        // withTimestamps so attach/sync/syncWithoutDetaching populate
+        // category_product.created_at / updated_at — the migration
+        // declared NOT NULL timestamps, so without this the bulk
+        // categorize endpoint 500s on the pivot insert.
+        return $this->belongsToMany(Category::class)->withTimestamps();
     }
 
     const STATUS_DRAFT = 'draft';
