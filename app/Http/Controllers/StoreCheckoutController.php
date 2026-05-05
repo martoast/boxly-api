@@ -89,10 +89,12 @@ class StoreCheckoutController extends Controller
 
                     $itemsTotalCents += $unitCents * $line['quantity'];
 
+                    // Color is product-level now (one Boxly product = one color
+                    // of the source SKU group). Size + length stay on the variant.
                     $options = array_filter([
                         'size'               => $variant?->size,
-                        'color'              => $variant?->color,
                         'length'             => $variant?->length,
+                        'color'              => $product->color,
                         'shopify_variant_id' => $variant?->shopify_variant_id,
                     ]);
 

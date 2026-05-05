@@ -171,6 +171,7 @@ class AdminProductController extends Controller
     {
         $validated = $request->validate([
             'name'            => 'required|string|max:255',
+            'color'           => 'nullable|string|max:80',
             'slug'            => 'nullable|string|max:255|unique:products,slug',
             'description'     => 'nullable|string',
             'sku'             => 'nullable|string|max:100',
@@ -209,6 +210,7 @@ class AdminProductController extends Controller
     {
         $validated = $request->validate([
             'name'            => 'sometimes|string|max:255',
+            'color'           => 'nullable|string|max:80',
             'slug'            => 'sometimes|string|max:255|unique:products,slug,' . $product->id,
             'description'     => 'nullable|string',
             'sku'             => 'nullable|string|max:100',
