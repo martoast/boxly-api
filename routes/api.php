@@ -65,6 +65,7 @@ Route::get('/products/{priceId}', [ProductController::class, 'show']); // Added 
 Route::prefix('store')->group(function () {
     Route::get('/products', [StoreProductController::class, 'index']);
     Route::get('/products/{slug}', [StoreProductController::class, 'show']);
+    Route::get('/hero', [\App\Http\Controllers\ShopHeroController::class, 'publicShow']);
     Route::get('/categories', [StoreProductController::class, 'categories']);
     Route::get('/stores', [StoreProductController::class, 'stores']);
 });
@@ -403,6 +404,13 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::delete('/{product}/variants/{variant}', [AdminProductController::class, 'deleteVariant']);
         });
 
+        // Editable storefront hero — single active campaign at a time.
+        Route::prefix('store-hero')->group(function () {
+            Route::get('/', [\App\Http\Controllers\ShopHeroController::class, 'show']);
+            Route::put('/', [\App\Http\Controllers\ShopHeroController::class, 'update']);
+            Route::post('/image', [\App\Http\Controllers\ShopHeroController::class, 'uploadImage']);
+        });
+
         Route::prefix('campaigns')->group(function () {
             Route::get('/', [AdminCampaignController::class, 'index']);
             Route::post('/', [AdminCampaignController::class, 'store']);
@@ -484,6 +492,13 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/{product}/variants', [AdminProductController::class, 'addVariant']);
             Route::post('/{product}/variants/sync', [AdminProductController::class, 'syncVariants']);
             Route::delete('/{product}/variants/{variant}', [AdminProductController::class, 'deleteVariant']);
+        });
+
+        // Editable storefront hero — single active campaign at a time.
+        Route::prefix('store-hero')->group(function () {
+            Route::get('/', [\App\Http\Controllers\ShopHeroController::class, 'show']);
+            Route::put('/', [\App\Http\Controllers\ShopHeroController::class, 'update']);
+            Route::post('/image', [\App\Http\Controllers\ShopHeroController::class, 'uploadImage']);
         });
 
         Route::prefix('stores')->group(function () {

@@ -49,6 +49,7 @@ return [
         'store/*',
         'me/*',
         'fx-rate',
+        'hero',
     ],
 
     'allowed_methods' => ['*'],
