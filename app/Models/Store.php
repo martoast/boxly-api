@@ -16,6 +16,7 @@ class Store extends Model
         'slug',
         'base_url',
         'logo_url',
+        'cover_image_url',
         'description',
         'is_active',
         'sort_order',

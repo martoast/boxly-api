@@ -365,6 +365,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::put('/{store}', [AdminStoreController::class, 'update']);
             Route::delete('/{store}', [AdminStoreController::class, 'destroy']);
             Route::post('/{store}/logo', [AdminStoreController::class, 'uploadLogo']);
+            Route::post('/{store}/cover-image', [AdminStoreController::class, 'uploadCoverImage']);
         });
 
         // Boxly Store — Categories
@@ -508,6 +509,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::put('/{store}', [AdminStoreController::class, 'update']);
             Route::delete('/{store}', [AdminStoreController::class, 'destroy']);
             Route::post('/{store}/logo', [AdminStoreController::class, 'uploadLogo']);
+            Route::post('/{store}/cover-image', [AdminStoreController::class, 'uploadCoverImage']);
         });
 
         Route::prefix('categories')->group(function () {

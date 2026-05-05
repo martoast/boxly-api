@@ -156,7 +156,7 @@ class StoreProductController extends Controller
         $stores = Store::active()
             ->orderBy('sort_order')
             ->orderBy('name')
-            ->get(['id', 'name', 'slug', 'base_url', 'logo_url', 'description']);
+            ->get(['id', 'name', 'slug', 'base_url', 'logo_url', 'cover_image_url', 'description']);
 
         return response()->json(['success' => true, 'data' => $stores]);
     }
