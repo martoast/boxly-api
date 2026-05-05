@@ -19,6 +19,8 @@ class ShopHero extends Model
         'subtitle',
         'image_path',
         'image_url',
+        'mobile_image_path',
+        'mobile_image_url',
         'cta_label',
         'cta_link',
         'is_active',

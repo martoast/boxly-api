@@ -62,14 +62,20 @@ class ShopHeroController extends Controller
     }
 
     /**
-     * Admin — upload a new hero image. Stored on Spaces under
-     * shop-heroes/, the URL replaces image_url on the active hero.
+     * Admin — upload a new hero image. Same endpoint for the desktop
+     * crop (default) and the mobile portrait crop — the `variant` field
+     * picks which column to write. Stored on Spaces under shop-heroes/.
      */
     public function uploadImage(Request $request)
     {
         $request->validate([
-            'image' => 'required|image|mimes:jpeg,jpg,png,webp|max:10240',
+            'image'   => 'required|image|mimes:jpeg,jpg,png,webp|max:10240',
+            'variant' => 'nullable|in:desktop,mobile',
         ]);
+
+        $variant   = $request->input('variant', 'desktop');
+        $pathField = $variant === 'mobile' ? 'mobile_image_path' : 'image_path';
+        $urlField  = $variant === 'mobile' ? 'mobile_image_url'  : 'image_url';
 
         try {
             $hero = ShopHero::active() ?? ShopHero::create([
@@ -79,19 +85,19 @@ class ShopHeroController extends Controller
                 'is_active' => true,
             ]);
 
-            // Delete old image if present
-            if ($hero->image_path) {
-                Storage::disk('spaces')->delete($hero->image_path);
+            // Delete the previous file for this variant if present
+            if ($hero->{$pathField}) {
+                Storage::disk('spaces')->delete($hero->{$pathField});
             }
 
-            $file = $request->file('image');
-            $filename = "hero-" . $hero->id . "-" . time() . "." . $file->getClientOriginalExtension();
-            $path = Storage::disk('spaces')->putFileAs('shop-heroes', $file, $filename, 'public');
-            $url  = config('filesystems.disks.spaces.url') . '/' . $path;
+            $file     = $request->file('image');
+            $filename = "hero-{$variant}-" . $hero->id . "-" . time() . "." . $file->getClientOriginalExtension();
+            $path     = Storage::disk('spaces')->putFileAs('shop-heroes', $file, $filename, 'public');
+            $url      = config('filesystems.disks.spaces.url') . '/' . $path;
 
             $hero->update([
-                'image_path' => $path,
-                'image_url'  => $url,
+                $pathField => $path,
+                $urlField  => $url,
             ]);
 
             return response()->json([
