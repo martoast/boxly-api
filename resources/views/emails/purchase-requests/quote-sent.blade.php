@@ -24,8 +24,20 @@
         @endif
     </p>
 
+    @php
+        // Customers ALWAYS pay in MXN — Stripe invoices are denominated in
+        // MXN regardless of which flow created them, and manual deposits go
+        // to a Mexican bank account. Convert legacy USD totals to MXN at the
+        // configured exchange rate so the email number matches what the
+        // customer actually sees on the Stripe invoice / pays.
+        $rate = (float) config('services.exchange_rate.usd_to_mxn', 18.00);
+        $totalMxn = $request->currency === 'usd'
+            ? round($request->total_amount * $rate, 2)
+            : (float) $request->total_amount;
+    @endphp
+
     <p style="font-size: 18px; margin: 25px 0;">
-        {{ $locale === 'es' ? 'Total a Pagar:' : 'Total to Pay:' }} ${{ number_format($request->total_amount, 2) }} USD
+        {{ $locale === 'es' ? 'Total a Pagar:' : 'Total to Pay:' }} ${{ number_format($totalMxn, 2) }} MXN
     </p>
 
     @if($request->payment_method === \App\Models\PurchaseRequest::PAYMENT_METHOD_STRIPE)
@@ -46,10 +58,6 @@
 
     @elseif($request->payment_method === \App\Models\PurchaseRequest::PAYMENT_METHOD_MANUAL_DEPOSIT)
         {{-- MANUAL DEPOSIT SECTION --}}
-        @php
-            $amountInMxn = round($request->total_amount * 18, 2);
-        @endphp
-
         <div style="margin: 30px 0; padding: 20px; border: 1px solid #ddd; border-radius: 4px;">
             <h3 style="margin-top: 0; margin-bottom: 15px;">
                 {{ $locale === 'es' ? 'Instrucciones de Transferencia Bancaria' : 'Bank Transfer Instructions' }}
@@ -75,7 +83,7 @@
             </div>
 
             <p style="margin: 15px 0; font-weight: bold;">
-                {{ $locale === 'es' ? 'Total a Transferir:' : 'Total to Transfer:' }} ${{ number_format($amountInMxn, 2) }} MXN
+                {{ $locale === 'es' ? 'Total a Transferir:' : 'Total to Transfer:' }} ${{ number_format($totalMxn, 2) }} MXN
             </p>
 
             <p style="color: #666; font-size: 14px; margin-top: 20px;">
