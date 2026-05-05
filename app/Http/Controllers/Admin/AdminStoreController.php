@@ -42,6 +42,7 @@ class AdminStoreController extends Controller
             'cover_image_url' => 'nullable|url|max:500',
             'description'     => 'nullable|string',
             'is_active'       => 'nullable|boolean',
+            'show_on_landing' => 'nullable|boolean',
             'sort_order'      => 'nullable|integer|min:0',
         ]);
 
@@ -59,6 +60,7 @@ class AdminStoreController extends Controller
             'cover_image_url' => 'nullable|url|max:500',
             'description'     => 'nullable|string',
             'is_active'       => 'nullable|boolean',
+            'show_on_landing' => 'nullable|boolean',
             'sort_order'      => 'nullable|integer|min:0',
         ]);
 

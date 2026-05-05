@@ -148,15 +148,25 @@ class StoreProductController extends Controller
     }
 
     /**
-     * Public list of active stores — used by storefront filter dropdowns
-     * and the brand index page.
+     * Public list of active stores — used by storefront filter dropdowns,
+     * the brand index page, and (with on_landing=1) the landing-page
+     * brand showcase. The `limit` param caps the result count.
      */
-    public function stores()
+    public function stores(\Illuminate\Http\Request $request)
     {
-        $stores = Store::active()
-            ->orderBy('sort_order')
-            ->orderBy('name')
-            ->get(['id', 'name', 'slug', 'base_url', 'logo_url', 'cover_image_url', 'description']);
+        $query = Store::active();
+
+        if ($request->boolean('on_landing')) {
+            $query->where('show_on_landing', true);
+        }
+
+        $query->orderBy('sort_order')->orderBy('name');
+
+        if ($limit = (int) $request->input('limit', 0)) {
+            $query->limit($limit);
+        }
+
+        $stores = $query->get(['id', 'name', 'slug', 'base_url', 'logo_url', 'cover_image_url', 'description']);
 
         return response()->json(['success' => true, 'data' => $stores]);
     }

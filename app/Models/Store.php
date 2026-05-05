@@ -19,12 +19,14 @@ class Store extends Model
         'cover_image_url',
         'description',
         'is_active',
+        'show_on_landing',
         'sort_order',
     ];
 
     protected $casts = [
-        'is_active'  => 'boolean',
-        'sort_order' => 'integer',
+        'is_active'       => 'boolean',
+        'show_on_landing' => 'boolean',
+        'sort_order'      => 'integer',
     ];
 
     protected static function boot()
