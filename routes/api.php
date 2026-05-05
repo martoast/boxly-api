@@ -379,6 +379,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::delete('/bulk', [AdminProductController::class, 'bulkDestroy']);
             Route::put('/bulk-restore', [AdminProductController::class, 'bulkRestore']);
             Route::delete('/bulk-force', [AdminProductController::class, 'bulkForceDestroy']);
+            Route::post('/bulk-categorize', [AdminProductController::class, 'bulkCategorize']);
             Route::get('/expiring', [AdminProductController::class, 'expiring']);
             Route::get('/{product}', [AdminProductController::class, 'show']);
             Route::put('/{product}', [AdminProductController::class, 'update']);
@@ -457,6 +458,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::delete('/bulk', [AdminProductController::class, 'bulkDestroy']);
             Route::put('/bulk-restore', [AdminProductController::class, 'bulkRestore']);
             Route::delete('/bulk-force', [AdminProductController::class, 'bulkForceDestroy']);
+            Route::post('/bulk-categorize', [AdminProductController::class, 'bulkCategorize']);
             Route::get('/expiring', [AdminProductController::class, 'expiring']);
             Route::get('/{product}', [AdminProductController::class, 'show']);
             Route::put('/{product}', [AdminProductController::class, 'update']);

@@ -283,6 +283,51 @@ class AdminProductController extends Controller
     }
 
     /**
+     * Bulk-assign one or more categories to many products at once.
+     *
+     * Default mode = `add`: appends the chosen categories to whatever each
+     * product already has (most common workflow — Velonie tagging a batch
+     * of newly-imported items into an existing category). Pass
+     * `mode: 'replace'` to overwrite each product's category list with
+     * exactly the chosen ids.
+     */
+    public function bulkCategorize(Request $request)
+    {
+        $validated = $request->validate([
+            'ids'              => 'required|array|min:1',
+            'ids.*'            => 'required|integer|exists:products,id',
+            'category_ids'     => 'required|array|min:1',
+            'category_ids.*'   => 'integer|exists:categories,id',
+            'mode'             => 'nullable|in:add,replace',
+        ]);
+
+        $mode = $validated['mode'] ?? 'add';
+        $products = Product::whereIn('id', $validated['ids'])->get();
+
+        foreach ($products as $product) {
+            if ($mode === 'replace') {
+                $product->categories()->sync($validated['category_ids']);
+            } else {
+                // syncWithoutDetaching = additive; existing categories stay
+                $product->categories()->syncWithoutDetaching($validated['category_ids']);
+            }
+        }
+
+        Log::info('Bulk-categorized products', [
+            'count'        => $products->count(),
+            'category_ids' => $validated['category_ids'],
+            'mode'         => $mode,
+            'admin_id'     => $request->user()->id,
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => "{$products->count()} products categorized",
+            'count'   => $products->count(),
+        ]);
+    }
+
+    /**
      * Bulk soft-delete — flip status to inactive for many products at once.
      * Mirrors the single destroy() so order history is preserved.
      */
