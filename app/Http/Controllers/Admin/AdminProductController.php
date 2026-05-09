@@ -23,6 +23,7 @@ class AdminProductController extends Controller
             'status'      => 'nullable|in:draft,active,inactive,sold_out',
             'store_id'    => 'nullable|integer|exists:stores,id',
             'category_id' => 'nullable|integer|exists:categories,id',
+            'gender_id'   => 'nullable|integer|exists:genders,id',
             'search'      => 'nullable|string|max:200',
         ]);
 
@@ -34,6 +35,7 @@ class AdminProductController extends Controller
         $query = Product::query()
             ->with([
                 'store',
+                'gender',
                 'categories:id,name,slug',
                 'variants:id,product_id,size,color',
             ])
@@ -51,6 +53,9 @@ class AdminProductController extends Controller
         }
         if ($categoryId = $request->input('category_id')) {
             $query->whereHas('categories', fn ($q) => $q->where('categories.id', $categoryId));
+        }
+        if ($genderId = $request->input('gender_id')) {
+            $query->where('gender_id', $genderId);
         }
         if ($search = $request->input('search')) {
             $query->where(function ($q) use ($search) {
@@ -72,6 +77,7 @@ class AdminProductController extends Controller
         $product->load([
             'variants' => fn ($q) => $q->orderBy('display_order')->orderBy('id'),
             'store',
+            'gender',
             'categories',
         ]);
         return response()->json([
@@ -187,6 +193,7 @@ class AdminProductController extends Controller
             'status'          => 'nullable|in:draft,active,inactive,sold_out',
             'available_until' => 'nullable|date|after:now',
             'store_id'        => 'nullable|integer|exists:stores,id',
+            'gender_id'       => 'nullable|integer|exists:genders,id',
             'category_ids'    => 'nullable|array',
             'category_ids.*'  => 'integer|exists:categories,id',
         ]);
@@ -202,7 +209,7 @@ class AdminProductController extends Controller
 
         return response()->json([
             'success' => true,
-            'data' => $product->load(['store', 'categories']),
+            'data' => $product->load(['store', 'gender', 'categories']),
         ], 201);
     }
 
@@ -226,6 +233,7 @@ class AdminProductController extends Controller
             'status'          => 'sometimes|in:draft,active,inactive,sold_out',
             'available_until' => 'nullable|date',
             'store_id'        => 'nullable|integer|exists:stores,id',
+            'gender_id'       => 'nullable|integer|exists:genders,id',
             'category_ids'    => 'nullable|array',
             'category_ids.*'  => 'integer|exists:categories,id',
             // Allow re-tagging colors on existing images. Full replacement
@@ -267,7 +275,7 @@ class AdminProductController extends Controller
 
         return response()->json([
             'success' => true,
-            'data' => $product->fresh(['store', 'categories']),
+            'data' => $product->fresh(['store', 'gender', 'categories']),
         ]);
     }
 

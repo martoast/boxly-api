@@ -33,6 +33,7 @@ use App\Http\Controllers\StoreCheckoutController;
 use App\Http\Controllers\Admin\AdminProductController;
 use App\Http\Controllers\Admin\AdminStoreController;
 use App\Http\Controllers\Admin\AdminCategoryController;
+use App\Http\Controllers\Admin\AdminGenderController;
 use App\Http\Controllers\Admin\AdminStoreSalesController;
 use App\Http\Controllers\Admin\AdminTokenController;
 
@@ -68,6 +69,7 @@ Route::prefix('store')->group(function () {
     Route::get('/hero', [\App\Http\Controllers\ShopHeroController::class, 'publicShow']);
     Route::get('/categories', [StoreProductController::class, 'categories']);
     Route::get('/stores', [StoreProductController::class, 'stores']);
+    Route::get('/genders', [StoreProductController::class, 'genders']);
 });
 
 Route::get('/user-types', function () {
@@ -378,6 +380,16 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/{category}/image', [AdminCategoryController::class, 'uploadImage']);
         });
 
+        // Boxly Store — Genders
+        Route::prefix('genders')->group(function () {
+            Route::get('/', [AdminGenderController::class, 'index']);
+            Route::post('/', [AdminGenderController::class, 'store']);
+            Route::get('/{gender}', [AdminGenderController::class, 'show']);
+            Route::put('/{gender}', [AdminGenderController::class, 'update']);
+            Route::delete('/{gender}', [AdminGenderController::class, 'destroy']);
+            Route::post('/{gender}/image', [AdminGenderController::class, 'uploadImage']);
+        });
+
         // Boxly Store — Sales (read-only view over store-checkout PRs)
         Route::prefix('store-sales')->group(function () {
             Route::get('/', [AdminStoreSalesController::class, 'index']);
@@ -519,6 +531,15 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::put('/{category}', [AdminCategoryController::class, 'update']);
             Route::delete('/{category}', [AdminCategoryController::class, 'destroy']);
             Route::post('/{category}/image', [AdminCategoryController::class, 'uploadImage']);
+        });
+
+        Route::prefix('genders')->group(function () {
+            Route::get('/', [AdminGenderController::class, 'index']);
+            Route::post('/', [AdminGenderController::class, 'store']);
+            Route::get('/{gender}', [AdminGenderController::class, 'show']);
+            Route::put('/{gender}', [AdminGenderController::class, 'update']);
+            Route::delete('/{gender}', [AdminGenderController::class, 'destroy']);
+            Route::post('/{gender}/image', [AdminGenderController::class, 'uploadImage']);
         });
 
         Route::prefix('store-sales')->group(function () {

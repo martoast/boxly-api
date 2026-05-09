@@ -23,6 +23,11 @@ class Product extends Model
         return $this->belongsTo(Store::class);
     }
 
+    public function gender(): BelongsTo
+    {
+        return $this->belongsTo(Gender::class);
+    }
+
     public function categories(): BelongsToMany
     {
         // withTimestamps so attach/sync/syncWithoutDetaching populate
@@ -63,6 +68,7 @@ class Product extends Model
         'status',
         'available_until',
         'store_id',
+        'gender_id',
         'images',
     ];
 

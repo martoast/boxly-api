@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Category;
+use App\Models\Gender;
 use App\Models\Product;
 use App\Models\Store;
 use Illuminate\Http\Request;
@@ -35,6 +36,8 @@ class StoreProductController extends Controller
             'category_slug' => 'nullable|string|max:120',
             'store_id'      => 'nullable|integer|exists:stores,id',
             'store_slug'    => 'nullable|string|max:120',
+            'gender_id'     => 'nullable|integer|exists:genders,id',
+            'gender_slug'   => 'nullable|string|max:120',
             'search'        => 'nullable|string|max:200',
             'sort'          => 'nullable|in:newest,price_asc,price_desc',
         ]);
@@ -44,6 +47,7 @@ class StoreProductController extends Controller
         $query = Product::listed()->with([
             'variants' => fn ($q) => $q->orderBy('display_order')->orderBy('id'),
             'store',
+            'gender',
             'categories',
         ]);
 
@@ -60,6 +64,14 @@ class StoreProductController extends Controller
             $query->whereHas('categories', fn ($q) => $q->where('categories.id', $categoryId));
         } elseif ($categorySlug = $request->input('category_slug')) {
             $query->whereHas('categories', fn ($q) => $q->where('categories.slug', $categorySlug));
+        }
+
+        // Gender filter — direct FK, accepts id or slug
+        if ($genderId = $request->input('gender_id')) {
+            $query->where('gender_id', $genderId);
+        } elseif ($genderSlug = $request->input('gender_slug')) {
+            $gender = Gender::active()->where('slug', $genderSlug)->first();
+            $query->where('gender_id', $gender?->id ?? 0);
         }
 
         if ($search = $request->input('search')) {
@@ -98,6 +110,7 @@ class StoreProductController extends Controller
             ->with([
                 'variants' => fn ($q) => $q->orderBy('display_order')->orderBy('id'),
                 'store',
+                'gender',
                 'categories',
             ])
             ->where('slug', $slug)
@@ -113,6 +126,7 @@ class StoreProductController extends Controller
                 ->with([
                     'variants' => fn ($q) => $q->orderBy('display_order'),
                     'store',
+                    'gender',
                     'categories',
                 ])
                 ->whereHas('categories', fn ($q) => $q->whereIn('categories.id', $categoryIds))
@@ -169,5 +183,18 @@ class StoreProductController extends Controller
         $stores = $query->get(['id', 'name', 'slug', 'base_url', 'logo_url', 'cover_image_url', 'description']);
 
         return response()->json(['success' => true, 'data' => $stores]);
+    }
+
+    /**
+     * Public list of active genders — used by storefront filter.
+     */
+    public function genders()
+    {
+        $genders = Gender::active()
+            ->orderBy('sort_order')
+            ->orderBy('name')
+            ->get(['id', 'name', 'slug', 'description', 'image_url']);
+
+        return response()->json(['success' => true, 'data' => $genders]);
     }
 }
