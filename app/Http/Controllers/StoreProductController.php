@@ -7,6 +7,7 @@ use App\Models\Gender;
 use App\Models\Product;
 use App\Models\Store;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class StoreProductController extends Controller
 {
@@ -150,6 +151,9 @@ class StoreProductController extends Controller
 
     /**
      * Public list of active categories — used by storefront filter dropdowns.
+     * For categories without an admin-uploaded image, image_url is
+     * backfilled with the first listed product's first image so the UI
+     * never has to render an empty placeholder.
      */
     public function categories()
     {
@@ -157,6 +161,20 @@ class StoreProductController extends Controller
             ->orderBy('sort_order')
             ->orderBy('name')
             ->get(['id', 'name', 'slug', 'description', 'image_url']);
+
+        $this->backfillImageUrls(
+            $categories,
+            fn ($missing) => DB::table('category_product')
+                ->join('products', 'products.id', '=', 'category_product.product_id')
+                ->whereIn('category_product.category_id', $missing)
+                ->where('products.status', Product::STATUS_ACTIVE)
+                ->where(function ($q) {
+                    $q->whereNull('products.available_until')
+                      ->orWhere('products.available_until', '>', now());
+                })
+                ->orderByDesc('products.created_at')
+                ->get(['category_product.category_id as group_id', 'products.images']),
+        );
 
         return response()->json(['success' => true, 'data' => $categories]);
     }
@@ -187,6 +205,8 @@ class StoreProductController extends Controller
 
     /**
      * Public list of active genders — used by storefront filter.
+     * Backfills image_url with a representative product image when no
+     * admin-uploaded image exists.
      */
     public function genders()
     {
@@ -195,6 +215,49 @@ class StoreProductController extends Controller
             ->orderBy('name')
             ->get(['id', 'name', 'slug', 'description', 'image_url']);
 
+        $this->backfillImageUrls(
+            $genders,
+            fn ($missing) => DB::table('products')
+                ->whereIn('gender_id', $missing)
+                ->where('status', Product::STATUS_ACTIVE)
+                ->where(function ($q) {
+                    $q->whereNull('available_until')
+                      ->orWhere('available_until', '>', now());
+                })
+                ->orderByDesc('created_at')
+                ->get(['gender_id as group_id', 'images']),
+        );
+
         return response()->json(['success' => true, 'data' => $genders]);
+    }
+
+    /**
+     * For each item without an image_url, look up a representative
+     * product image and stamp it in. Single batched query (no N+1) —
+     * the closure receives the array of missing ids and must return a
+     * collection of rows shaped { group_id, images } where images is
+     * the product's JSON-encoded image array.
+     *
+     * Items keep their existing image_url if one is set; missing items
+     * with no associated products simply stay null and the frontend
+     * falls back to its own placeholder.
+     */
+    private function backfillImageUrls($items, callable $fetcher): void
+    {
+        $missing = $items->whereNull('image_url')->pluck('id')->all();
+        if (empty($missing)) return;
+
+        // Group products by their parent id, take the first (newest) per group
+        $rows = $fetcher($missing);
+        $byId = $rows->groupBy('group_id')->map(function ($group) {
+            $images = json_decode($group->first()->images ?? '[]', true) ?? [];
+            return $images[0]['url'] ?? null;
+        });
+
+        foreach ($items as $item) {
+            if (! $item->image_url && $byId->has($item->id)) {
+                $item->image_url = $byId->get($item->id);
+            }
+        }
     }
 }
