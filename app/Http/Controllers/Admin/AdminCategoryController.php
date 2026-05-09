@@ -76,7 +76,10 @@ class AdminCategoryController extends Controller
         try {
             $file = $request->file('image');
             $path = "categories/{$category->slug}/img-" . time() . '.' . $file->getClientOriginalExtension();
-            Storage::disk('spaces')->putFileAs(dirname($path), $file, basename($path), 'public');
+            Storage::disk('spaces')->putFileAs(dirname($path), $file, basename($path), [
+                'visibility' => 'public',
+                'CacheControl' => 'public, max-age=31536000, immutable',
+            ]);
             $url = config('filesystems.disks.spaces.url') . '/' . $path;
 
             $category->update(['image_url' => $url]);

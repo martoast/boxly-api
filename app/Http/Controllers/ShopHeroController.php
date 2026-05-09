@@ -92,7 +92,10 @@ class ShopHeroController extends Controller
 
             $file     = $request->file('image');
             $filename = "hero-{$variant}-" . $hero->id . "-" . time() . "." . $file->getClientOriginalExtension();
-            $path     = Storage::disk('spaces')->putFileAs('shop-heroes', $file, $filename, 'public');
+            $path     = Storage::disk('spaces')->putFileAs('shop-heroes', $file, $filename, [
+                'visibility' => 'public',
+                'CacheControl' => 'public, max-age=31536000, immutable',
+            ]);
             $url      = config('filesystems.disks.spaces.url') . '/' . $path;
 
             $hero->update([

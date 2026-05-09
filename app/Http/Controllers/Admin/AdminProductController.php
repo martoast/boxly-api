@@ -545,7 +545,10 @@ class AdminProductController extends Controller
 
             foreach ($request->file('images') as $i => $file) {
                 $filename = "img-" . ($startOrder + $i + 1) . "-" . time() . "." . $file->getClientOriginalExtension();
-                $path = Storage::disk('spaces')->putFileAs($storagePath, $file, $filename, 'public');
+                $path = Storage::disk('spaces')->putFileAs($storagePath, $file, $filename, [
+                    'visibility' => 'public',
+                    'CacheControl' => 'public, max-age=31536000, immutable',
+                ]);
                 $url  = config('filesystems.disks.spaces.url') . '/' . $path;
 
                 $entry = [

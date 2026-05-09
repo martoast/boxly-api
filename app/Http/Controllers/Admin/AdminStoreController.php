@@ -86,7 +86,10 @@ class AdminStoreController extends Controller
         try {
             $file = $request->file('logo');
             $path = "stores/{$store->slug}/logo-" . time() . '.' . $file->getClientOriginalExtension();
-            Storage::disk('spaces')->putFileAs(dirname($path), $file, basename($path), 'public');
+            Storage::disk('spaces')->putFileAs(dirname($path), $file, basename($path), [
+                'visibility' => 'public',
+                'CacheControl' => 'public, max-age=31536000, immutable',
+            ]);
             $url = config('filesystems.disks.spaces.url') . '/' . $path;
 
             $store->update(['logo_url' => $url]);
@@ -111,7 +114,10 @@ class AdminStoreController extends Controller
         try {
             $file = $request->file('image');
             $path = "stores/{$store->slug}/cover-" . time() . '.' . $file->getClientOriginalExtension();
-            Storage::disk('spaces')->putFileAs(dirname($path), $file, basename($path), 'public');
+            Storage::disk('spaces')->putFileAs(dirname($path), $file, basename($path), [
+                'visibility' => 'public',
+                'CacheControl' => 'public, max-age=31536000, immutable',
+            ]);
             $url = config('filesystems.disks.spaces.url') . '/' . $path;
 
             $store->update(['cover_image_url' => $url]);
