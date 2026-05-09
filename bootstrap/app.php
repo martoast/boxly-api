@@ -23,6 +23,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'admin' => \App\Http\Middleware\AdminMiddleware::class,
             'employee' => \App\Http\Middleware\EmployeeMiddleware::class,
             'shopping' => \App\Http\Middleware\ShoppingEmployeeMiddleware::class,
+            'edge.cache' => \App\Http\Middleware\EdgeCacheHeaders::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
