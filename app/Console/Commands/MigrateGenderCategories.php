@@ -59,9 +59,13 @@ class MigrateGenderCategories extends Command
                 return self::FAILURE;
             }
 
-            $category = Category::where('slug', $slug)->first();
+            // Match by slug first (the canonical key Laravel auto-generates),
+            // then fall back to a case-insensitive name match in case the
+            // slug was hand-edited at some point.
+            $category = Category::where('slug', $slug)->first()
+                ?? Category::whereRaw('LOWER(name) = ?', [strtolower($label)])->first();
             if (! $category) {
-                $this->line("· Category '{$label}' (slug={$slug}) not found — skipping (already migrated or never existed).");
+                $this->line("· Category '{$label}' not found — skipping (already migrated or never existed).");
                 continue;
             }
 
