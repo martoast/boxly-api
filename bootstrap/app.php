@@ -11,6 +11,7 @@ return Application::configure(basePath: dirname(__DIR__))
         apiPrefix: '/',
         health: '/up',
     )
+    ->withCommands()
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->validateCsrfTokens(except: [
             'webhooks/*',
