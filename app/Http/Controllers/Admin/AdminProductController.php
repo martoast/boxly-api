@@ -336,6 +336,42 @@ class AdminProductController extends Controller
     }
 
     /**
+     * Bulk-assign one gender to many products at once. Gender is a single
+     * nullable FK (not many-to-many like categories), so there's no
+     * add/replace mode — each product gets exactly one gender (or null
+     * for unisex).
+     *
+     * Pass gender_id = null to clear the gender from the selection.
+     */
+    public function bulkGender(Request $request)
+    {
+        $validated = $request->validate([
+            'ids'       => 'required|array|min:1',
+            'ids.*'     => 'required|integer|exists:products,id',
+            'gender_id' => 'nullable|integer|exists:genders,id',
+        ]);
+
+        $count = Product::whereIn('id', $validated['ids'])
+            ->update(['gender_id' => $validated['gender_id'] ?? null]);
+
+        Log::info('Bulk-gendered products', [
+            'count'     => $count,
+            'gender_id' => $validated['gender_id'] ?? null,
+            'admin_id'  => $request->user()->id,
+        ]);
+
+        $label = $validated['gender_id']
+            ? "{$count} products updated"
+            : "{$count} products cleared (set to unisex)";
+
+        return response()->json([
+            'success' => true,
+            'message' => $label,
+            'count'   => $count,
+        ]);
+    }
+
+    /**
      * Bulk soft-delete — flip status to inactive for many products at once.
      * Mirrors the single destroy() so order history is preserved.
      */
