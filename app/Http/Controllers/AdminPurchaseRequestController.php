@@ -341,6 +341,9 @@ class AdminPurchaseRequestController extends Controller
             'items_total' => 'nullable|numeric',
             'shipping_cost' => 'nullable|numeric',
             'sales_tax' => 'nullable|numeric',
+            'store_costs' => 'nullable|array',
+            'store_costs.*.shipping' => 'nullable|numeric|min:0',
+            'store_costs.*.tax' => 'nullable|numeric|min:0',
             'processing_fee' => 'nullable|numeric',
             'total_amount' => 'nullable|numeric',
             'admin_notes' => 'nullable|string',
@@ -671,20 +674,40 @@ class AdminPurchaseRequestController extends Controller
         $validated = $request->validate([
             'shipping_cost'           => 'nullable|numeric|min:0',
             'sales_tax'               => 'nullable|numeric|min:0',
+            'store_costs'             => 'nullable|array',
+            'store_costs.*.shipping' => 'nullable|numeric|min:0',
+            'store_costs.*.tax'      => 'nullable|numeric|min:0',
             'processing_fee_percent'  => 'nullable|numeric|min:0|max:100',
             'admin_notes'             => 'nullable|string',
         ]);
 
-        $shippingUsd = (float) ($validated['shipping_cost']          ?? 0);
-        $salesTaxUsd = (float) ($validated['sales_tax']              ?? 0);
+        // Per-store breakdown is the source of truth when present — Velonie
+        // checks out at each US store separately, so shipping + tax are
+        // captured per-store and we sum them here for the invoice math.
+        // Fall back to PR-level fields for legacy callers.
+        $storeCosts = $validated['store_costs'] ?? $purchaseRequest->store_costs;
+        if (is_array($storeCosts) && count($storeCosts) > 0) {
+            $shippingUsd = round(array_sum(array_map(
+                fn ($c) => (float) ($c['shipping'] ?? 0),
+                $storeCosts,
+            )), 2);
+            $salesTaxUsd = round(array_sum(array_map(
+                fn ($c) => (float) ($c['tax'] ?? 0),
+                $storeCosts,
+            )), 2);
+        } else {
+            $shippingUsd = (float) ($validated['shipping_cost'] ?? 0);
+            $salesTaxUsd = (float) ($validated['sales_tax']     ?? 0);
+        }
         $feePercent  = (float) ($validated['processing_fee_percent'] ?? 8);
 
         $purchaseRequest->load('items');
 
-        // Billable items: any item whose stock_status is 'available' (Velonie
-        // verified) OR is null/unverified (legacy/assisted flow where stock
-        // verification isn't required). Items explicitly marked 'unavailable'
-        // are excluded — they stay on the PR for visibility but don't bill.
+        // Billable items: everything except items explicitly marked
+        // 'unavailable'. Unavailable items stay on the PR for visibility but
+        // don't appear on the Stripe invoice. 'unverified' / null items
+        // still bill — that path covers legacy assisted PRs where stock
+        // verification isn't part of the flow.
         $billableItems = $purchaseRequest->items->filter(
             fn ($i) => $i->stock_status !== PurchaseRequestItem::STOCK_UNAVAILABLE,
         );
@@ -751,6 +774,7 @@ class AdminPurchaseRequestController extends Controller
                 'items_total'       => $itemsSubtotalUsd,
                 'shipping_cost'     => $shippingUsd,
                 'sales_tax'         => $salesTaxUsd,
+                'store_costs'       => is_array($storeCosts) && count($storeCosts) > 0 ? $storeCosts : null,
                 'processing_fee'    => $feeUsd,
                 'total_amount'      => $totalUsd,
                 'total_usd'         => $totalUsd,
