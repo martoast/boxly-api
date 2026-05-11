@@ -267,6 +267,13 @@ Route::middleware('auth:sanctum')->group(function () {
             // (in USD, what the source store actually charged her at checkout).
             // Marking via this endpoint also flips the item to "available".
             Route::put('/{purchaseRequest}/items/{item}/cost-breakdown', [AdminPurchaseRequestController::class, 'updateItemCostBreakdown']);
+
+            // Unified per-item edit (price, quantity, stock_status, notes) +
+            // delete — the redesigned detail page uses these instead of the
+            // older stock-status / cost-breakdown endpoints above. Both
+            // gated to pending_review.
+            Route::put('/{purchaseRequest}/items/{item}', [AdminPurchaseRequestController::class, 'updateItem']);
+            Route::delete('/{purchaseRequest}/items/{item}', [AdminPurchaseRequestController::class, 'deleteItem']);
         });
 
         Route::prefix('management')->group(function () {
@@ -495,6 +502,10 @@ Route::middleware('auth:sanctum')->group(function () {
             // (in USD, what the source store actually charged her at checkout).
             // Marking via this endpoint also flips the item to "available".
             Route::put('/{purchaseRequest}/items/{item}/cost-breakdown', [AdminPurchaseRequestController::class, 'updateItemCostBreakdown']);
+
+            // Unified per-item edit + delete (redesigned detail page).
+            Route::put('/{purchaseRequest}/items/{item}', [AdminPurchaseRequestController::class, 'updateItem']);
+            Route::delete('/{purchaseRequest}/items/{item}', [AdminPurchaseRequestController::class, 'deleteItem']);
         });
 
         Route::prefix('products')->group(function () {

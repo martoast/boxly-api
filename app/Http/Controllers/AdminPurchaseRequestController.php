@@ -131,6 +131,80 @@ class AdminPurchaseRequestController extends Controller
         ]);
     }
 
+    /**
+     * Unified per-item update for the redesigned PR detail page.
+     *
+     * Replaces updateItemStockStatus + updateItemCostBreakdown with a single
+     * endpoint that accepts any combination of: price (USD unit price the
+     * customer will be billed for), quantity, stock_status, notes. Admin's
+     * inline edits on the detail page all flow through here. Pending-review
+     * only — once quoted/paid we lock the items.
+     */
+    public function updateItem(Request $request, PurchaseRequest $purchaseRequest, PurchaseRequestItem $item)
+    {
+        if ($item->purchase_request_id !== $purchaseRequest->id) {
+            return response()->json(['success' => false, 'message' => 'Item not in this PR'], 422);
+        }
+        if ($purchaseRequest->status !== PurchaseRequest::STATUS_PENDING_REVIEW) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Items can only be edited while the PR is in pending_review',
+            ], 400);
+        }
+
+        $validated = $request->validate([
+            'price'        => 'sometimes|numeric|min:0',
+            'quantity'     => 'sometimes|integer|min:1',
+            'stock_status' => 'sometimes|in:unverified,available,unavailable',
+            'notes'        => 'sometimes|nullable|string|max:500',
+        ]);
+
+        // Stock-check audit metadata when status changes
+        if (array_key_exists('stock_status', $validated)) {
+            $validated['stock_checked_at'] = $validated['stock_status'] === PurchaseRequestItem::STOCK_UNVERIFIED
+                ? null
+                : now();
+            $validated['stock_checked_by'] = $validated['stock_status'] === PurchaseRequestItem::STOCK_UNVERIFIED
+                ? null
+                : $request->user()->id;
+        }
+
+        $item->update($validated);
+
+        return response()->json([
+            'success' => true,
+            'data'    => $item->fresh(),
+        ]);
+    }
+
+    /**
+     * Remove an item from a pending-review PR.
+     *
+     * The model's boot hook handles cleanup of the Spaces image (see
+     * PurchaseRequestItem::deleted listener). Empty PRs are allowed —
+     * admin can reject the empty PR afterwards if they choose, but
+     * we don't force that here.
+     */
+    public function deleteItem(Request $request, PurchaseRequest $purchaseRequest, PurchaseRequestItem $item)
+    {
+        if ($item->purchase_request_id !== $purchaseRequest->id) {
+            return response()->json(['success' => false, 'message' => 'Item not in this PR'], 422);
+        }
+        if ($purchaseRequest->status !== PurchaseRequest::STATUS_PENDING_REVIEW) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Items can only be removed while the PR is in pending_review',
+            ], 400);
+        }
+
+        $item->delete();
+
+        return response()->json([
+            'success' => true,
+            'data'    => $purchaseRequest->fresh(['items']),
+        ]);
+    }
+
     public function show(PurchaseRequest $purchaseRequest)
     {
         return response()->json([
@@ -573,214 +647,68 @@ class AdminPurchaseRequestController extends Controller
         }
     }
 
+    /**
+     * Unified quote flow — applies to ALL PRs regardless of source.
+     *
+     * Items are the source of truth: subtotal = sum(price × quantity)
+     * for items marked 'available' (or every item, if no stock state
+     * was ever set — i.e. legacy assisted PRs). On top of that the
+     * admin enters three adjustments at the PR level: shipping (USD),
+     * sales tax (USD), and service fee % (default 8). Total = subtotal
+     * + shipping + tax + (subtotal+shipping+tax) × fee%.
+     *
+     * Stripe gets ONE invoice line for the grand total in MXN at the
+     * captured FX rate — customer sees a single charge, not a per-item
+     * breakdown. All inputs land on the PR so the dashboard reflects
+     * what the customer was billed.
+     */
     public function createQuote(Request $request, PurchaseRequest $purchaseRequest)
     {
         if ($purchaseRequest->status !== PurchaseRequest::STATUS_PENDING_REVIEW) {
             return response()->json(['success' => false, 'message' => 'Request is not in pending review state'], 400);
         }
 
-        // Store-source PRs follow a different quote path:
-        //  • prices are already in MXN with markup baked in (set at checkout)
-        //  • Velonie verified each item's availability beforehand
-        //  • only items marked `available` get billed (unavailable stay
-        //    visible on the PR but skip the Stripe invoice)
-        //  • no manual items_total/shipping/sales_tax input required
-        if ($purchaseRequest->isStore()) {
-            return $this->createStoreQuote($request, $purchaseRequest);
-        }
-
-        // ---- Original assisted-PR quote logic (unchanged) ----
         $validated = $request->validate([
-            'items_total' => 'required|numeric|min:0',
-            'shipping_cost' => 'required|numeric|min:0',
-            'sales_tax' => 'required|numeric|min:0',
-            'admin_notes' => 'nullable|string',
-            'payment_method' => 'nullable|in:stripe,manual_deposit',
+            'shipping_cost'           => 'nullable|numeric|min:0',
+            'sales_tax'               => 'nullable|numeric|min:0',
+            'processing_fee_percent'  => 'nullable|numeric|min:0|max:100',
+            'admin_notes'             => 'nullable|string',
         ]);
 
-        DB::beginTransaction();
+        $shippingUsd = (float) ($validated['shipping_cost']          ?? 0);
+        $salesTaxUsd = (float) ($validated['sales_tax']              ?? 0);
+        $feePercent  = (float) ($validated['processing_fee_percent'] ?? 8);
 
-        try {
-            // 1. Calculate Totals in USD
-            $subtotalUsd = floatval($validated['items_total']) + floatval($validated['shipping_cost']) + floatval($validated['sales_tax']);
-
-            // 2. Apply 8% Markup
-            $markupPercentage = 0.08;
-            $feeUsd = round($subtotalUsd * $markupPercentage, 2);
-            $totalUsd = $subtotalUsd + $feeUsd;
-
-            // 3. Determine Payment Method
-            $paymentMethod = $validated['payment_method'] ?? PurchaseRequest::PAYMENT_METHOD_STRIPE;
-
-            // 4a. STRIPE PAYMENT FLOW
-            if ($paymentMethod === PurchaseRequest::PAYMENT_METHOD_STRIPE) {
-                // Convert to MXN
-                $exchangeRate = 18.00;
-                $subtotalMxn = round($subtotalUsd * $exchangeRate, 2);
-                $feeMxn = round($feeUsd * $exchangeRate, 2);
-
-                // Shopping Stripe account — separate customer record from
-                // the main account. Lazily created on first invoice.
-                $user = $purchaseRequest->user;
-                $shoppingCustomerId = $user->stripeShoppingCustomerId();
-
-                $stripe = StripeAccount::shopping();
-
-                $stripeInvoice = $stripe->invoices->create([
-                    'customer' => $shoppingCustomerId,
-                    'currency' => 'mxn',
-                    'collection_method' => 'send_invoice',
-                    'days_until_due' => 3,
-                    'description' => "Assisted Purchase Request: {$purchaseRequest->request_number}",
-                    'metadata' => [
-                        'type' => 'purchase_request_invoice',
-                        'purchase_request_id' => $purchaseRequest->id,
-                        'request_number' => $purchaseRequest->request_number,
-                    ],
-                    'auto_advance' => false,
-                ]);
-
-                $stripe->invoiceItems->create([
-                    'customer' => $shoppingCustomerId,
-                    'invoice' => $stripeInvoice->id,
-                    'amount' => intval($subtotalMxn * 100),
-                    'currency' => 'mxn',
-                    'description' => "Cost of Goods (Products, Shipping & Tax) - \${$subtotalUsd} USD @ {$exchangeRate} MXN/USD",
-                ]);
-
-                $stripe->invoiceItems->create([
-                    'customer' => $shoppingCustomerId,
-                    'invoice' => $stripeInvoice->id,
-                    'amount' => intval($feeMxn * 100),
-                    'currency' => 'mxn',
-                    'description' => "Service Fee (8%) - \${$feeUsd} USD @ {$exchangeRate} MXN/USD",
-                ]);
-
-                $stripe->invoices->finalizeInvoice($stripeInvoice->id);
-                $sentInvoice = $stripe->invoices->sendInvoice($stripeInvoice->id);
-
-                // Update Model with Stripe details
-                $purchaseRequest->update([
-                    'items_total' => $validated['items_total'],
-                    'shipping_cost' => $validated['shipping_cost'],
-                    'sales_tax' => $validated['sales_tax'],
-                    'processing_fee' => $feeUsd,
-                    'total_amount' => $totalUsd,
-                    'currency' => 'usd',
-                    'payment_method' => PurchaseRequest::PAYMENT_METHOD_STRIPE,
-                    'status' => PurchaseRequest::STATUS_QUOTED,
-                    'stripe_invoice_id' => $stripeInvoice->id,
-                    'stripe_account' => PurchaseRequest::STRIPE_ACCOUNT_SHOPPING,
-                    'payment_link' => $sentInvoice->hosted_invoice_url,
-                    'quote_sent_at' => now(),
-                    'admin_notes' => $validated['admin_notes'],
-                ]);
-            }
-            // 4b. MANUAL DEPOSIT PAYMENT FLOW
-            else {
-                // Skip Stripe entirely, just calculate and store totals
-                $user = $purchaseRequest->user;
-
-                $purchaseRequest->update([
-                    'items_total' => $validated['items_total'],
-                    'shipping_cost' => $validated['shipping_cost'],
-                    'sales_tax' => $validated['sales_tax'],
-                    'processing_fee' => $feeUsd,
-                    'total_amount' => $totalUsd,
-                    'currency' => 'usd',
-                    'payment_method' => PurchaseRequest::PAYMENT_METHOD_MANUAL_DEPOSIT,
-                    'status' => PurchaseRequest::STATUS_QUOTED,
-                    'stripe_invoice_id' => null,
-                    'payment_link' => null,
-                    'quote_sent_at' => now(),
-                    'admin_notes' => $validated['admin_notes'],
-                ]);
-            }
-
-            DB::commit();
-
-            // 6. Send Email
-            try {
-                Mail::to($user)->queue(new PurchaseRequestQuoteSent($purchaseRequest));
-                Log::info('Quote email queued for ' . $user->email);
-            } catch (\Exception $e) {
-                Log::error('Failed to queue quote email: ' . $e->getMessage());
-            }
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Quote created and invoice sent to customer (in MXN)',
-                'data' => $purchaseRequest->load(['items', 'user']) 
-            ]);
-
-        } catch (\Exception $e) {
-            DB::rollBack();
-            Log::error('Failed to quote purchase request', ['error' => $e->getMessage()]);
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
-        }
-    }
-
-    /**
-     * Quote a STORE-source PR.
-     *
-     * New transparent-pricing flow: each available item carries a USD
-     * cost breakdown that Velonie filled in during review (source-store
-     * unit price + tax + shipping + Boxly commission %). We sum those
-     * USD totals, fetch the live USD→MXN rate, snapshot it on the PR,
-     * convert, and create the Stripe invoice in MXN.
-     */
-    private function createStoreQuote(Request $request, PurchaseRequest $purchaseRequest)
-    {
-        $validated = $request->validate([
-            'admin_notes' => 'nullable|string',
-        ]);
-
-        // Reload items so we have the freshest stock_status / cost-breakdown values
         $purchaseRequest->load('items');
 
-        if (! $purchaseRequest->allItemsStockChecked()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Verifica el stock de cada producto antes de cotizar',
-            ], 422);
-        }
-
-        $availableItems = $purchaseRequest->availableItems();
-        if ($availableItems->isEmpty()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Ningún producto disponible — no se puede generar cotización',
-            ], 422);
-        }
-
-        // Every available item must have its cost breakdown completed —
-        // that's how we know Velonie did the source-store checkout
-        // research before invoicing.
-        $missing = $availableItems->filter(
-            fn($i) => $i->tax_usd === null || $i->shipping_usd === null || $i->commission_percent === null
+        // Billable items: any item whose stock_status is 'available' (Velonie
+        // verified) OR is null/unverified (legacy/assisted flow where stock
+        // verification isn't required). Items explicitly marked 'unavailable'
+        // are excluded — they stay on the PR for visibility but don't bill.
+        $billableItems = $purchaseRequest->items->filter(
+            fn ($i) => $i->stock_status !== PurchaseRequestItem::STOCK_UNAVAILABLE,
         );
-        if ($missing->isNotEmpty()) {
+        if ($billableItems->isEmpty()) {
             return response()->json([
                 'success' => false,
-                'message' => 'Captura impuestos, envío y comisión para cada producto disponible antes de cotizar',
+                'message' => 'No hay productos para cotizar — agrega o marca disponibles antes.',
             ], 422);
         }
 
-        // Recompute final_usd at quote time so any last-minute edits are
-        // reflected even if the PUT to the cost-breakdown endpoint
-        // missed an updated row for some reason.
-        $totalUsd = 0.0;
-        foreach ($availableItems as $item) {
-            $item->final_usd = $item->computeFinalUsd();
-            $item->save();
-            $totalUsd += (float) $item->final_usd;
-        }
-        $totalUsd = round($totalUsd, 2);
+        // Subtotal: items' price × quantity. Admin's inline edits on the
+        // detail page already pushed updated price/qty to the items table,
+        // so reading them here gives us the exact totals shown in the UI.
+        $itemsSubtotalUsd = round(
+            $billableItems->reduce(fn ($carry, $i) => $carry + ((float) $i->price * (int) $i->quantity), 0.0),
+            2,
+        );
 
-        // Live FX. Fall back to configured static rate if the upstream
-        // is down — better to ship a quote off by a few centavos than to
-        // block Velonie's queue.
-        $fxRate = $this->fetchLiveFxRate();
+        $preFeeUsd = round($itemsSubtotalUsd + $shippingUsd + $salesTaxUsd, 2);
+        $feeUsd    = round($preFeeUsd * ($feePercent / 100), 2);
+        $totalUsd  = round($preFeeUsd + $feeUsd, 2);
+
+        // Live FX (Frankfurter, cached 10m). Falls back to config on error.
+        $fxRate   = $this->fetchLiveFxRate();
         $totalMxn = round($totalUsd * $fxRate, 2);
 
         DB::beginTransaction();
@@ -788,7 +716,6 @@ class AdminPurchaseRequestController extends Controller
         try {
             $user = $purchaseRequest->user;
             $shoppingCustomerId = $user->stripeShoppingCustomerId();
-
             $stripe = StripeAccount::shopping();
 
             $stripeInvoice = $stripe->invoices->create([
@@ -796,52 +723,40 @@ class AdminPurchaseRequestController extends Controller
                 'currency'          => 'mxn',
                 'collection_method' => 'send_invoice',
                 'days_until_due'    => 3,
-                'description'       => "Boxly Store - {$purchaseRequest->request_number}",
-                'metadata'          => [
+                'description'       => "Boxly — Solicitud de Compra {$purchaseRequest->request_number}",
+                'metadata' => [
                     'type'                => 'purchase_request_invoice',
                     'purchase_request_id' => $purchaseRequest->id,
                     'request_number'      => $purchaseRequest->request_number,
-                    'source'              => PurchaseRequest::SOURCE_STORE,
+                    'source'              => (string) $purchaseRequest->source,
                     'fx_rate_used'        => (string) $fxRate,
                 ],
                 'auto_advance' => false,
             ]);
 
-            // One Stripe invoice line per available item, in MXN. Each
-            // line description spells out the underlying USD figure so
-            // the customer can audit the conversion if they want.
-            foreach ($availableItems as $item) {
-                $opts = $item->options ?? [];
-                $suffix = trim(implode(' / ', array_filter([
-                    $opts['size']   ?? null,
-                    $opts['color']  ?? null,
-                    $opts['length'] ?? null,
-                ])));
-                $name = $suffix ? "{$item->product_name} ({$suffix})" : $item->product_name;
-                $lineMxn = round(((float) $item->final_usd) * $fxRate, 2);
-
-                $stripe->invoiceItems->create([
-                    'customer'    => $shoppingCustomerId,
-                    'invoice'     => $stripeInvoice->id,
-                    'amount'      => (int) round($lineMxn * 100),
-                    'currency'    => 'mxn',
-                    'description' => ($item->quantity > 1 ? "{$name} × {$item->quantity}" : $name)
-                                   . " — \${$item->final_usd} USD @ {$fxRate} MXN/USD",
-                ]);
-            }
+            // One Stripe line — the grand total in MXN. The breakdown
+            // (items + shipping + tax + fee) lives in the description
+            // for the customer's reference but isn't itemized.
+            $stripe->invoiceItems->create([
+                'customer'    => $shoppingCustomerId,
+                'invoice'     => $stripeInvoice->id,
+                'amount'      => (int) round($totalMxn * 100),
+                'currency'    => 'mxn',
+                'description' => "Boxly — {$purchaseRequest->request_number} (\${$totalUsd} USD @ {$fxRate} MXN/USD)",
+            ]);
 
             $stripe->invoices->finalizeInvoice($stripeInvoice->id);
             $sentInvoice = $stripe->invoices->sendInvoice($stripeInvoice->id);
 
             $purchaseRequest->update([
-                'items_total'       => $totalMxn,
-                'shipping_cost'     => 0,
-                'sales_tax'         => 0,
-                'processing_fee'    => 0,
-                'total_amount'      => $totalMxn,
+                'items_total'       => $itemsSubtotalUsd,
+                'shipping_cost'     => $shippingUsd,
+                'sales_tax'         => $salesTaxUsd,
+                'processing_fee'    => $feeUsd,
+                'total_amount'      => $totalUsd,
                 'total_usd'         => $totalUsd,
                 'fx_rate_used'      => $fxRate,
-                'currency'          => 'mxn',
+                'currency'          => 'usd',
                 'payment_method'    => PurchaseRequest::PAYMENT_METHOD_STRIPE,
                 'status'            => PurchaseRequest::STATUS_QUOTED,
                 'stripe_invoice_id' => $stripeInvoice->id,
@@ -855,8 +770,9 @@ class AdminPurchaseRequestController extends Controller
 
             try {
                 Mail::to($user)->queue(new PurchaseRequestQuoteSent($purchaseRequest));
+                Log::info('Quote email queued for ' . $user->email);
             } catch (\Exception $e) {
-                Log::error('Failed to queue store quote email: ' . $e->getMessage());
+                Log::error('Failed to queue quote email: ' . $e->getMessage());
             }
 
             return response()->json([
@@ -866,7 +782,7 @@ class AdminPurchaseRequestController extends Controller
             ]);
         } catch (\Exception $e) {
             DB::rollBack();
-            Log::error('Failed to quote store PR', [
+            Log::error('Failed to quote purchase request', [
                 'pr_id' => $purchaseRequest->id,
                 'error' => $e->getMessage(),
             ]);
