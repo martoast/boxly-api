@@ -707,10 +707,6 @@ class AdminPurchaseRequestController extends Controller
         $feeUsd    = round($preFeeUsd * ($feePercent / 100), 2);
         $totalUsd  = round($preFeeUsd + $feeUsd, 2);
 
-        // Live FX (Frankfurter, cached 10m). Falls back to config on error.
-        $fxRate   = $this->fetchLiveFxRate();
-        $totalMxn = round($totalUsd * $fxRate, 2);
-
         DB::beginTransaction();
 
         try {
@@ -718,9 +714,13 @@ class AdminPurchaseRequestController extends Controller
             $shoppingCustomerId = $user->stripeShoppingCustomerId();
             $stripe = StripeAccount::shopping();
 
+            // Invoice in USD — Stripe (or the customer's issuing bank)
+            // handles the conversion to MXN at payment time. We don't
+            // touch FX ourselves; the rate the customer pays at is
+            // whatever their bank quotes the moment they tap the link.
             $stripeInvoice = $stripe->invoices->create([
                 'customer'          => $shoppingCustomerId,
-                'currency'          => 'mxn',
+                'currency'          => 'usd',
                 'collection_method' => 'send_invoice',
                 'days_until_due'    => 3,
                 'description'       => "Boxly — Solicitud de Compra {$purchaseRequest->request_number}",
@@ -729,20 +729,19 @@ class AdminPurchaseRequestController extends Controller
                     'purchase_request_id' => $purchaseRequest->id,
                     'request_number'      => $purchaseRequest->request_number,
                     'source'              => (string) $purchaseRequest->source,
-                    'fx_rate_used'        => (string) $fxRate,
                 ],
                 'auto_advance' => false,
             ]);
 
-            // One Stripe line — the grand total in MXN. The breakdown
+            // One Stripe line — the grand total in USD. The breakdown
             // (items + shipping + tax + fee) lives in the description
             // for the customer's reference but isn't itemized.
             $stripe->invoiceItems->create([
                 'customer'    => $shoppingCustomerId,
                 'invoice'     => $stripeInvoice->id,
-                'amount'      => (int) round($totalMxn * 100),
-                'currency'    => 'mxn',
-                'description' => "Boxly — {$purchaseRequest->request_number} (\${$totalUsd} USD @ {$fxRate} MXN/USD)",
+                'amount'      => (int) round($totalUsd * 100),
+                'currency'    => 'usd',
+                'description' => "Boxly — {$purchaseRequest->request_number}",
             ]);
 
             $stripe->invoices->finalizeInvoice($stripeInvoice->id);
@@ -755,7 +754,7 @@ class AdminPurchaseRequestController extends Controller
                 'processing_fee'    => $feeUsd,
                 'total_amount'      => $totalUsd,
                 'total_usd'         => $totalUsd,
-                'fx_rate_used'      => $fxRate,
+                'fx_rate_used'      => null,
                 'currency'          => 'usd',
                 'payment_method'    => PurchaseRequest::PAYMENT_METHOD_STRIPE,
                 'status'            => PurchaseRequest::STATUS_QUOTED,
