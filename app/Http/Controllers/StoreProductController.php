@@ -40,7 +40,7 @@ class StoreProductController extends Controller
             'gender_id'     => 'nullable|integer|exists:genders,id',
             'gender_slug'   => 'nullable|string|max:120',
             'search'        => 'nullable|string|max:200',
-            'sort'          => 'nullable|in:newest,price_asc,price_desc',
+            'sort'          => 'nullable|in:newest,price_asc,price_desc,random',
         ]);
 
         $perPage = (int) $request->input('per_page', 24);
@@ -86,6 +86,7 @@ class StoreProductController extends Controller
         switch ($request->input('sort', 'newest')) {
             case 'price_asc':  $query->orderBy('price_cents', 'asc'); break;
             case 'price_desc': $query->orderBy('price_cents', 'desc'); break;
+            case 'random':     $query->inRandomOrder(); break;
             default:           $query->latest();
         }
 
