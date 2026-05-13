@@ -268,10 +268,13 @@ Route::middleware('auth:sanctum')->group(function () {
             // Marking via this endpoint also flips the item to "available".
             Route::put('/{purchaseRequest}/items/{item}/cost-breakdown', [AdminPurchaseRequestController::class, 'updateItemCostBreakdown']);
 
-            // Unified per-item edit (price, quantity, stock_status, notes) +
-            // delete — the redesigned detail page uses these instead of the
-            // older stock-status / cost-breakdown endpoints above. Both
-            // gated to pending_review.
+            // Unified per-item edit (price, quantity, stock_status, notes),
+            // add, and delete — the redesigned detail page uses these
+            // instead of the older stock-status / cost-breakdown endpoints
+            // above. All three are gated up through `paid` so admins can
+            // adjust the line-up if the customer substitutes after payment;
+            // once `purchased` the items have become an Order and are locked.
+            Route::post('/{purchaseRequest}/items', [AdminPurchaseRequestController::class, 'addItem']);
             Route::put('/{purchaseRequest}/items/{item}', [AdminPurchaseRequestController::class, 'updateItem']);
             Route::delete('/{purchaseRequest}/items/{item}', [AdminPurchaseRequestController::class, 'deleteItem']);
         });
@@ -503,7 +506,8 @@ Route::middleware('auth:sanctum')->group(function () {
             // Marking via this endpoint also flips the item to "available".
             Route::put('/{purchaseRequest}/items/{item}/cost-breakdown', [AdminPurchaseRequestController::class, 'updateItemCostBreakdown']);
 
-            // Unified per-item edit + delete (redesigned detail page).
+            // Unified per-item edit, add, and delete (redesigned detail page).
+            Route::post('/{purchaseRequest}/items', [AdminPurchaseRequestController::class, 'addItem']);
             Route::put('/{purchaseRequest}/items/{item}', [AdminPurchaseRequestController::class, 'updateItem']);
             Route::delete('/{purchaseRequest}/items/{item}', [AdminPurchaseRequestController::class, 'deleteItem']);
         });

@@ -145,10 +145,10 @@ class AdminPurchaseRequestController extends Controller
         if ($item->purchase_request_id !== $purchaseRequest->id) {
             return response()->json(['success' => false, 'message' => 'Item not in this PR'], 422);
         }
-        if ($purchaseRequest->status !== PurchaseRequest::STATUS_PENDING_REVIEW) {
+        if (! in_array($purchaseRequest->status, self::ITEM_EDITABLE_STATUSES, true)) {
             return response()->json([
                 'success' => false,
-                'message' => 'Items can only be edited while the PR is in pending_review',
+                'message' => 'Items can only be edited before the PR is marked purchased.',
             ], 400);
         }
 
@@ -178,22 +178,39 @@ class AdminPurchaseRequestController extends Controller
     }
 
     /**
-     * Remove an item from a pending-review PR.
+     * Statuses where admins can still mutate the line-up. Once a PR is
+     * `purchased` the items have been materialised into an Order, so
+     * touching them here would silently drift the two records apart;
+     * rejected/cancelled PRs are terminal and shouldn't be edited.
+     */
+    private const ITEM_EDITABLE_STATUSES = [
+        PurchaseRequest::STATUS_PENDING_REVIEW,
+        PurchaseRequest::STATUS_QUOTED,
+        PurchaseRequest::STATUS_PAID,
+    ];
+
+    /**
+     * Remove an item from a pre-purchased PR.
      *
-     * The model's boot hook handles cleanup of the Spaces image (see
-     * PurchaseRequestItem::deleted listener). Empty PRs are allowed —
-     * admin can reject the empty PR afterwards if they choose, but
-     * we don't force that here.
+     * Open through `paid` so the shopping manager can still drop a
+     * substituted/cancelled line that the customer changed their mind
+     * on after the invoice was paid, then re-add the new item and
+     * click "Marcar como Comprado" to generate the Order.
+     *
+     * The model's boot hook handles cleanup of the Spaces image
+     * (see PurchaseRequestItem::deleted listener). Empty PRs are
+     * allowed — admin can reject the empty PR afterwards if they
+     * choose, but we don't force that here.
      */
     public function deleteItem(Request $request, PurchaseRequest $purchaseRequest, PurchaseRequestItem $item)
     {
         if ($item->purchase_request_id !== $purchaseRequest->id) {
             return response()->json(['success' => false, 'message' => 'Item not in this PR'], 422);
         }
-        if ($purchaseRequest->status !== PurchaseRequest::STATUS_PENDING_REVIEW) {
+        if (! in_array($purchaseRequest->status, self::ITEM_EDITABLE_STATUSES, true)) {
             return response()->json([
                 'success' => false,
-                'message' => 'Items can only be removed while the PR is in pending_review',
+                'message' => 'Items can only be removed before the PR is marked purchased.',
             ], 400);
         }
 
@@ -203,6 +220,56 @@ class AdminPurchaseRequestController extends Controller
             'success' => true,
             'data'    => $purchaseRequest->fresh(['items']),
         ]);
+    }
+
+    /**
+     * Add a new item to an existing pre-purchased PR.
+     *
+     * Used when the customer substituted what they actually wanted
+     * after the PR was already quoted/paid. Defaults the new item to
+     * stock_status=available so it doesn't get filtered out of the
+     * downstream Order on processPurchase.
+     */
+    public function addItem(Request $request, PurchaseRequest $purchaseRequest)
+    {
+        if (! in_array($purchaseRequest->status, self::ITEM_EDITABLE_STATUSES, true)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Items can only be added before the PR is marked purchased.',
+            ], 400);
+        }
+
+        $validated = $request->validate([
+            'product_name'      => 'required|string|max:255',
+            'product_url'       => 'required|string|max:2000',
+            'product_image_url' => 'nullable|string|max:2000',
+            'price'             => 'required|numeric|min:0',
+            'quantity'          => 'required|integer|min:1',
+            'options'           => 'nullable|array',
+            'notes'             => 'nullable|string|max:500',
+            'stock_status'      => 'sometimes|in:unverified,available,unavailable',
+        ]);
+
+        $stockStatus = $validated['stock_status'] ?? PurchaseRequestItem::STOCK_AVAILABLE;
+
+        $item = PurchaseRequestItem::create([
+            'purchase_request_id' => $purchaseRequest->id,
+            'product_name'        => $validated['product_name'],
+            'product_url'         => $validated['product_url'],
+            'product_image_url'   => $validated['product_image_url'] ?? null,
+            'price'               => $validated['price'],
+            'quantity'            => $validated['quantity'],
+            'options'             => $validated['options'] ?? null,
+            'notes'               => $validated['notes'] ?? null,
+            'stock_status'        => $stockStatus,
+            'stock_checked_at'    => $stockStatus === PurchaseRequestItem::STOCK_UNVERIFIED ? null : now(),
+            'stock_checked_by'    => $stockStatus === PurchaseRequestItem::STOCK_UNVERIFIED ? null : $request->user()->id,
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'data'    => $item->fresh(),
+        ], 201);
     }
 
     public function show(PurchaseRequest $purchaseRequest)
