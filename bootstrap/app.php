@@ -13,9 +13,16 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withCommands()
     ->withMiddleware(function (Middleware $middleware): void {
+        // The API sits behind Cloudflare (TLS terminated at the edge), so the
+        // connection Laravel sees is plain http. Trust the proxy's forwarded
+        // headers so url()/redirect() generate https:// URLs — otherwise
+        // redirects come out as insecure http:// links and the browser blocks
+        // them as mixed content.
+        $middleware->trustProxies(at: '*');
+
         $middleware->validateCsrfTokens(except: [
             'webhooks/*',
-            'stripe/*', 
+            'stripe/*',
         ]);
         $middleware->append(JsonResponse::class);
         $middleware->statefulApi();
