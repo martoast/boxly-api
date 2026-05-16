@@ -106,4 +106,29 @@ class AdminOrderBoxController extends Controller
             'data' => $box,
         ]);
     }
+
+    /**
+     * Update an order box's measured dimensions and weight.
+     *
+     * Used after consolidation: the OrderBox row already exists (created by
+     * the consolidate step), and this records the physical measurements once
+     * the box has actually been packed and weighed.
+     */
+    public function update(Request $request, OrderBox $box)
+    {
+        $request->validate([
+            'length' => 'nullable|numeric|min:0|max:999999.99',
+            'width'  => 'nullable|numeric|min:0|max:999999.99',
+            'height' => 'nullable|numeric|min:0|max:999999.99',
+            'weight' => 'nullable|numeric|min:0|max:999999.99',
+        ]);
+
+        $box->update($request->only(['length', 'width', 'height', 'weight']));
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Box dimensions updated',
+            'data' => $box->fresh(),
+        ]);
+    }
 }

@@ -318,6 +318,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/{order}/ship', [AdminOrderController::class, 'shipOrder']);
             Route::get('/{order}/gia', [AdminOrderController::class, 'viewGia']);
             Route::post('/{order}/arrival-image', [AdminOrderController::class, 'uploadArrivalImage']);
+            Route::post('/{order}/split', [AdminOrderController::class, 'splitOrder']);
 
             Route::put('/{order}/items/mark-all-arrived', [AdminOrderItemController::class, 'markAllArrived']);
             Route::put('/{order}/items/{item}/arrived', [AdminOrderItemController::class, 'markArrived']);
@@ -359,6 +360,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::prefix('boxes')->group(function () {
             Route::get('/', [AdminOrderBoxController::class, 'index']);
             Route::get('/{box}', [AdminOrderBoxController::class, 'show']);
+            Route::put('/{box}', [AdminOrderBoxController::class, 'update']);
         });
 
         // Sanctum personal access tokens — for CLI / service auth

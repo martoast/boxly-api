@@ -207,6 +207,9 @@ class AdminOrderController extends Controller
             'boxes.*.width' => 'nullable|numeric|min:0|max:999999.99',
             'boxes.*.height' => 'nullable|numeric|min:0|max:999999.99',
             'boxes.*.weight' => 'nullable|numeric|min:0|max:999999.99',
+            // Optional manual override of the amount charged for this box.
+            // Defaults to the Stripe product's list price when omitted.
+            'boxes.*.price' => 'nullable|numeric|min:0',
             'payment_method' => 'nullable|in:stripe,manual_transfer',
         ]);
 
@@ -244,7 +247,11 @@ class AdminOrderController extends Controller
                 }
 
                 $quantity = $boxInput['quantity'] ?? 1;
-                $boxPrice = $stripePrice->unit_amount / 100;
+                // Manual per-box override (e.g. a reduced-size box) falls back
+                // to the Stripe product's list price when not provided.
+                $boxPrice = isset($boxInput['price'])
+                    ? (float) $boxInput['price']
+                    : $stripePrice->unit_amount / 100;
                 $boxName = $stripePrice->product->name;
                 $boxSize = $stripePrice->product->metadata->type ?? null;
                 $currency = strtolower($stripePrice->currency);
@@ -954,6 +961,94 @@ class AdminOrderController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to merge orders: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Split an order: move a subset of items into a new order.
+     *
+     * Used for partial shipments — the items that have arrived stay on the
+     * original order (which proceeds to consolidation/shipping), while the
+     * items still in transit move to a new order in awaiting_packages.
+     *
+     * Request:
+     * - item_ids: array of OrderItem IDs to MOVE OUT into the new order
+     */
+    public function splitOrder(Request $request, Order $order)
+    {
+        $request->validate([
+            'item_ids' => 'required|array|min:1',
+            'item_ids.*' => 'required|integer|exists:order_items,id',
+        ]);
+
+        // Every item must belong to this order
+        $itemsToMove = $order->items()->whereIn('id', $request->item_ids)->get();
+        if ($itemsToMove->count() !== count(array_unique($request->item_ids))) {
+            return response()->json([
+                'success' => false,
+                'message' => 'One or more items do not belong to this order',
+            ], 400);
+        }
+
+        // Refuse to move every item — the original order must keep at least one
+        if ($itemsToMove->count() >= $order->items()->count()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cannot move every item — the original order would be left empty',
+            ], 400);
+        }
+
+        DB::beginTransaction();
+
+        try {
+            // New order for the items still in transit
+            $newOrder = new Order([
+                'user_id' => $order->user_id,
+                'order_number' => Order::generateOrderNumber(),
+                'tracking_number' => Order::generateTrackingNumber(),
+                'status' => Order::STATUS_AWAITING_PACKAGES,
+                'order_type' => $order->order_type ?? 'shipping',
+                'currency' => $order->currency ?? 'mxn',
+                'delivery_address' => $order->delivery_address,
+                'is_rural' => $order->is_rural ?? false,
+            ]);
+            $newOrder->skipEmailNotifications = true;
+            $newOrder->save();
+
+            // Move the selected items onto the new order
+            foreach ($itemsToMove as $item) {
+                $item->order_id = $newOrder->id;
+                $item->save();
+            }
+
+            DB::commit();
+
+            Log::info('Admin split order', [
+                'original_order_id' => $order->id,
+                'new_order_id' => $newOrder->id,
+                'items_moved' => $itemsToMove->pluck('id')->toArray(),
+                'admin_id' => $request->user()->id,
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => "Split {$itemsToMove->count()} item(s) into new order {$newOrder->order_number}. Original order {$order->order_number} keeps the rest.",
+                'data' => [
+                    'original_order' => $order->fresh()->load(['user', 'items', 'boxes']),
+                    'new_order' => $newOrder->fresh()->load(['user', 'items', 'boxes']),
+                ],
+            ]);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Failed to split order', [
+                'order_id' => $order->id,
+                'error' => $e->getMessage(),
+            ]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to split order: ' . $e->getMessage(),
             ], 500);
         }
     }
