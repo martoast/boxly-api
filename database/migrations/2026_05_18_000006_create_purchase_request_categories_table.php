@@ -8,10 +8,20 @@ use Illuminate\Support\Facades\Schema;
  * Pivot capturing the customer's stated category interests on an
  * in-person PR ("Gym Clothes", "Sneakers"). Helps admin scope the
  * shopping trip before showing up at the mall.
+ *
+ * Idempotent: a prior partial deploy left this table in prod without a
+ * row in the migrations table, which made the original Schema::create
+ * crash with "Table already exists". hasTable guard makes the migration
+ * a no-op when the table is already in place so the migration can mark
+ * itself complete and let later migrations proceed.
  */
 return new class extends Migration {
     public function up(): void
     {
+        if (Schema::hasTable('purchase_request_categories')) {
+            return;
+        }
+
         Schema::create('purchase_request_categories', function (Blueprint $table) {
             $table->id();
             $table->foreignId('purchase_request_id')->constrained()->cascadeOnDelete();
