@@ -35,16 +35,17 @@ class PurchaseRequestInPersonScheduled extends Mailable implements ShouldQueue
 
     public function content(): Content
     {
-        $this->purchaseRequest->loadMissing(['items', 'shoppingTrip', 'stores', 'categories', 'user']);
+        $this->purchaseRequest->loadMissing(['items', 'shoppingTrip', 'stores', 'user']);
 
         return new Content(
             view: 'emails.purchase-requests.in-person-scheduled',
             with: [
-                'request' => $this->purchaseRequest,
-                'user'    => $this->purchaseRequest->user,
-                'trip'    => $this->purchaseRequest->shoppingTrip,
-                'locale'  => $this->purchaseRequest->user->preferred_language ?? 'es',
-                'url'     => config('app.frontend_url') . '/app/purchase-requests/' . $this->purchaseRequest->id,
+                'request'       => $this->purchaseRequest,
+                'user'          => $this->purchaseRequest->user,
+                'trip'          => $this->purchaseRequest->shoppingTrip,
+                'storeBreakdown'=> $this->purchaseRequest->inPersonStoreBreakdown(),
+                'locale'        => $this->purchaseRequest->user->preferred_language ?? 'es',
+                'url'           => config('app.frontend_url') . '/app/purchase-requests/' . $this->purchaseRequest->id,
             ],
         );
     }

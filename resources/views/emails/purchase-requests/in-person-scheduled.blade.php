@@ -26,20 +26,26 @@
             <td style="padding: 6px 0; font-weight: 600;">{{ $request->request_number }}</td>
         </tr>
         <tr>
-            <td style="padding: 6px 0; color: #666;">{{ $locale === 'es' ? 'Tiendas a visitar' : 'Stores to visit' }}</td>
-            <td style="padding: 6px 0;">{{ $request->stores->pluck('name')->join(', ') ?: '—' }}</td>
-        </tr>
-        <tr>
             <td style="padding: 6px 0; color: #666;">{{ $locale === 'es' ? 'Presupuesto mínimo' : 'Minimum budget' }}</td>
             <td style="padding: 6px 0;">${{ number_format($request->minimum_budget_usd, 2) }} USD</td>
         </tr>
-        @if($request->categories->isNotEmpty())
-        <tr>
-            <td style="padding: 6px 0; color: #666;">{{ $locale === 'es' ? 'Categorías' : 'Categories' }}</td>
-            <td style="padding: 6px 0;">{{ $request->categories->pluck('name')->join(', ') }}</td>
-        </tr>
-        @endif
     </table>
+
+    <h3 style="margin: 24px 0 8px; font-size: 16px;">{{ $locale === 'es' ? 'Tiendas a visitar y categorías:' : 'Stores to visit and categories:' }}</h3>
+    @foreach($storeBreakdown as $row)
+        <div style="margin: 0 0 10px; padding: 10px 12px; background: #f8f9fa; border-left: 3px solid #4f46e5; border-radius: 4px;">
+            <div style="font-weight: 600; color: #1a202c;">{{ $row['store']->name }}</div>
+            @if(count($row['category_names']) > 0)
+                <div style="margin-top: 4px; font-size: 13px; color: #4f46e5;">
+                    {{ implode(' · ', $row['category_names']) }}
+                </div>
+            @else
+                <div style="margin-top: 4px; font-size: 12px; color: #999; font-style: italic;">
+                    {{ $locale === 'es' ? 'Cualquier categoría' : 'Any category' }}
+                </div>
+            @endif
+        </div>
+    @endforeach
 
     @if($request->items->isNotEmpty())
         <h3 style="margin: 24px 0 8px; font-size: 16px;">{{ $locale === 'es' ? 'Tu lista de deseos:' : 'Your wishlist:' }}</h3>

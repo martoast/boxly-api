@@ -274,10 +274,24 @@ class AdminPurchaseRequestController extends Controller
 
     public function show(PurchaseRequest $purchaseRequest)
     {
-        return response()->json([
-            'success' => true,
-            'data' => $purchaseRequest->load(['user', 'items'])
-        ]);
+        $purchaseRequest->load(['user', 'items', 'stores']);
+        $payload = $purchaseRequest->toArray();
+
+        // Resolve the store_categories JSON map into a per-store breakdown
+        // with category names so the admin panel can render "Nike → Sneakers,
+        // Sportswear" without doing a second fetch for category labels.
+        if ($purchaseRequest->isInPerson()) {
+            $payload['in_person_breakdown'] = $purchaseRequest->inPersonStoreBreakdown()
+                ->map(fn ($row) => [
+                    'store_id'       => $row['store']->id,
+                    'store_name'     => $row['store']->name,
+                    'category_names' => $row['category_names'],
+                ])
+                ->values()
+                ->toArray();
+        }
+
+        return response()->json(['success' => true, 'data' => $payload]);
     }
 
     /**

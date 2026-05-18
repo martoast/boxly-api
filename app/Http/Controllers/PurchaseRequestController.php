@@ -174,10 +174,21 @@ class PurchaseRequestController extends Controller
             return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
         }
 
-        return response()->json([
-            'success' => true,
-            'data' => $purchaseRequest->load(['items', 'shoppingTrip', 'stores', 'categories'])
-        ]);
+        $purchaseRequest->load(['items', 'shoppingTrip', 'stores']);
+        $payload = $purchaseRequest->toArray();
+
+        if ($purchaseRequest->isInPerson()) {
+            $payload['in_person_breakdown'] = $purchaseRequest->inPersonStoreBreakdown()
+                ->map(fn ($row) => [
+                    'store_id'       => $row['store']->id,
+                    'store_name'     => $row['store']->name,
+                    'category_names' => $row['category_names'],
+                ])
+                ->values()
+                ->toArray();
+        }
+
+        return response()->json(['success' => true, 'data' => $payload]);
     }
 
     /**
@@ -198,8 +209,11 @@ class PurchaseRequestController extends Controller
             'shopping_trip_id'    => 'required|integer|exists:shopping_trips,id',
             'store_ids'           => 'required|array|min:1',
             'store_ids.*'         => 'required|integer|exists:stores,id',
-            'category_ids'        => 'nullable|array',
-            'category_ids.*'      => 'integer|exists:categories,id',
+            // Per-store category map: { "<store_id>": [<category_id>, ...] }.
+            // Optional — empty/missing keys mean "no preference at that store".
+            'store_categories'              => 'nullable|array',
+            'store_categories.*'            => 'array',
+            'store_categories.*.*'          => 'integer|exists:categories,id',
             'minimum_budget_usd'  => 'required|numeric|min:0',
             'customer_notes'      => 'nullable|string|max:2000',
             // Wishlist items are optional — a customer may schedule a trip
@@ -242,6 +256,15 @@ class PurchaseRequestController extends Controller
         try {
             $user = $request->user();
 
+            // Filter the per-store map down to only the stores the customer
+            // actually selected — defensive against payload drift if the UI
+            // ever sends stale entries.
+            $storeCategories = collect($validated['store_categories'] ?? [])
+                ->only($validated['store_ids'])
+                ->filter(fn ($cats) => is_array($cats) && count($cats) > 0)
+                ->map(fn ($cats) => array_values(array_unique(array_map('intval', $cats))))
+                ->toArray();
+
             $pr = PurchaseRequest::create([
                 'user_id'              => $user->id,
                 'request_number'       => PurchaseRequest::generateRequestNumber(),
@@ -252,12 +275,10 @@ class PurchaseRequestController extends Controller
                 'customer_notes'       => $validated['customer_notes'] ?? null,
                 'minimum_budget_usd'   => $validated['minimum_budget_usd'],
                 'in_person_store_count'=> count($validated['store_ids']),
+                'store_categories'     => empty($storeCategories) ? null : $storeCategories,
             ]);
 
             $pr->stores()->sync($validated['store_ids']);
-            if (! empty($validated['category_ids'])) {
-                $pr->categories()->sync($validated['category_ids']);
-            }
 
             // Wishlist items become PurchaseRequestItem rows in the wishlist
             // state — same items table as online PRs so admin can use the
@@ -323,7 +344,7 @@ class PurchaseRequestController extends Controller
             // Same team notification as online PRs — shopping team needs to
             // know a trip got booked so they can plan the visit.
             try {
-                $pr->load(['items', 'user', 'shoppingTrip', 'stores', 'categories']);
+                $pr->load(['items', 'user', 'shoppingTrip', 'stores']);
                 $teamEmails = User::query()
                     ->where('role', User::ROLE_EMPLOYEE)
                     ->where('team', User::TEAM_SHOPPING)
@@ -339,7 +360,7 @@ class PurchaseRequestController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'In-person shopping request scheduled.',
-                'data'    => $pr->load(['items', 'shoppingTrip', 'stores', 'categories']),
+                'data'    => $pr->load(['items', 'shoppingTrip', 'stores']),
             ], 201);
 
         } catch (\Exception $e) {

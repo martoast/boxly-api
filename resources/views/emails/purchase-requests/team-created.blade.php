@@ -39,19 +39,9 @@
             <td style="padding: 6px 0;">{{ $request->shoppingTrip->location }} — {{ $request->shoppingTrip->trip_date->format('Y-m-d') }}</td>
         </tr>
         <tr>
-            <td style="padding: 6px 0; color: #666;">Tiendas</td>
-            <td style="padding: 6px 0;">{{ $request->stores->pluck('name')->join(', ') ?: '—' }}</td>
-        </tr>
-        <tr>
             <td style="padding: 6px 0; color: #666;">Presupuesto</td>
             <td style="padding: 6px 0;">${{ number_format($request->minimum_budget_usd ?? 0, 2) }} USD</td>
         </tr>
-        @if($request->categories->isNotEmpty())
-        <tr>
-            <td style="padding: 6px 0; color: #666;">Categorías</td>
-            <td style="padding: 6px 0;">{{ $request->categories->pluck('name')->join(', ') }}</td>
-        </tr>
-        @endif
         @if($request->customer_notes)
         <tr>
             <td style="padding: 6px 0; color: #666; vertical-align: top;">Notas del cliente</td>
@@ -65,6 +55,22 @@
         </tr>
         @endif
     </table>
+
+    @if($isInPerson)
+        <h3 style="margin: 16px 0 8px; font-size: 14px;">Tiendas y categorías</h3>
+        @foreach($request->inPersonStoreBreakdown() as $row)
+            <div style="margin: 0 0 8px; padding: 8px 10px; background: #f8f9fa; border-left: 3px solid #f59e0b; border-radius: 4px;">
+                <div style="font-weight: 600; font-size: 13px;">{{ $row['store']->name }}</div>
+                <div style="font-size: 12px; color: #666; margin-top: 2px;">
+                    @if(count($row['category_names']) > 0)
+                        {{ implode(' · ', $row['category_names']) }}
+                    @else
+                        <em>Cualquier categoría</em>
+                    @endif
+                </div>
+            </div>
+        @endforeach
+    @endif
 
     <h3 style="margin: 20px 0 8px; font-size: 16px;">Productos solicitados:</h3>
 

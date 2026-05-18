@@ -39,6 +39,7 @@ class PurchaseRequest extends Model
         'customer_notes',
         'minimum_budget_usd',
         'in_person_store_count',
+        'store_categories',
     ];
 
     protected $casts = [
@@ -50,6 +51,9 @@ class PurchaseRequest extends Model
         'total_amount' => 'decimal:2',
         'minimum_budget_usd' => 'decimal:2',
         'in_person_store_count' => 'integer',
+        // { "<store_id>": [<category_id>, ...] } — what the customer
+        // wants us to look for at each selected store on an in-person PR.
+        'store_categories' => 'array',
         'quote_sent_at' => 'datetime',
         'paid_at' => 'datetime',
         'purchased_at' => 'datetime',
@@ -117,18 +121,14 @@ class PurchaseRequest extends Model
         return $this->belongsTo(ShoppingTrip::class);
     }
 
-    // In-person PRs let customers list stores they want us to visit and
-    // categories they're interested in. Pivot tables wire both up — no
-    // extra columns on the pivots; presence is the whole signal.
+    // In-person PRs let customers list stores they want us to visit.
+    // Their category interests per store live in the `store_categories`
+    // JSON column on the PR itself — not a separate pivot — so admin can
+    // see "at Nike they want Sneakers + Sportswear, at Coach they want
+    // Bags" rendered alongside each store card.
     public function stores(): BelongsToMany
     {
         return $this->belongsToMany(Store::class, 'purchase_request_stores')
-            ->withTimestamps();
-    }
-
-    public function categories(): BelongsToMany
-    {
-        return $this->belongsToMany(Category::class, 'purchase_request_categories')
             ->withTimestamps();
     }
 
@@ -165,5 +165,47 @@ class PurchaseRequest extends Model
         return $this->items->filter(function ($item) {
             return $item->stock_status === PurchaseRequestItem::STOCK_AVAILABLE;
         })->values();
+    }
+
+    /**
+     * Per-store category breakdown for in-person PRs. Returns one row per
+     * store the customer booked, each with the category names they marked
+     * for *that* store. Used by mail templates, the admin PR detail panel,
+     * and the customer's review screen — everywhere we render the in-person
+     * intake. Categories are resolved by ID against the live catalog so
+     * deactivated categories simply drop out of the list rather than
+     * showing a stale label.
+     *
+     * Returns: Collection of [
+     *   ['store' => Store, 'category_names' => ['Sneakers', 'Sportswear']],
+     *   ['store' => Store, 'category_names' => []],     // no preference
+     * ]
+     */
+    public function inPersonStoreBreakdown(): \Illuminate\Support\Collection
+    {
+        if (! $this->isInPerson()) {
+            return collect();
+        }
+
+        $this->loadMissing('stores');
+
+        $map = collect($this->store_categories ?? [])
+            // JSON object keys come back as strings — normalise so int store_id
+            // lookups hit. Empty-array values are kept as-is.
+            ->mapWithKeys(fn ($cats, $sid) => [(int) $sid => array_map('intval', (array) $cats)]);
+
+        $allIds = $map->flatten()->unique()->values();
+        $namesById = $allIds->isEmpty()
+            ? collect()
+            : Category::whereIn('id', $allIds)->pluck('name', 'id');
+
+        return $this->stores->map(fn ($store) => [
+            'store'          => $store,
+            'category_names' => collect($map->get($store->id, []))
+                ->map(fn ($id) => $namesById->get($id))
+                ->filter()
+                ->values()
+                ->all(),
+        ]);
     }
 }
