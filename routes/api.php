@@ -30,6 +30,8 @@ use App\Http\Controllers\CampaignTrackingController;
 use App\Http\Controllers\EmployeeOrderController;
 use App\Http\Controllers\StoreProductController;
 use App\Http\Controllers\StoreCheckoutController;
+use App\Http\Controllers\ShoppingTripsController;
+use App\Http\Controllers\Admin\AdminShoppingTripsController;
 use App\Http\Controllers\Admin\AdminProductController;
 use App\Http\Controllers\Admin\AdminStoreController;
 use App\Http\Controllers\Admin\AdminCategoryController;
@@ -202,8 +204,19 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::prefix('purchase-requests')->group(function () {
         Route::get('/', [PurchaseRequestController::class, 'index']);
         Route::post('/', [PurchaseRequestController::class, 'store']);
+        // New: in-person shopping flow — customer schedules a Boxly team
+        // member to physically shop at Las Americas Outlets on their behalf.
+        // No payment at submission; quote happens after the trip.
+        Route::post('/in-person', [PurchaseRequestController::class, 'storeInPerson']);
         Route::get('/{purchaseRequest}', [PurchaseRequestController::class, 'show']);
         Route::put('/{purchaseRequest}', [PurchaseRequestController::class, 'update']);
+    });
+
+    // In-person flow read-only endpoints — open trips for the calendar
+    // picker, mall-flagged stores for the store-multiselect.
+    Route::prefix('shopping-trips')->group(function () {
+        Route::get('/availability', [ShoppingTripsController::class, 'availability']);
+        Route::get('/in-person-stores', [ShoppingTripsController::class, 'inPersonStores']);
     });
 
     // Boxly Store — checkout flows directly into the assisted Purchase Request pipeline
@@ -277,6 +290,16 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/{purchaseRequest}/items', [AdminPurchaseRequestController::class, 'addItem']);
             Route::put('/{purchaseRequest}/items/{item}', [AdminPurchaseRequestController::class, 'updateItem']);
             Route::delete('/{purchaseRequest}/items/{item}', [AdminPurchaseRequestController::class, 'deleteItem']);
+        });
+
+        // In-person shopping trip schedule — admin CRUD that powers the
+        // customer-facing date picker on /shop/in-person.
+        Route::prefix('shopping-trips')->group(function () {
+            Route::get('/', [AdminShoppingTripsController::class, 'index']);
+            Route::post('/', [AdminShoppingTripsController::class, 'store']);
+            Route::get('/{shoppingTrip}', [AdminShoppingTripsController::class, 'show']);
+            Route::put('/{shoppingTrip}', [AdminShoppingTripsController::class, 'update']);
+            Route::delete('/{shoppingTrip}', [AdminShoppingTripsController::class, 'destroy']);
         });
 
         Route::prefix('management')->group(function () {

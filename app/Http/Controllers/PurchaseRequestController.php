@@ -4,8 +4,11 @@ namespace App\Http\Controllers;
 
 use App\Models\PurchaseRequest;
 use App\Models\PurchaseRequestItem;
+use App\Models\ShoppingTrip;
+use App\Models\Store;
 use App\Mail\PurchaseRequestCreated;
 use App\Mail\PurchaseRequestCreatedTeamNotification;
+use App\Mail\PurchaseRequestInPersonScheduled;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -173,8 +176,184 @@ class PurchaseRequestController extends Controller
 
         return response()->json([
             'success' => true,
-            'data' => $purchaseRequest->load('items')
+            'data' => $purchaseRequest->load(['items', 'shoppingTrip', 'stores', 'categories'])
         ]);
+    }
+
+    /**
+     * Create an in-person shopping PR — customer schedules a Boxly team
+     * member to physically shop at Las Americas Outlets on their behalf.
+     *
+     * Differences from the online flow:
+     *  - No payment at submission; quote happens after the trip.
+     *  - Items go in with stock_status=wishlist (excluded from billing
+     *    until admin flips them to 'available' with the real price).
+     *  - PR carries shopping_trip_id, store/category pivots, customer
+     *    notes, minimum budget, and a store-count snapshot used by
+     *    createQuote to compute the $10/store service fee.
+     */
+    public function storeInPerson(Request $request)
+    {
+        $validated = $request->validate([
+            'shopping_trip_id'    => 'required|integer|exists:shopping_trips,id',
+            'store_ids'           => 'required|array|min:1',
+            'store_ids.*'         => 'required|integer|exists:stores,id',
+            'category_ids'        => 'nullable|array',
+            'category_ids.*'      => 'integer|exists:categories,id',
+            'minimum_budget_usd'  => 'required|numeric|min:0',
+            'customer_notes'      => 'nullable|string|max:2000',
+            // Wishlist items are optional — a customer may schedule a trip
+            // without a specific list and trust Boxly to find good deals.
+            'wishlist'                       => 'nullable|array',
+            'wishlist.*.product_name'        => 'required_with:wishlist|string|max:255',
+            'wishlist.*.product_url'         => 'nullable|string|max:2000',
+            'wishlist.*.product_image_url'   => 'nullable|string|max:2000',
+            'wishlist.*.notes'               => 'nullable|string|max:500',
+            'wishlist.*.options'             => 'nullable',
+            'wishlist.*.quantity'            => 'nullable|integer|min:1',
+            'wishlist.*.image'               => 'nullable|file|mimes:jpg,jpeg,png,webp,pdf|max:10240',
+        ]);
+
+        // Trip must be in the open state — closed/completed trips shouldn't
+        // accept new bookings. Reload from DB rather than trusting the FK
+        // existence check so we see the latest status.
+        $trip = ShoppingTrip::findOrFail($validated['shopping_trip_id']);
+        if ($trip->status !== ShoppingTrip::STATUS_OPEN || $trip->trip_date->isPast()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This trip is no longer accepting bookings.',
+            ], 422);
+        }
+
+        // Every selected store must be flagged in-person — defence against
+        // somebody crafting a request with an online-only store id.
+        $storeCount = Store::whereIn('id', $validated['store_ids'])
+            ->inPersonAvailable()
+            ->count();
+        if ($storeCount !== count($validated['store_ids'])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'One or more selected stores are not available for in-person shopping.',
+            ], 422);
+        }
+
+        DB::beginTransaction();
+
+        try {
+            $user = $request->user();
+
+            $pr = PurchaseRequest::create([
+                'user_id'              => $user->id,
+                'request_number'       => PurchaseRequest::generateRequestNumber(),
+                'status'               => PurchaseRequest::STATUS_PENDING_REVIEW,
+                'source'               => PurchaseRequest::SOURCE_IN_PERSON,
+                'shopping_trip_id'     => $trip->id,
+                'currency'             => 'usd',
+                'customer_notes'       => $validated['customer_notes'] ?? null,
+                'minimum_budget_usd'   => $validated['minimum_budget_usd'],
+                'in_person_store_count'=> count($validated['store_ids']),
+            ]);
+
+            $pr->stores()->sync($validated['store_ids']);
+            if (! empty($validated['category_ids'])) {
+                $pr->categories()->sync($validated['category_ids']);
+            }
+
+            // Wishlist items become PurchaseRequestItem rows in the wishlist
+            // state — same items table as online PRs so admin can use the
+            // existing item-edit endpoints to flip wishes into actual buys
+            // post-trip.
+            foreach (($validated['wishlist'] ?? []) as $index => $itemData) {
+                $options = null;
+                if (isset($itemData['options'])) {
+                    $options = is_string($itemData['options'])
+                        ? json_decode($itemData['options'], true)
+                        : $itemData['options'];
+                }
+
+                $item = PurchaseRequestItem::create([
+                    'purchase_request_id' => $pr->id,
+                    'product_name'        => $itemData['product_name'],
+                    'product_url'         => $itemData['product_url'] ?? null,
+                    'product_image_url'   => $itemData['product_image_url'] ?? null,
+                    // Price is unknown until the trip — admin fills it in
+                    // when flipping the wish to 'available'. Persist 0 so
+                    // the not-null decimal column is satisfied.
+                    'price'               => 0,
+                    'quantity'            => $itemData['quantity'] ?? 1,
+                    'options'             => $options,
+                    'notes'               => $itemData['notes'] ?? null,
+                    'stock_status'        => PurchaseRequestItem::STOCK_WISHLIST,
+                ]);
+
+                if ($request->hasFile("wishlist.{$index}.image")) {
+                    $file = $request->file("wishlist.{$index}.image");
+                    $userName = Str::slug($user->name);
+                    $storagePath = "users/{$userName}-{$user->id}/requests/{$pr->request_number}/items/{$item->id}";
+                    $filename = "image-" . time() . "." . $file->getClientOriginalExtension();
+
+                    $path = Storage::disk('spaces')->putFileAs($storagePath, $file, $filename, 'public');
+                    $url = config('filesystems.disks.spaces.url') . '/' . $path;
+
+                    $item->update([
+                        'image_path'      => $path,
+                        'image_filename'  => $file->getClientOriginalName(),
+                        'image_mime_type' => $file->getClientMimeType(),
+                        'image_size'      => $file->getSize(),
+                        'image_url'       => $url,
+                    ]);
+                }
+            }
+
+            DB::commit();
+
+            Log::info('In-person PR created', [
+                'id'      => $pr->id,
+                'user_id' => $user->id,
+                'trip_id' => $trip->id,
+                'stores'  => count($validated['store_ids']),
+            ]);
+
+            try {
+                Mail::to($user)->queue(new PurchaseRequestInPersonScheduled($pr));
+            } catch (\Exception $e) {
+                Log::error('Failed to queue in-person scheduled email: ' . $e->getMessage());
+            }
+
+            // Same team notification as online PRs — shopping team needs to
+            // know a trip got booked so they can plan the visit.
+            try {
+                $pr->load(['items', 'user', 'shoppingTrip', 'stores', 'categories']);
+                $teamEmails = User::query()
+                    ->where('role', User::ROLE_EMPLOYEE)
+                    ->where('team', User::TEAM_SHOPPING)
+                    ->pluck('email')
+                    ->all();
+                if (! empty($teamEmails)) {
+                    Mail::to($teamEmails)->queue(new PurchaseRequestCreatedTeamNotification($pr));
+                }
+            } catch (\Exception $e) {
+                Log::error('Failed to queue in-person team notification: ' . $e->getMessage());
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => 'In-person shopping request scheduled.',
+                'data'    => $pr->load(['items', 'shoppingTrip', 'stores', 'categories']),
+            ], 201);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('In-person PR create failed: ' . $e->getMessage(), [
+                'user_id' => $request->user()->id,
+                'trace'   => $e->getTraceAsString(),
+            ]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to schedule request',
+                'error'   => config('app.debug') ? $e->getMessage() : null,
+            ], 500);
+        }
     }
 
     /**

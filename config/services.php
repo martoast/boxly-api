@@ -67,6 +67,16 @@ return [
         'default_percent' => env('BOXLY_COMMISSION_PERCENT', 8),
     ],
 
+    /**
+     * In-person shopping at Las Americas — flat per-store service charge
+     * applied at quote time by AdminPurchaseRequestController::createQuote.
+     * Shown to the customer on the store-picker step and itemized in the
+     * Stripe invoice description.
+     */
+    'in_person' => [
+        'per_store_fee_usd' => env('BOXLY_IN_PERSON_PER_STORE_FEE_USD', 10),
+    ],
+
     'nu_bank' => [
         'beneficiary_name' => env('NU_BENEFICIARY_NAME'),
         'bank_name' => env('NU_BANK_NAME'),

@@ -20,13 +20,15 @@ class Store extends Model
         'description',
         'is_active',
         'show_on_landing',
+        'is_in_person_available',
         'sort_order',
     ];
 
     protected $casts = [
-        'is_active'       => 'boolean',
-        'show_on_landing' => 'boolean',
-        'sort_order'      => 'integer',
+        'is_active'              => 'boolean',
+        'show_on_landing'        => 'boolean',
+        'is_in_person_available' => 'boolean',
+        'sort_order'             => 'integer',
     ];
 
     protected static function boot()
@@ -58,5 +60,10 @@ class Store extends Model
     public function scopeActive($query)
     {
         return $query->where('is_active', true);
+    }
+
+    public function scopeInPersonAvailable($query)
+    {
+        return $query->where('is_in_person_available', true);
     }
 }

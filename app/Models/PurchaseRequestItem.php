@@ -17,6 +17,10 @@ class PurchaseRequestItem extends Model
     public const STOCK_UNVERIFIED = 'unverified';
     public const STOCK_AVAILABLE = 'available';
     public const STOCK_UNAVAILABLE = 'unavailable';
+    // In-person-PR pre-trip state: a product the customer asked us to look
+    // for at the mall. Excluded from billing (same as 'unavailable') until
+    // admin flips it to 'available' with the actual price found in person.
+    public const STOCK_WISHLIST = 'wishlist';
 
     protected $fillable = [
         'purchase_request_id',

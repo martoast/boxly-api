@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Str;
 
@@ -17,6 +18,7 @@ class PurchaseRequest extends Model
         'request_number',
         'status',
         'source',
+        'shopping_trip_id',
         'items_total',
         'shipping_cost',
         'sales_tax',
@@ -34,6 +36,9 @@ class PurchaseRequest extends Model
         'paid_at',
         'purchased_at',
         'admin_notes',
+        'customer_notes',
+        'minimum_budget_usd',
+        'in_person_store_count',
     ];
 
     protected $casts = [
@@ -43,6 +48,8 @@ class PurchaseRequest extends Model
         'store_costs' => 'array',
         'processing_fee' => 'decimal:2',
         'total_amount' => 'decimal:2',
+        'minimum_budget_usd' => 'decimal:2',
+        'in_person_store_count' => 'integer',
         'quote_sent_at' => 'datetime',
         'paid_at' => 'datetime',
         'purchased_at' => 'datetime',
@@ -62,6 +69,7 @@ class PurchaseRequest extends Model
     // vs assisted (admin manually created on behalf of a customer).
     const SOURCE_STORE = 'store';
     const SOURCE_ASSISTED = 'assisted';
+    const SOURCE_IN_PERSON = 'in_person';
 
     // Which Stripe account this PR's invoice lives on. Null/'main' = legacy
     // (created before the shopping account was split out). 'shopping' = new.
@@ -104,11 +112,36 @@ class PurchaseRequest extends Model
         return $this->hasMany(PurchaseRequestItem::class);
     }
 
+    public function shoppingTrip(): BelongsTo
+    {
+        return $this->belongsTo(ShoppingTrip::class);
+    }
+
+    // In-person PRs let customers list stores they want us to visit and
+    // categories they're interested in. Pivot tables wire both up — no
+    // extra columns on the pivots; presence is the whole signal.
+    public function stores(): BelongsToMany
+    {
+        return $this->belongsToMany(Store::class, 'purchase_request_stores')
+            ->withTimestamps();
+    }
+
+    public function categories(): BelongsToMany
+    {
+        return $this->belongsToMany(Category::class, 'purchase_request_categories')
+            ->withTimestamps();
+    }
+
     // ---- Source-aware helpers ----
 
     public function isStore(): bool
     {
         return $this->source === self::SOURCE_STORE;
+    }
+
+    public function isInPerson(): bool
+    {
+        return $this->source === self::SOURCE_IN_PERSON;
     }
 
     /**

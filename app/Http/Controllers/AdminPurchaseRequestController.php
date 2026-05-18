@@ -770,13 +770,17 @@ class AdminPurchaseRequestController extends Controller
 
         $purchaseRequest->load('items');
 
-        // Billable items: everything except items explicitly marked
-        // 'unavailable'. Unavailable items stay on the PR for visibility but
-        // don't appear on the Stripe invoice. 'unverified' / null items
-        // still bill — that path covers legacy assisted PRs where stock
-        // verification isn't part of the flow.
+        // Billable items: exclude `unavailable` (stock check failed) and
+        // `wishlist` (in-person pre-trip placeholder — only billable after
+        // admin flips it to `available` with the real price found at the
+        // mall). 'unverified' / null items still bill — that path covers
+        // legacy assisted PRs where stock verification isn't part of the
+        // flow.
         $billableItems = $purchaseRequest->items->filter(
-            fn ($i) => $i->stock_status !== PurchaseRequestItem::STOCK_UNAVAILABLE,
+            fn ($i) => ! in_array($i->stock_status, [
+                PurchaseRequestItem::STOCK_UNAVAILABLE,
+                PurchaseRequestItem::STOCK_WISHLIST,
+            ], true),
         );
         if ($billableItems->isEmpty()) {
             return response()->json([
@@ -793,7 +797,21 @@ class AdminPurchaseRequestController extends Controller
             2,
         );
 
-        $preFeeUsd = round($itemsSubtotalUsd + $shippingUsd + $salesTaxUsd, 2);
+        // In-person service charge: $10 (config-driven) × stores the customer
+        // booked us to visit. Surfaced as its own line in the invoice
+        // description so the customer sees what they're paying for. The
+        // store_count was captured at PR submission; admin can edit it on
+        // the PR detail if reality diverged before quoting.
+        $inPersonServiceFee = 0.0;
+        if ($purchaseRequest->isInPerson()) {
+            $perStoreFee = (float) config('services.in_person.per_store_fee_usd', 10);
+            $inPersonServiceFee = round(
+                $perStoreFee * (int) ($purchaseRequest->in_person_store_count ?? 0),
+                2,
+            );
+        }
+
+        $preFeeUsd = round($itemsSubtotalUsd + $shippingUsd + $salesTaxUsd + $inPersonServiceFee, 2);
         $feeUsd    = round($preFeeUsd * ($feePercent / 100), 2);
         $totalUsd  = round($preFeeUsd + $feeUsd, 2);
 
@@ -808,12 +826,23 @@ class AdminPurchaseRequestController extends Controller
             // handles the conversion to MXN at payment time. We don't
             // touch FX ourselves; the rate the customer pays at is
             // whatever their bank quotes the moment they tap the link.
+            $invoiceDescription = "Boxly — Solicitud de Compra {$purchaseRequest->request_number}";
+            if ($purchaseRequest->isInPerson() && $inPersonServiceFee > 0) {
+                $perStoreFeeForDesc = (float) config('services.in_person.per_store_fee_usd', 10);
+                $invoiceDescription .= sprintf(
+                    ' — Compra en persona Las Américas (servicio %d tienda(s) × $%.2f USD = $%.2f USD)',
+                    (int) $purchaseRequest->in_person_store_count,
+                    $perStoreFeeForDesc,
+                    $inPersonServiceFee,
+                );
+            }
+
             $stripeInvoice = $stripe->invoices->create([
                 'customer'          => $shoppingCustomerId,
                 'currency'          => 'usd',
                 'collection_method' => 'send_invoice',
                 'days_until_due'    => 3,
-                'description'       => "Boxly — Solicitud de Compra {$purchaseRequest->request_number}",
+                'description'       => $invoiceDescription,
                 'metadata' => [
                     'type'                => 'purchase_request_invoice',
                     'purchase_request_id' => $purchaseRequest->id,
