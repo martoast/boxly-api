@@ -97,6 +97,77 @@ class StripeWebhookController extends Controller
         if ($type === 'store_purchase' && isset($metadata['purchase_request_id'])) {
             $this->handleStorePurchasePaid($session, $metadata);
         }
+
+        if ($type === 'in_person_deposit' && isset($metadata['purchase_request_id'])) {
+            $this->handleInPersonDepositPaid($session, $metadata);
+        }
+    }
+
+    /**
+     * In-person scheduling deposit cleared. PR was created in
+     * awaiting_deposit when the customer hit Submit; now we flip it to
+     * pending_review so Velonie sees it in her queue, and queue the
+     * customer confirmation + team alert (deferred from submit so
+     * tire-kicker bookings don't generate spam).
+     */
+    protected function handleInPersonDepositPaid($session, array $metadata)
+    {
+        $pr = PurchaseRequest::find($metadata['purchase_request_id']);
+        if (! $pr) {
+            Log::warning('Purchase request not found for in-person deposit completion', [
+                'purchase_request_id' => $metadata['purchase_request_id'],
+                'session_id'          => $session->id,
+            ]);
+            return;
+        }
+
+        // Idempotency — webhook can fire more than once (retries, manual
+        // replays). If we already processed this deposit, no-op.
+        if ($pr->depositPaid()) {
+            return;
+        }
+
+        try {
+            $pr->update([
+                'status'           => PurchaseRequest::STATUS_PENDING_REVIEW,
+                'deposit_paid_at'  => now(),
+            ]);
+
+            $pr->load(['items', 'user', 'shoppingTrip', 'stores']);
+
+            try {
+                \Illuminate\Support\Facades\Mail::to($pr->user)->queue(
+                    new \App\Mail\PurchaseRequestInPersonScheduled($pr),
+                );
+            } catch (\Exception $e) {
+                Log::error('Failed to queue in-person scheduled email', ['error' => $e->getMessage()]);
+            }
+
+            try {
+                $teamEmails = \App\Models\User::query()
+                    ->where('role', \App\Models\User::ROLE_EMPLOYEE)
+                    ->where('team', \App\Models\User::TEAM_SHOPPING)
+                    ->pluck('email')
+                    ->all();
+                if (! empty($teamEmails)) {
+                    \Illuminate\Support\Facades\Mail::to($teamEmails)->queue(
+                        new \App\Mail\PurchaseRequestCreatedTeamNotification($pr),
+                    );
+                }
+            } catch (\Exception $e) {
+                Log::error('Failed to queue in-person team notification', ['error' => $e->getMessage()]);
+            }
+
+            Log::info('In-person deposit cleared, PR confirmed', [
+                'purchase_request_id' => $pr->id,
+                'session_id'          => $session->id,
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Failed to handle in-person deposit paid', [
+                'session_id' => $session->id,
+                'error'      => $e->getMessage(),
+            ]);
+        }
     }
 
     protected function handleStorePurchasePaid($session, array $metadata)

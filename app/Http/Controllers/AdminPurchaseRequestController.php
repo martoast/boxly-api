@@ -811,21 +811,10 @@ class AdminPurchaseRequestController extends Controller
             2,
         );
 
-        // In-person service charge: $10 (config-driven) × stores the customer
-        // booked us to visit. Surfaced as its own line in the invoice
-        // description so the customer sees what they're paying for. The
-        // store_count was captured at PR submission; admin can edit it on
-        // the PR detail if reality diverged before quoting.
-        $inPersonServiceFee = 0.0;
-        if ($purchaseRequest->isInPerson()) {
-            $perStoreFee = (float) config('services.in_person.per_store_fee_usd', 10);
-            $inPersonServiceFee = round(
-                $perStoreFee * (int) ($purchaseRequest->in_person_store_count ?? 0),
-                2,
-            );
-        }
-
-        $preFeeUsd = round($itemsSubtotalUsd + $shippingUsd + $salesTaxUsd + $inPersonServiceFee, 2);
+        // In-person PRs paid the $10/store scheduling deposit upfront via
+        // Stripe Checkout — we don't double-charge it on the post-trip
+        // quote. Items + actual store shipping/tax + 8% processing fee only.
+        $preFeeUsd = round($itemsSubtotalUsd + $shippingUsd + $salesTaxUsd, 2);
         $feeUsd    = round($preFeeUsd * ($feePercent / 100), 2);
         $totalUsd  = round($preFeeUsd + $feeUsd, 2);
 
@@ -841,13 +830,10 @@ class AdminPurchaseRequestController extends Controller
             // touch FX ourselves; the rate the customer pays at is
             // whatever their bank quotes the moment they tap the link.
             $invoiceDescription = "Boxly — Solicitud de Compra {$purchaseRequest->request_number}";
-            if ($purchaseRequest->isInPerson() && $inPersonServiceFee > 0) {
-                $perStoreFeeForDesc = (float) config('services.in_person.per_store_fee_usd', 10);
+            if ($purchaseRequest->isInPerson()) {
                 $invoiceDescription .= sprintf(
-                    ' — Compra en persona Las Américas (servicio %d tienda(s) × $%.2f USD = $%.2f USD)',
-                    (int) $purchaseRequest->in_person_store_count,
-                    $perStoreFeeForDesc,
-                    $inPersonServiceFee,
+                    ' — Compra en persona Las Américas (reserva de $%.2f USD ya pagada)',
+                    (float) ($purchaseRequest->deposit_amount_usd ?? 0),
                 );
             }
 

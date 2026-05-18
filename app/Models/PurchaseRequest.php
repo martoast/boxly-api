@@ -40,6 +40,9 @@ class PurchaseRequest extends Model
         'minimum_budget_usd',
         'in_person_store_count',
         'store_categories',
+        'deposit_amount_usd',
+        'deposit_checkout_session_id',
+        'deposit_paid_at',
     ];
 
     protected $casts = [
@@ -54,6 +57,8 @@ class PurchaseRequest extends Model
         // { "<store_id>": [<category_id>, ...] } — what the customer
         // wants us to look for at each selected store on an in-person PR.
         'store_categories' => 'array',
+        'deposit_amount_usd' => 'decimal:2',
+        'deposit_paid_at' => 'datetime',
         'quote_sent_at' => 'datetime',
         'paid_at' => 'datetime',
         'purchased_at' => 'datetime',
@@ -65,6 +70,11 @@ class PurchaseRequest extends Model
     const STATUS_PURCHASED = 'purchased';
     const STATUS_REJECTED = 'rejected';
     const STATUS_CANCELLED = 'cancelled';
+    // In-person only: PR exists but the customer hasn't paid the $10/store
+    // scheduling deposit yet. Won't appear in admin queues or the customer's
+    // active PR list until the Stripe Checkout webhook flips it to
+    // pending_review.
+    const STATUS_AWAITING_DEPOSIT = 'awaiting_deposit';
 
     const PAYMENT_METHOD_STRIPE = 'stripe';
     const PAYMENT_METHOD_MANUAL_DEPOSIT = 'manual_deposit';
@@ -142,6 +152,11 @@ class PurchaseRequest extends Model
     public function isInPerson(): bool
     {
         return $this->source === self::SOURCE_IN_PERSON;
+    }
+
+    public function depositPaid(): bool
+    {
+        return ! is_null($this->deposit_paid_at);
     }
 
     /**

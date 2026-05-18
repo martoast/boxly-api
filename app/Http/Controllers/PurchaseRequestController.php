@@ -10,6 +10,7 @@ use App\Mail\PurchaseRequestCreated;
 use App\Mail\PurchaseRequestCreatedTeamNotification;
 use App\Mail\PurchaseRequestInPersonScheduled;
 use App\Models\User;
+use App\Services\StripeAccount;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -265,17 +266,28 @@ class PurchaseRequestController extends Controller
                 ->map(fn ($cats) => array_values(array_unique(array_map('intval', $cats))))
                 ->toArray();
 
+            // $10/store deposit locked at submission time — even if config
+            // changes later, this PR is billed at the rate the customer saw
+            // when they booked.
+            $perStoreFee = (float) config('services.in_person.per_store_fee_usd', 10);
+            $storeCount = count($validated['store_ids']);
+            $depositAmountUsd = round($perStoreFee * $storeCount, 2);
+
             $pr = PurchaseRequest::create([
                 'user_id'              => $user->id,
                 'request_number'       => PurchaseRequest::generateRequestNumber(),
-                'status'               => PurchaseRequest::STATUS_PENDING_REVIEW,
+                // Sits in awaiting_deposit until the Stripe webhook flips it
+                // — admin queues filter to pending_review so unpaid bookings
+                // don't clutter Velonie's workflow.
+                'status'               => PurchaseRequest::STATUS_AWAITING_DEPOSIT,
                 'source'               => PurchaseRequest::SOURCE_IN_PERSON,
                 'shopping_trip_id'     => $trip->id,
                 'currency'             => 'usd',
                 'customer_notes'       => $validated['customer_notes'] ?? null,
                 'minimum_budget_usd'   => $validated['minimum_budget_usd'],
-                'in_person_store_count'=> count($validated['store_ids']),
+                'in_person_store_count'=> $storeCount,
                 'store_categories'     => empty($storeCategories) ? null : $storeCategories,
+                'deposit_amount_usd'   => $depositAmountUsd,
             ]);
 
             $pr->stores()->sync($validated['store_ids']);
@@ -328,41 +340,17 @@ class PurchaseRequestController extends Controller
 
             DB::commit();
 
-            Log::info('In-person PR created', [
-                'id'      => $pr->id,
-                'user_id' => $user->id,
-                'trip_id' => $trip->id,
-                'stores'  => count($validated['store_ids']),
+            Log::info('In-person PR created (awaiting deposit)', [
+                'id'              => $pr->id,
+                'user_id'         => $user->id,
+                'trip_id'         => $trip->id,
+                'stores'          => $storeCount,
+                'deposit_usd'     => $depositAmountUsd,
             ]);
 
-            try {
-                Mail::to($user)->queue(new PurchaseRequestInPersonScheduled($pr));
-            } catch (\Exception $e) {
-                Log::error('Failed to queue in-person scheduled email: ' . $e->getMessage());
-            }
-
-            // Same team notification as online PRs — shopping team needs to
-            // know a trip got booked so they can plan the visit.
-            try {
-                $pr->load(['items', 'user', 'shoppingTrip', 'stores']);
-                $teamEmails = User::query()
-                    ->where('role', User::ROLE_EMPLOYEE)
-                    ->where('team', User::TEAM_SHOPPING)
-                    ->pluck('email')
-                    ->all();
-                if (! empty($teamEmails)) {
-                    Mail::to($teamEmails)->queue(new PurchaseRequestCreatedTeamNotification($pr));
-                }
-            } catch (\Exception $e) {
-                Log::error('Failed to queue in-person team notification: ' . $e->getMessage());
-            }
-
-            return response()->json([
-                'success' => true,
-                'message' => 'In-person shopping request scheduled.',
-                'data'    => $pr->load(['items', 'shoppingTrip', 'stores']),
-            ], 201);
-
+            // Confirmation + team-alert emails are queued by the Stripe
+            // webhook after the deposit clears — not here. We don't want
+            // tire-kicker bookings to spam Velonie with notifications.
         } catch (\Exception $e) {
             DB::rollBack();
             Log::error('In-person PR create failed: ' . $e->getMessage(), [
@@ -372,6 +360,76 @@ class PurchaseRequestController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to schedule request',
+                'error'   => config('app.debug') ? $e->getMessage() : null,
+            ], 500);
+        }
+
+        // Stripe Checkout Session — created OUTSIDE the DB transaction so a
+        // Stripe API failure doesn't roll back the PR we just persisted.
+        // If session creation fails, the PR stays in awaiting_deposit and
+        // can be recovered by re-submitting (admin can clean up orphans).
+        try {
+            $stripe = StripeAccount::shopping();
+            $tripDateFormatted = $trip->trip_date instanceof \Carbon\Carbon
+                ? $trip->trip_date->isoFormat('D [de] MMMM')
+                : (string) $trip->trip_date;
+
+            $session = $stripe->checkout->sessions->create([
+                'mode'                  => 'payment',
+                'customer'              => $user->stripeShoppingCustomerId(),
+                'line_items'            => [[
+                    'quantity'   => 1,
+                    'price_data' => [
+                        'currency'     => 'usd',
+                        'unit_amount'  => (int) round($depositAmountUsd * 100),
+                        'product_data' => [
+                            'name'        => "Boxly — Reserva de visita en persona",
+                            'description' => sprintf(
+                                '%d tienda(s) en Las Américas el %s · Solicitud %s',
+                                $storeCount,
+                                $tripDateFormatted,
+                                $pr->request_number,
+                            ),
+                        ],
+                    ],
+                ]],
+                // Adaptive pricing lets Stripe show Mexican customers an
+                // MXN-equivalent at checkout while we still settle in USD.
+                'adaptive_pricing'      => ['enabled' => true],
+                'metadata'              => [
+                    'type'                => 'in_person_deposit',
+                    'purchase_request_id' => $pr->id,
+                    'request_number'      => $pr->request_number,
+                ],
+                'payment_intent_data'   => [
+                    'metadata' => [
+                        'type'                => 'in_person_deposit',
+                        'purchase_request_id' => $pr->id,
+                        'request_number'      => $pr->request_number,
+                    ],
+                ],
+                'success_url'           => config('app.frontend_url') . '/shop/in-person/success?ref=' . urlencode($pr->request_number),
+                'cancel_url'            => config('app.frontend_url') . '/shop/in-person/review?cancelled=1',
+            ]);
+
+            $pr->update([
+                'deposit_checkout_session_id' => $session->id,
+            ]);
+
+            return response()->json([
+                'success'      => true,
+                'message'      => 'Redirect to deposit checkout.',
+                'checkout_url' => $session->url,
+                'data'         => $pr->fresh()->load(['items', 'shoppingTrip', 'stores']),
+            ], 201);
+        } catch (\Exception $e) {
+            Log::error('In-person deposit Checkout Session failed', [
+                'pr_id' => $pr->id,
+                'error' => $e->getMessage(),
+            ]);
+            return response()->json([
+                'success' => false,
+                'message' => 'No se pudo iniciar el pago. Intenta de nuevo en unos minutos.',
                 'error'   => config('app.debug') ? $e->getMessage() : null,
             ], 500);
         }
