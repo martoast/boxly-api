@@ -24,7 +24,10 @@ class ShoppingTrip extends Model
     ];
 
     protected $casts = [
-        'trip_date' => 'date',
+        // 'date:Y-m-d' so JSON serialises as "2026-05-25" not the full ISO
+        // timestamp — the trip is a calendar day, has no time component,
+        // and frontends were choking on the trailing T00:00:00.000000Z.
+        'trip_date' => 'date:Y-m-d',
     ];
 
     public function purchaseRequests(): HasMany
