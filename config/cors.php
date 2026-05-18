@@ -41,6 +41,7 @@ return [
         'shipment-tracking/*',
         'purchase-requests',
         'purchase-requests/*',
+        'shopping-trips/*',
         'affiliate',
         'affiliate/*',
         'campaign/*',
