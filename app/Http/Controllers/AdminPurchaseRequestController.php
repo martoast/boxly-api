@@ -91,7 +91,7 @@ class AdminPurchaseRequestController extends Controller
      *
      * After verifying availability at the source store, she enters the
      * actual taxes + shipping the store charged her at checkout, plus a
-     * Boxly commission % (default 8% — defined in services.commission).
+     * Boxly commission % (default 10% — defined in services.commission).
      * The system computes the per-item final USD on save and persists
      * it so the quote step can sum it up cleanly.
      *
@@ -780,7 +780,8 @@ class AdminPurchaseRequestController extends Controller
             $shippingUsd = (float) ($validated['shipping_cost'] ?? 0);
             $salesTaxUsd = (float) ($validated['sales_tax']     ?? 0);
         }
-        $feePercent  = (float) ($validated['processing_fee_percent'] ?? 8);
+        $feePercent  = (float) ($validated['processing_fee_percent']
+            ?? config('services.commission.default_percent', 10));
 
         $purchaseRequest->load('items');
 
@@ -813,7 +814,7 @@ class AdminPurchaseRequestController extends Controller
 
         // In-person PRs paid the $10/store scheduling deposit upfront via
         // Stripe Checkout — we don't double-charge it on the post-trip
-        // quote. Items + actual store shipping/tax + 8% processing fee only.
+        // quote. Items + actual store shipping/tax + processing fee only.
         $preFeeUsd = round($itemsSubtotalUsd + $shippingUsd + $salesTaxUsd, 2);
         $feeUsd    = round($preFeeUsd * ($feePercent / 100), 2);
         $totalUsd  = round($preFeeUsd + $feeUsd, 2);
