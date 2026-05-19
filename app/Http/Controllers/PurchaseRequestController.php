@@ -169,6 +169,94 @@ class PurchaseRequestController extends Controller
         }
     }
 
+    /**
+     * Re-create a Stripe Checkout Session for an in-person PR that's still
+     * sitting in awaiting_deposit. Customers come back to the PR detail
+     * after a cancel/timeout and need a fresh paywall URL — old sessions
+     * expire (~24h) or get marked complete server-side once paid.
+     *
+     * Always mints a new session; if a previous one was paid we'd already
+     * have flipped the PR to pending_review and this endpoint would refuse.
+     */
+    public function createDepositCheckout(Request $request, PurchaseRequest $purchaseRequest)
+    {
+        if ($purchaseRequest->user_id !== $request->user()->id) {
+            return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
+        }
+        if (! $purchaseRequest->isInPerson()) {
+            return response()->json(['success' => false, 'message' => 'Not an in-person request'], 400);
+        }
+        if ($purchaseRequest->status !== PurchaseRequest::STATUS_AWAITING_DEPOSIT) {
+            return response()->json(['success' => false, 'message' => 'Deposit is no longer pending'], 400);
+        }
+
+        try {
+            $user  = $purchaseRequest->user;
+            $trip  = $purchaseRequest->shoppingTrip;
+            $stripe = StripeAccount::shopping();
+
+            $tripDateFormatted = $trip && $trip->trip_date instanceof \Carbon\Carbon
+                ? $trip->trip_date->isoFormat('D [de] MMMM')
+                : (string) ($trip?->trip_date ?? '');
+
+            $session = $stripe->checkout->sessions->create([
+                'mode'                  => 'payment',
+                'customer'              => $user->stripeShoppingCustomerId(),
+                'line_items'            => [[
+                    'quantity'   => 1,
+                    'price_data' => [
+                        'currency'     => 'usd',
+                        'unit_amount'  => (int) round((float) $purchaseRequest->deposit_amount_usd * 100),
+                        'product_data' => [
+                            'name'        => 'Boxly — Reserva de visita en persona',
+                            'description' => sprintf(
+                                '%d tienda(s) en Las Américas el %s · Solicitud %s',
+                                (int) $purchaseRequest->in_person_store_count,
+                                $tripDateFormatted,
+                                $purchaseRequest->request_number,
+                            ),
+                        ],
+                    ],
+                ]],
+                'adaptive_pricing'      => ['enabled' => true],
+                'metadata'              => [
+                    'type'                => 'in_person_deposit',
+                    'purchase_request_id' => $purchaseRequest->id,
+                    'request_number'      => $purchaseRequest->request_number,
+                ],
+                'payment_intent_data'   => [
+                    'metadata' => [
+                        'type'                => 'in_person_deposit',
+                        'purchase_request_id' => $purchaseRequest->id,
+                        'request_number'      => $purchaseRequest->request_number,
+                    ],
+                ],
+                'success_url'           => config('app.frontend_url') . '/shop/in-person/success?ref=' . urlencode($purchaseRequest->request_number),
+                // Cancel takes them back to this PR's detail so the awaiting-
+                // deposit banner is right there with the same Pay CTA.
+                'cancel_url'            => config('app.frontend_url') . '/app/purchase-requests/' . $purchaseRequest->id,
+            ]);
+
+            $purchaseRequest->update([
+                'deposit_checkout_session_id' => $session->id,
+            ]);
+
+            return response()->json([
+                'success'      => true,
+                'checkout_url' => $session->url,
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Failed to re-create in-person deposit Checkout Session', [
+                'pr_id' => $purchaseRequest->id,
+                'error' => $e->getMessage(),
+            ]);
+            return response()->json([
+                'success' => false,
+                'message' => 'No se pudo iniciar el pago. Intenta de nuevo en unos minutos.',
+            ], 500);
+        }
+    }
+
     public function show(Request $request, PurchaseRequest $purchaseRequest)
     {
         if ($purchaseRequest->user_id !== $request->user()->id) {

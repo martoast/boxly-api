@@ -210,6 +210,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/in-person', [PurchaseRequestController::class, 'storeInPerson']);
         Route::get('/{purchaseRequest}', [PurchaseRequestController::class, 'show']);
         Route::put('/{purchaseRequest}', [PurchaseRequestController::class, 'update']);
+        // Re-issue a Stripe Checkout URL for an in-person PR still in
+        // awaiting_deposit (customer cancelled or session expired).
+        Route::post('/{purchaseRequest}/deposit-checkout', [PurchaseRequestController::class, 'createDepositCheckout']);
     });
 
     // In-person flow read-only endpoints — open trips for the calendar
