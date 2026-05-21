@@ -9,6 +9,8 @@ use Illuminate\Http\Request;
 use App\Http\Requests\CompleteOrderRequest;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use App\Http\Requests\UpdateOrderRequest;
 
 class OrderController extends Controller
@@ -244,6 +246,82 @@ class OrderController extends Controller
                 'message' => 'Failed to delete order'
             ], 500);
         }
+    }
+
+    /**
+     * Upload one or more proof-of-purchase files for the whole order.
+     * Appends to the existing array so customers can add receipts per store.
+     */
+    public function uploadProofs(Request $request, Order $order)
+    {
+        if ($order->user_id !== $request->user()->id) {
+            return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
+        }
+
+        if (!in_array($order->status, [
+            Order::STATUS_COLLECTING,
+            Order::STATUS_AWAITING_PACKAGES,
+            Order::STATUS_PACKAGES_COMPLETE,
+        ])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cannot modify proofs - order is already being processed.',
+            ], 422);
+        }
+
+        $request->validate([
+            'files' => 'required|array|min:1',
+            'files.*' => 'file|mimes:jpg,jpeg,png,pdf|max:10240', // 10MB each
+        ]);
+
+        $user = $request->user();
+        $userName = Str::slug($user->name);
+        $storagePath = "users/{$userName}-{$user->id}/orders/{$order->order_number}/proofs";
+
+        $files = $order->proof_of_purchase_files ?? [];
+
+        foreach ($request->file('files') as $file) {
+            $extension = $file->getClientOriginalExtension();
+            $filename = 'proof-' . time() . '-' . Str::random(6) . ".{$extension}";
+            $path = Storage::disk('spaces')->putFileAs($storagePath, $file, $filename, 'public');
+
+            $files[] = [
+                'path' => $path,
+                'url' => config('filesystems.disks.spaces.url') . '/' . $path,
+                'filename' => $file->getClientOriginalName(),
+                'mime_type' => $file->getClientMimeType(),
+                'size' => $file->getSize(),
+            ];
+        }
+
+        $order->update(['proof_of_purchase_files' => $files]);
+
+        return response()->json(['success' => true, 'data' => $order->fresh()]);
+    }
+
+    /**
+     * Remove a single proof-of-purchase file (by array index) from the order.
+     */
+    public function deleteProof(Request $request, Order $order, int $index)
+    {
+        if ($order->user_id !== $request->user()->id) {
+            return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
+        }
+
+        $files = $order->proof_of_purchase_files ?? [];
+
+        if (!isset($files[$index])) {
+            return response()->json(['success' => false, 'message' => 'Proof not found'], 404);
+        }
+
+        if (!empty($files[$index]['path'])) {
+            Storage::disk('spaces')->delete($files[$index]['path']);
+        }
+
+        array_splice($files, $index, 1);
+        $order->update(['proof_of_purchase_files' => array_values($files)]);
+
+        return response()->json(['success' => true, 'data' => $order->fresh()]);
     }
 
     public function complete(CompleteOrderRequest $request, Order $order)

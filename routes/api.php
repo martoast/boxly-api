@@ -245,6 +245,10 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/{order}/items/{item}', [OrderItemController::class, 'update']);
         Route::delete('/{order}/items/{item}', [OrderItemController::class, 'destroy']);
         Route::get('/{order}/items/{item}/proof', [OrderItemController::class, 'viewProof']);
+
+        // Order-level proof of purchase (multiple files for the whole order)
+        Route::post('/{order}/proofs', [OrderController::class, 'uploadProofs']);
+        Route::delete('/{order}/proofs/{index}', [OrderController::class, 'deleteProof'])->where('index', '[0-9]+');
     });
     
     /*

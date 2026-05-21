@@ -32,8 +32,9 @@ class StoreOrderItemRequest extends FormRequest
             'tracking_url' => 'nullable|url|max:1000',
             'carrier' => 'nullable|string|max:50',
             'estimated_delivery_date' => 'nullable|date|after_or_equal:today',
-            // File uploads. Proof of purchase is mandatory on every new item.
-            'proof_of_purchase' => 'required|file|mimes:jpg,jpeg,png,pdf|max:10240', // 10MB
+            // File uploads. Proof of purchase is now collected per-order (not
+            // per-item), so it's optional here — admins may still attach one.
+            'proof_of_purchase' => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:10240', // 10MB
             'product_image' => 'nullable|file|mimes:jpg,jpeg,png,webp|max:5120', // 5MB Image
         ];
     }
@@ -45,7 +46,6 @@ class StoreOrderItemRequest extends FormRequest
             'product_name.required' => 'Product name is required.',
             'quantity.required' => 'Quantity is required.',
             'declared_value.required' => 'Declared value is required.',
-            'proof_of_purchase.required' => 'Proof of purchase (receipt) is required for every item.',
             'proof_of_purchase.max' => 'Proof of purchase file size cannot exceed 10MB.',
             'product_image.image' => 'Product image must be an image file.',
             'product_image.max' => 'Product image size cannot exceed 5MB.',

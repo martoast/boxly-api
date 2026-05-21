@@ -72,6 +72,7 @@ class Order extends Model
         'arrival_image_mime_type',
         'arrival_image_size',
         'arrival_image_url',
+        'proof_of_purchase_files',
     ];
 
     protected $casts = [
@@ -103,6 +104,7 @@ class Order extends Model
         'delivered_at' => 'datetime',
         'gia_size' => 'integer',
         'arrival_image_size' => 'integer',
+        'proof_of_purchase_files' => 'array',
     ];
 
     protected $appends = [
@@ -269,6 +271,10 @@ class Order extends Model
 
         if ($this->items()->count() === 0) {
             throw new \Exception('Order must have at least one item');
+        }
+
+        if (empty($this->proof_of_purchase_files)) {
+            throw new \Exception('Order must have at least one proof of purchase');
         }
 
         $this->update([
