@@ -54,6 +54,22 @@ class UpdateOrderItemRequest extends FormRequest
     }
 
     /**
+     * Proof of purchase is mandatory on every item, so it can't be removed
+     * during an edit unless a replacement file is uploaded in the same request.
+     */
+    public function withValidator($validator): void
+    {
+        $validator->after(function ($validator) {
+            if ($this->boolean('remove_proof_of_purchase') && ! $this->hasFile('proof_of_purchase')) {
+                $validator->errors()->add(
+                    'proof_of_purchase',
+                    'Proof of purchase is required — upload a replacement before removing the current one.'
+                );
+            }
+        });
+    }
+
+    /**
      * Get custom error messages
      */
     public function messages(): array
