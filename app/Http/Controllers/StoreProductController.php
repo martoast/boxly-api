@@ -212,6 +212,17 @@ class StoreProductController extends Controller
     {
         $query = Store::active();
 
+        // Only surface stores that actually have at least one active,
+        // currently-available product — otherwise the public list is cluttered
+        // with brands we seeded but haven't stocked yet.
+        $query->whereHas('products', function ($q) {
+            $q->where('status', Product::STATUS_ACTIVE)
+              ->where(function ($q2) {
+                  $q2->whereNull('available_until')
+                     ->orWhere('available_until', '>', now());
+              });
+        });
+
         if ($request->boolean('on_landing')) {
             $query->where('show_on_landing', true);
         }
