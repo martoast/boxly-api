@@ -24,6 +24,7 @@ class AdminProductController extends Controller
             'store_id'    => 'nullable|integer|exists:stores,id',
             'category_id' => 'nullable|integer|exists:categories,id',
             'gender_id'   => 'nullable|integer|exists:genders,id',
+            'is_featured' => 'nullable|boolean',
             'search'      => 'nullable|string|max:200',
         ]);
 
@@ -56,6 +57,9 @@ class AdminProductController extends Controller
         }
         if ($genderId = $request->input('gender_id')) {
             $query->where('gender_id', $genderId);
+        }
+        if ($request->filled('is_featured')) {
+            $query->where('is_featured', $request->boolean('is_featured'));
         }
         if ($search = $request->input('search')) {
             $query->where(function ($q) use ($search) {
