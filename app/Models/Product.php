@@ -66,6 +66,7 @@ class Product extends Model
         'width_cm',
         'height_cm',
         'status',
+        'is_featured',
         'available_until',
         'store_id',
         'gender_id',
@@ -74,6 +75,7 @@ class Product extends Model
 
     protected $casts = [
         'requires_render' => 'boolean',
+        'is_featured'     => 'boolean',
         'price_cents'     => 'integer',
         'cost_cents'      => 'integer',
         'markup_percent'  => 'decimal:2',

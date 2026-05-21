@@ -28,7 +28,10 @@ return new class extends Migration {
             $table->foreignId('category_id')->constrained()->cascadeOnDelete();
             $table->timestamps();
 
-            $table->unique(['purchase_request_id', 'category_id']);
+            // Explicit short name — Laravel's auto-generated name
+            // (purchase_request_categories_purchase_request_id_category_id_unique)
+            // exceeds MySQL's 64-char identifier limit.
+            $table->unique(['purchase_request_id', 'category_id'], 'pr_cat_pivot_unique');
         });
     }
 

@@ -75,6 +75,7 @@ Route::get('/products/{priceId}', [ProductController::class, 'show']); // Added 
 // an issue we'll add a Cloudflare API purge step on admin updates.
 Route::middleware('edge.cache:300,3600,86400')->prefix('store')->group(function () {
     Route::get('/products', [StoreProductController::class, 'index']);
+    Route::get('/products/featured', [StoreProductController::class, 'featured']);
     Route::get('/products/{slug}', [StoreProductController::class, 'show']);
     Route::get('/hero', [\App\Http\Controllers\ShopHeroController::class, 'publicShow']);
     Route::get('/categories', [StoreProductController::class, 'categories']);

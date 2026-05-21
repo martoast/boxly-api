@@ -156,6 +156,29 @@ class StoreProductController extends Controller
      * backfilled with the first listed product's first image so the UI
      * never has to render an empty placeholder.
      */
+    /**
+     * Featured products for the landing-page "Trending en USA" rail.
+     * Up to 8 active, in-stock products flagged is_featured. Edge-cached
+     * via the /store prefix middleware. Admin curates via the products
+     * admin page's is_featured toggle.
+     */
+    public function featured()
+    {
+        $products = Product::query()
+            ->where('is_featured', true)
+            ->where('status', Product::STATUS_ACTIVE)
+            ->where(function ($q) {
+                $q->whereNull('available_until')
+                  ->orWhere('available_until', '>', now());
+            })
+            ->with(['store:id,name,slug', 'categories:id,name,slug'])
+            ->orderByDesc('updated_at')
+            ->limit(8)
+            ->get();
+
+        return response()->json(['success' => true, 'data' => $products]);
+    }
+
     public function categories()
     {
         $categories = Category::active()
