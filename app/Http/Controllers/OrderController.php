@@ -271,7 +271,10 @@ class OrderController extends Controller
 
         $request->validate([
             'files' => 'required|array|min:1',
-            'files.*' => 'file|mimes:jpg,jpeg,png,pdf|max:10240', // 10MB each
+            // PDF only — legal/law-enforcement need the order-confirmation PDF.
+            'files.*' => 'file|mimes:pdf|max:10240', // 10MB each
+        ], [
+            'files.*.mimes' => 'Proof of purchase must be a PDF file.',
         ]);
 
         $user = $request->user();
