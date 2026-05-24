@@ -39,7 +39,11 @@ class AdminPurchaseRequestController extends Controller
             $search = $request->search;
             $query->where(function($q) use ($search) {
                 $q->where('request_number', 'like', "%{$search}%")
-                  ->orWhereHas('user', fn($u) => $u->where('email', 'like', "%{$search}%"));
+                  ->orWhereHas('user', function ($u) use ($search) {
+                      $u->where('email', 'like', "%{$search}%")
+                        ->orWhere('name', 'like', "%{$search}%")
+                        ->orWhere('phone', 'like', "%{$search}%");
+                  });
             });
         }
 
