@@ -64,7 +64,9 @@ class AdminProductController extends Controller
         if ($search = $request->input('search')) {
             $query->where(function ($q) use ($search) {
                 $q->where('name', 'like', "%{$search}%")
-                  ->orWhere('sku', 'like', "%{$search}%");
+                  ->orWhere('sku', 'like', "%{$search}%")
+                  ->orWhereHas('store', fn ($s) => $s->where('name', 'like', "%{$search}%"))
+                  ->orWhereHas('categories', fn ($c) => $c->where('name', 'like', "%{$search}%"));
             });
         }
 
