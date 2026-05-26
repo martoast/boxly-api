@@ -221,6 +221,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::prefix('shopping-trips')->group(function () {
         Route::get('/availability', [ShoppingTripsController::class, 'availability']);
         Route::get('/in-person-stores', [ShoppingTripsController::class, 'inPersonStores']);
+        Route::post('/book', [\App\Http\Controllers\ShoppingTripBookingController::class, 'store']);
     });
 
     // Boxly Store — checkout flows directly into the assisted Purchase Request pipeline

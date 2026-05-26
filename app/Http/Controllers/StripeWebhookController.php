@@ -101,6 +101,84 @@ class StripeWebhookController extends Controller
         if ($type === 'in_person_deposit' && isset($metadata['purchase_request_id'])) {
             $this->handleInPersonDepositPaid($session, $metadata);
         }
+
+        if ($type === 'trip_booking' && isset($metadata['shopping_trip_booking_id'])) {
+            $this->handleTripBookingPaid($session, $metadata);
+        }
+    }
+
+    /**
+     * Trip booking deposit cleared.
+     *
+     * Uses a DB lock to handle the race condition where two customers pay for
+     * the same trip simultaneously. The first one in wins and the trip is
+     * closed immediately. The second one gets an automatic refund.
+     */
+    protected function handleTripBookingPaid($session, array $metadata)
+    {
+        $booking = \App\Models\ShoppingTripBooking::find($metadata['shopping_trip_booking_id']);
+
+        if (! $booking) {
+            Log::warning('ShoppingTripBooking not found for trip_booking webhook', [
+                'id'         => $metadata['shopping_trip_booking_id'],
+                'session_id' => $session->id,
+            ]);
+            return;
+        }
+
+        // Idempotency — webhook may fire more than once.
+        if ($booking->status === \App\Models\ShoppingTripBooking::STATUS_CONFIRMED) {
+            return;
+        }
+
+        \Illuminate\Support\Facades\DB::transaction(function () use ($booking, $session) {
+            // Lock the trip row so only one webhook can claim it at a time.
+            $trip = \App\Models\ShoppingTrip::lockForUpdate()->find($booking->shopping_trip_id);
+
+            $alreadyConfirmed = \App\Models\ShoppingTripBooking::where('shopping_trip_id', $trip->id)
+                ->where('status', \App\Models\ShoppingTripBooking::STATUS_CONFIRMED)
+                ->where('id', '!=', $booking->id)
+                ->exists();
+
+            if ($alreadyConfirmed) {
+                // Race condition — another booking beat this one to payment.
+                // Cancel this booking and issue a full refund via Stripe.
+                $booking->update(['status' => \App\Models\ShoppingTripBooking::STATUS_CANCELLED]);
+
+                try {
+                    $stripe = \App\Services\StripeAccount::main();
+                    if (! empty($session->payment_intent)) {
+                        $stripe->refunds->create(['payment_intent' => $session->payment_intent]);
+                        Log::info('Auto-refunded duplicate trip booking payment', [
+                            'booking_id'      => $booking->id,
+                            'payment_intent'  => $session->payment_intent,
+                        ]);
+                    }
+                } catch (\Exception $e) {
+                    Log::error('Failed to auto-refund duplicate trip booking', [
+                        'booking_id' => $booking->id,
+                        'error'      => $e->getMessage(),
+                    ]);
+                }
+
+                return;
+            }
+
+            // First payment in — confirm the booking and close the trip so
+            // no one else can book it from the date picker.
+            $booking->update([
+                'status'  => \App\Models\ShoppingTripBooking::STATUS_CONFIRMED,
+                'paid_at' => now(),
+            ]);
+
+            $trip->update(['status' => \App\Models\ShoppingTrip::STATUS_CLOSED]);
+
+            Log::info('Trip booking confirmed, trip closed', [
+                'booking_id'     => $booking->id,
+                'booking_number' => $booking->booking_number,
+                'trip_id'        => $trip->id,
+            ]);
+        });
     }
 
     /**

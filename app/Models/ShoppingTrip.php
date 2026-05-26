@@ -35,6 +35,11 @@ class ShoppingTrip extends Model
         return $this->hasMany(PurchaseRequest::class);
     }
 
+    public function bookings(): HasMany
+    {
+        return $this->hasMany(ShoppingTripBooking::class);
+    }
+
     public function scopeOpen($query)
     {
         return $query->where('status', self::STATUS_OPEN)

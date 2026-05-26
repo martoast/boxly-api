@@ -14,7 +14,9 @@ class AdminShoppingTripsController extends Controller
 {
     public function index(Request $request)
     {
-        $query = ShoppingTrip::query()->withCount('purchaseRequests');
+        $query = ShoppingTrip::query()
+            ->withCount('purchaseRequests')
+            ->withCount(['bookings as confirmed_bookings_count' => fn ($q) => $q->where('status', 'confirmed')]);
 
         if ($status = $request->input('status')) {
             $query->where('status', $status);
@@ -23,7 +25,7 @@ class AdminShoppingTripsController extends Controller
             $query->whereDate('trip_date', '>=', now()->toDateString());
         }
 
-        $trips = $query->orderBy('trip_date', 'desc')
+        $trips = $query->orderBy('trip_date', 'asc')
             ->paginate((int) $request->input('per_page', 50));
 
         return response()->json(['success' => true, 'data' => $trips]);
@@ -31,10 +33,50 @@ class AdminShoppingTripsController extends Controller
 
     public function show(ShoppingTrip $shoppingTrip)
     {
-        return response()->json([
-            'success' => true,
-            'data'    => $shoppingTrip->load(['purchaseRequests.user', 'purchaseRequests.items']),
-        ]);
+        $shoppingTrip->load(['bookings.user']);
+
+        // Resolve store and category names for each confirmed booking so the
+        // admin detail page can render them without extra fetches.
+        $stores     = \App\Models\Store::pluck('name', 'id');
+        $categories = \App\Models\Category::pluck('name', 'id');
+
+        $bookings = $shoppingTrip->bookings
+            ->where('status', \App\Models\ShoppingTripBooking::STATUS_CONFIRMED)
+            ->values()
+            ->map(function ($booking) use ($stores, $categories) {
+                $data = $booking->toArray();
+
+                // Resolve store names from IDs.
+                $data['store_names'] = collect($booking->store_ids ?? [])
+                    ->map(fn ($id) => $stores->get($id))
+                    ->filter()
+                    ->values()
+                    ->all();
+
+                // Per-store category breakdown: [['store_name'=>..., 'category_names'=>[...]], ...]
+                $data['store_breakdown'] = collect($booking->store_ids ?? [])
+                    ->map(function ($storeId) use ($booking, $stores, $categories) {
+                        $catIds = ($booking->store_categories ?? [])[$storeId] ?? [];
+                        return [
+                            'store_id'       => $storeId,
+                            'store_name'     => $stores->get($storeId, 'Unknown'),
+                            'category_names' => collect($catIds)
+                                ->map(fn ($cid) => $categories->get($cid))
+                                ->filter()
+                                ->values()
+                                ->all(),
+                        ];
+                    })
+                    ->values()
+                    ->all();
+
+                return $data;
+            });
+
+        $result = $shoppingTrip->toArray();
+        $result['bookings'] = $bookings;
+
+        return response()->json(['success' => true, 'data' => $result]);
     }
 
     public function store(Request $request)
