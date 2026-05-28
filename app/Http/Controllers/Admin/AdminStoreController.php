@@ -41,9 +41,10 @@ class AdminStoreController extends Controller
             'logo_url'        => 'nullable|url|max:500',
             'cover_image_url' => 'nullable|url|max:500',
             'description'     => 'nullable|string',
-            'is_active'       => 'nullable|boolean',
-            'show_on_landing' => 'nullable|boolean',
-            'sort_order'      => 'nullable|integer|min:0',
+            'is_active'             => 'nullable|boolean',
+            'show_on_landing'       => 'nullable|boolean',
+            'is_in_person_available'=> 'nullable|boolean',
+            'sort_order'            => 'nullable|integer|min:0',
         ]);
 
         $store = Store::create($validated);
@@ -59,9 +60,10 @@ class AdminStoreController extends Controller
             'logo_url'        => 'nullable|url|max:500',
             'cover_image_url' => 'nullable|url|max:500',
             'description'     => 'nullable|string',
-            'is_active'       => 'nullable|boolean',
-            'show_on_landing' => 'nullable|boolean',
-            'sort_order'      => 'nullable|integer|min:0',
+            'is_active'             => 'nullable|boolean',
+            'show_on_landing'       => 'nullable|boolean',
+            'is_in_person_available'=> 'nullable|boolean',
+            'sort_order'            => 'nullable|integer|min:0',
         ]);
 
         $store->update($validated);
