@@ -10,6 +10,7 @@ use App\Http\Controllers\AdminOrderItemController;
 use App\Http\Controllers\AdminQuoteController;
 use App\Http\Controllers\AdminCustomerController;
 use App\Http\Controllers\AdminOrderManagementController;
+use App\Http\Controllers\OperationsBoardController;
 use App\Http\Controllers\StripeWebhookController;
 use App\Http\Controllers\ProductController;
 use App\Http\Controllers\Auth\AuthSocialRedirectController;
@@ -263,7 +264,11 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/dashboard/manual-metrics', [UnifiedAdminDashboardController::class, 'updateManualMetrics']);
         Route::get('/dashboard/manual-metrics', [UnifiedAdminDashboardController::class, 'getManualMetrics']);
         Route::delete('/admin/dashboard/manual-metrics', [UnifiedAdminDashboardController::class, 'deleteManualMetrics']);
-        
+
+        // Weekly Operations Board — warehouse source of truth
+        Route::get('/operations-board', [OperationsBoardController::class, 'index']);
+        Route::get('/operations-board/warehouse-list', [OperationsBoardController::class, 'warehouseList']);
+
         Route::prefix('purchase-requests')->group(function () {
             Route::get('/', [AdminPurchaseRequestController::class, 'index']);
             Route::post('/', [AdminPurchaseRequestController::class, 'store']);
@@ -346,6 +351,8 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/{order}/cancel-quote', [AdminQuoteController::class, 'cancelInvoice']);
 
             Route::post('/{order}/consolidate', [AdminOrderController::class, 'consolidateOrder']);
+            // Operations Board reschedule — set/clear ship date on a consolidated order
+            Route::post('/{order}/ship-date', [OperationsBoardController::class, 'updateShipDate']);
             Route::post('/{order}/mark-consolidation-paid', [AdminOrderController::class, 'markConsolidationPaid']);
             Route::post('/{order}/ship', [AdminOrderController::class, 'shipOrder']);
             Route::get('/{order}/gia', [AdminOrderController::class, 'viewGia']);

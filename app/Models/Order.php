@@ -46,6 +46,7 @@ class Order extends Model
         'paid_at',
         'delivery_address',
         'estimated_delivery_date',
+        'planned_ship_date',
         'actual_delivery_date',
         'completed_at',
         'processing_started_at',
@@ -95,6 +96,7 @@ class Order extends Model
         'deposit_paid_at' => 'datetime',
         'consolidation_paid_at' => 'datetime',
         'estimated_delivery_date' => 'date',
+        'planned_ship_date' => 'date',
         'actual_delivery_date' => 'date',
         'completed_at' => 'datetime',
         'processing_started_at' => 'datetime',
@@ -124,6 +126,10 @@ class Order extends Model
 
     public $previousStatus;
     public $skipEmailNotifications = false;
+
+    // When true, the planned_ship_date watcher will NOT send the
+    // ShipDateChanged email (admin opted out for this particular reschedule).
+    public $skipShipDateEmail = false;
 
     protected static function boot()
     {
@@ -175,6 +181,40 @@ class Order extends Model
                     Log::error('Failed to send order status email', [
                         'order_id' => $order->id,
                         'error' => $e->getMessage()
+                    ]);
+                }
+            }
+        });
+
+        // Watcher: notify the customer when the ship date is *changed* — i.e. an
+        // already-scheduled order is moved to a different day. Deliberately does
+        // NOT fire on the initial scheduling at consolidation (null -> date, which
+        // already sends the consolidation email) nor on un-scheduling (date -> null).
+        // Runs regardless of $skipEmailNotifications: a reschedule is always worth telling them.
+        static::updated(function ($order) {
+            if ($order->skipShipDateEmail) {
+                return;
+            }
+
+            if (! $order->wasChanged('planned_ship_date')) {
+                return;
+            }
+
+            $old = $order->getOriginal('planned_ship_date');
+            $new = $order->planned_ship_date;
+
+            if ($old && $new) {
+                try {
+                    $order->loadMissing('user');
+                    Mail::to($order->user)->queue(new \App\Mail\ShipDateChanged($order));
+                    Log::info('Ship date changed email queued', [
+                        'order_id' => $order->id,
+                        'new_ship_date' => (string) $new,
+                    ]);
+                } catch (\Exception $e) {
+                    Log::error('Failed to queue ship date changed email', [
+                        'order_id' => $order->id,
+                        'error' => $e->getMessage(),
                     ]);
                 }
             }

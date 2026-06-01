@@ -176,6 +176,7 @@ class AdminOrderManagementController extends Controller
             'shipped_at' => 'nullable|date',
             'delivered_at' => 'nullable|date',
             'estimated_delivery_date' => 'nullable|date',
+            'planned_ship_date' => 'nullable|date',
             'actual_delivery_date' => 'nullable|date',
             'guia_number' => 'nullable|string|max:50',
             'stripe_invoice_id' => 'nullable|string|max:255',

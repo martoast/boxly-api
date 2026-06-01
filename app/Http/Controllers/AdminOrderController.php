@@ -211,6 +211,9 @@ class AdminOrderController extends Controller
             // Defaults to the Stripe product's list price when omitted.
             'boxes.*.price' => 'nullable|numeric|min:0',
             'payment_method' => 'nullable|in:stripe,manual_transfer',
+            // Required ship date — scheduling the order onto the Operations Board
+            // is part of consolidating it. Drives the weekly board calendar.
+            'planned_ship_date' => 'required|date',
         ]);
 
         $paymentMethod = $request->payment_method ?? 'stripe';
@@ -362,6 +365,9 @@ class AdminOrderController extends Controller
 
             // Change status to awaiting payment
             $order->status = Order::STATUS_AWAITING_PAYMENT;
+
+            // Planned ship date scheduled at consolidation — drives the Operations Board.
+            $order->planned_ship_date = $request->planned_ship_date;
 
             $order->skipEmailNotifications = true;
             $order->save();
