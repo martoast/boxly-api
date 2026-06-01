@@ -125,14 +125,6 @@
                 </tr>
                 <tr>
                     <td style="padding: 8px 0; color: #666;">
-                        {{ $locale === 'es' ? 'Número de Cuenta:' : 'Account Number:' }}
-                    </td>
-                    <td style="padding: 8px 0; text-align: right; font-weight: bold; font-family: monospace;">
-                        {{ $bankDetails['account_number'] }}
-                    </td>
-                </tr>
-                <tr>
-                    <td style="padding: 8px 0; color: #666;">
                         {{ $locale === 'es' ? 'CLABE Interbancaria:' : 'CLABE:' }}
                     </td>
                     <td style="padding: 8px 0; text-align: right; font-weight: bold; font-family: monospace;">
