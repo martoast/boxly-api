@@ -262,6 +262,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::middleware('admin')->prefix('admin')->group(function () {
         
         Route::get('/dashboard', [UnifiedAdminDashboardController::class, 'index']);
+        Route::get('/dashboard/time-series', [UnifiedAdminDashboardController::class, 'timeSeries']);
         Route::post('/dashboard/manual-metrics', [UnifiedAdminDashboardController::class, 'updateManualMetrics']);
         Route::get('/dashboard/manual-metrics', [UnifiedAdminDashboardController::class, 'getManualMetrics']);
         Route::delete('/admin/dashboard/manual-metrics', [UnifiedAdminDashboardController::class, 'deleteManualMetrics']);

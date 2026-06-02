@@ -78,6 +78,121 @@ class UnifiedAdminDashboardController extends Controller
     }
 
     /**
+     * All-time monthly trajectory for the dashboard charts.
+     *
+     * Returns one bucket per month from the first month of real activity to
+     * now, each holding revenue / expenses / profit / new + cumulative
+     * customers / sales count / orders count. Mirrors the same computation as
+     * getFinancialData() and respects per-month MonthlyManualMetric overrides
+     * (financial + orders) so the charts never contradict the headline cards.
+     *
+     * GET /admin/dashboard/time-series
+     */
+    public function timeSeries(Request $request)
+    {
+        $fx = 18.0; // fixed USD->MXN, same as getFinancialData()
+
+        // --- Grouped aggregations (one query per metric, keyed by 'Y-m') ---
+        // Revenue from fully-paid orders, by paid_at month.
+        $paidOrders = Order::whereNotNull('paid_at')
+            ->selectRaw("DATE_FORMAT(paid_at, '%Y-%m') as ym, SUM(COALESCE(amount_paid, deposit_amount, 0)) as total, COUNT(*) as cnt")
+            ->groupBy('ym')->get()->keyBy('ym');
+
+        // Deposit revenue on orders not yet fully paid, by deposit_paid_at month.
+        $depositRev = Order::whereNotNull('deposit_paid_at')->whereNull('paid_at')
+            ->selectRaw("DATE_FORMAT(deposit_paid_at, '%Y-%m') as ym, SUM(deposit_amount) as total")
+            ->groupBy('ym')->get()->keyBy('ym');
+
+        // PR service fees by created_at month, split by currency.
+        $prFees = PurchaseRequest::whereIn('status', ['paid', 'purchased'])
+            ->selectRaw("DATE_FORMAT(created_at, '%Y-%m') as ym, currency, SUM(processing_fee) as total")
+            ->groupBy('ym', 'currency')->get();
+        $prFeesByMonth = [];
+        foreach ($prFees as $row) {
+            $prFeesByMonth[$row->ym] = ($prFeesByMonth[$row->ym] ?? 0)
+                + ($row->currency === 'usd' ? $row->total * $fx : $row->total);
+        }
+
+        // Sales = count of paid/purchased PRs by created_at month.
+        $salesCount = PurchaseRequest::whereIn('status', ['paid', 'purchased'])
+            ->selectRaw("DATE_FORMAT(created_at, '%Y-%m') as ym, COUNT(*) as cnt")
+            ->groupBy('ym')->get()->keyBy('ym');
+
+        // Expenses by expense_date month.
+        $expenses = BusinessExpense::selectRaw("DATE_FORMAT(expense_date, '%Y-%m') as ym, SUM(amount) as total")
+            ->groupBy('ym')->get()->keyBy('ym');
+
+        // New customers by created_at month.
+        $newCustomers = User::where('role', 'customer')
+            ->selectRaw("DATE_FORMAT(created_at, '%Y-%m') as ym, COUNT(*) as cnt")
+            ->groupBy('ym')->get()->keyBy('ym');
+
+        // Per-month manual overrides.
+        $manual = MonthlyManualMetric::all()
+            ->keyBy(fn ($m) => sprintf('%04d-%02d', $m->year, $m->month));
+
+        // --- Find the first month with any activity ---
+        $firstDates = array_filter([
+            Order::whereNotNull('paid_at')->min('paid_at'),
+            BusinessExpense::min('expense_date'),
+            User::where('role', 'customer')->min('created_at'),
+            PurchaseRequest::min('created_at'),
+        ]);
+
+        if (empty($firstDates)) {
+            return response()->json(['success' => true, 'data' => ['months' => []], 'generated_at' => now()->toIso8601String()]);
+        }
+
+        $cursor = Carbon::parse(min($firstDates))->startOfMonth();
+        $last = now()->startOfMonth();
+
+        $months = [];
+        $cumulativeCustomers = 0;
+
+        while ($cursor->lte($last)) {
+            $key = $cursor->format('Y-m');
+
+            $shipping = (float) ($paidOrders[$key]->total ?? 0) + (float) ($depositRev[$key]->total ?? 0);
+            $fees = (float) ($prFeesByMonth[$key] ?? 0);
+            $calcRevenue = $shipping + $fees;
+            $calcExpenses = (float) ($expenses[$key]->total ?? 0);
+            $calcOrders = (int) ($paidOrders[$key]->cnt ?? 0);
+
+            // Apply manual overrides (same flags as getFinancialData()).
+            $m = $manual[$key] ?? null;
+            $isFinancialManual = $m && ($m->is_financial_manual || $m->is_manual_mode);
+            $isOrdersManual = $m && ($m->is_orders_manual || $m->is_manual_mode);
+
+            $revenue = $isFinancialManual ? (float) $m->total_revenue : $calcRevenue;
+            $monthExpenses = $isFinancialManual ? (float) $m->total_expenses : $calcExpenses;
+            $orders = $isOrdersManual ? (int) $m->total_orders : $calcOrders;
+
+            $newCust = (int) ($newCustomers[$key]->cnt ?? 0);
+            $cumulativeCustomers += $newCust;
+
+            $months[] = [
+                'month' => $key,
+                'label' => $cursor->format('M Y'),
+                'revenue' => round($revenue, 2),
+                'expenses' => round($monthExpenses, 2),
+                'profit' => round($revenue - $monthExpenses, 2),
+                'new_customers' => $newCust,
+                'cumulative_customers' => $cumulativeCustomers,
+                'sales_count' => (int) ($salesCount[$key]->cnt ?? 0),
+                'orders_count' => $orders,
+            ];
+
+            $cursor->addMonth();
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => ['months' => $months],
+            'generated_at' => now()->toIso8601String(),
+        ]);
+    }
+
+    /**
      * Update manual metrics for a specific month
      *
      * Supports granular control with individual flags:
