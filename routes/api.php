@@ -38,6 +38,7 @@ use App\Http\Controllers\Admin\AdminStoreController;
 use App\Http\Controllers\Admin\AdminCategoryController;
 use App\Http\Controllers\Admin\AdminGenderController;
 use App\Http\Controllers\Admin\AdminStoreSalesController;
+use App\Http\Controllers\Admin\AdminPurchasedProductController;
 use App\Http\Controllers\Admin\AdminTokenController;
 
 /*
@@ -611,6 +612,14 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::prefix('store-sales')->group(function () {
             Route::get('/', [AdminStoreSalesController::class, 'index']);
             Route::get('/stats', [AdminStoreSalesController::class, 'stats']);
+        });
+
+        Route::prefix('purchased-products')->group(function () {
+            Route::get('/', [AdminPurchasedProductController::class, 'index']);
+            Route::post('/', [AdminPurchasedProductController::class, 'store']);
+            Route::get('/{purchasedProduct}', [AdminPurchasedProductController::class, 'show']);
+            Route::put('/{purchasedProduct}', [AdminPurchasedProductController::class, 'update']);
+            Route::delete('/{purchasedProduct}', [AdminPurchasedProductController::class, 'destroy']);
         });
 
         // Customer lookup — needed by the "create PR for customer" form.

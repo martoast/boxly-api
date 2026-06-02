@@ -6,6 +6,7 @@ use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\PurchaseRequest;
 use App\Models\PurchaseRequestItem;
+use App\Models\PurchasedProduct;
 use App\Models\User;
 use App\Mail\PurchaseRequestQuoteSent;
 use App\Mail\PurchaseRequestItemsPurchased;
@@ -966,6 +967,26 @@ class AdminPurchaseRequestController extends Controller
             'status'       => PurchaseRequest::STATUS_PURCHASED,
             'purchased_at' => now(),
         ]);
+
+        // Auto-seed a Compras (purchased products) tracker row for Velonie,
+        // pre-filled from the PR. She fills the store's order # and flips it to
+        // delivered on arrival. firstOrCreate keyed on the PR avoids duplicates
+        // if the purchase flow is ever re-run.
+        $itemsSummary = $itemsToCopy
+            ->map(fn ($i) => "{$i->quantity}x {$i->product_name}")
+            ->implode("\n");
+
+        PurchasedProduct::firstOrCreate(
+            ['purchase_request_id' => $purchaseRequest->id],
+            [
+                'user_id'       => auth()->id(),
+                'customer_name' => $user->name,
+                'contact_phone' => $user->phone,
+                'items'         => $itemsSummary,
+                'status'        => PurchasedProduct::STATUS_PENDING,
+                'order_date'    => now(),
+            ]
+        );
 
         $order->update([
             'declared_value' => $order->calculateTotalDeclaredValue(),
