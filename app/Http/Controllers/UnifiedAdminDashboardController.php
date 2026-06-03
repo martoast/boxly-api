@@ -252,17 +252,26 @@ class UnifiedAdminDashboardController extends Controller
     }
 
     /**
-     * Manually-entered revenue for months flagged is_manual_mode that fall in
-     * the window. Added on top of calculated revenue to match the legacy
-     * all-time dashboard (early months were logged by hand, not as orders).
-     * Only meaningful for monthly windows (1y/all); manual rows are monthly.
+     * Manually-entered revenue (MonthlyManualMetric, is_manual_mode) that falls
+     * in the window. Added on top of calculated revenue to match the legacy
+     * dashboard (early months were logged by hand, not as orders). Each monthly
+     * lump is spread evenly across its days so ANY window — 30d/90d as well as
+     * 1y/all — picks up the correct prorated share.
      */
     private function manualRevenueInWindow($start, $end): float
     {
-        $from = $start->copy()->startOfMonth();
-        return (float) MonthlyManualMetric::where('is_manual_mode', true)->get()
-            ->filter(fn ($m) => Carbon::create($m->year, $m->month, 1)->betweenIncluded($from, $end))
-            ->sum('total_revenue');
+        $total = 0.0;
+        foreach (MonthlyManualMetric::where('is_manual_mode', true)->get() as $m) {
+            $mStart = Carbon::create($m->year, $m->month, 1)->startOfDay();
+            $mEnd = $mStart->copy()->endOfMonth()->endOfDay();
+            $oStart = $mStart->greaterThan($start) ? $mStart->copy() : $start->copy();
+            $oEnd = $mEnd->lessThan($end) ? $mEnd->copy() : $end->copy();
+            if ($oStart->lte($oEnd)) {
+                $days = (int) $oStart->copy()->startOfDay()->diffInDays($oEnd->copy()->startOfDay()) + 1;
+                $total += ((float) $m->total_revenue / $mStart->daysInMonth) * $days;
+            }
+        }
+        return $total;
     }
 
     /**
@@ -275,10 +284,7 @@ class UnifiedAdminDashboardController extends Controller
         $s = $w['start'];
         $e = $w['end'];
 
-        $revenue = $this->revenueInWindow($s, $e);
-        if (! $w['daily']) {
-            $revenue += $this->manualRevenueInWindow($s, $e);
-        }
+        $revenue = $this->revenueInWindow($s, $e) + $this->manualRevenueInWindow($s, $e);
         $expenses = (float) BusinessExpense::whereBetween('expense_date', [$s, $e])->sum('amount');
         $profit = $revenue - $expenses;
         $margin = $revenue > 0 ? round(($profit / $revenue) * 100, 1) : 0;
@@ -348,14 +354,13 @@ class UnifiedAdminDashboardController extends Controller
             ->selectRaw("DATE_FORMAT(created_at, '$fmt') as bk, COUNT(*) as cnt")
             ->groupBy('bk')->get()->keyBy('bk');
 
-        // Manually-entered revenue per month (only for monthly windows), so the
-        // chart total matches the legacy all-time headline.
-        $manualByMonth = [];
-        if (! $daily) {
-            foreach (MonthlyManualMetric::where('is_manual_mode', true)->get() as $m) {
-                $key = sprintf('%04d-%02d', $m->year, $m->month);
-                $manualByMonth[$key] = ($manualByMonth[$key] ?? 0) + (float) $m->total_revenue;
-            }
+        // Manual revenue spread per-day across its month, so every bucket (daily
+        // or monthly) picks up its share and the chart total matches the headline.
+        $perDayByMonth = [];
+        foreach (MonthlyManualMetric::where('is_manual_mode', true)->get() as $m) {
+            $mk = sprintf('%04d-%02d', $m->year, $m->month);
+            $perDayByMonth[$mk] = ($perDayByMonth[$mk] ?? 0)
+                + (float) $m->total_revenue / Carbon::create($m->year, $m->month, 1)->daysInMonth;
         }
 
         $points = [];
@@ -363,7 +368,20 @@ class UnifiedAdminDashboardController extends Controller
         $cursor = $s->copy();
         while ($cursor->lte($e)) {
             $k = $cursor->format($daily ? 'Y-m-d' : 'Y-m');
-            $rev = (float) ($ord[$k]->rev ?? 0) + (float) ($deposits[$k]->rev ?? 0) + (float) ($fees[$k] ?? 0) + (float) ($manualByMonth[$k] ?? 0);
+
+            $manual = 0.0;
+            if (! empty($perDayByMonth)) {
+                if ($daily) {
+                    $manual = $perDayByMonth[substr($k, 0, 7)] ?? 0;
+                } else {
+                    $monthEnd = $cursor->copy()->endOfMonth();
+                    $clipEnd = $monthEnd->lte($e) ? $monthEnd : $e;
+                    $days = (int) $cursor->copy()->startOfDay()->diffInDays($clipEnd->copy()->startOfDay()) + 1;
+                    $manual = ($perDayByMonth[$k] ?? 0) * $days;
+                }
+            }
+
+            $rev = (float) ($ord[$k]->rev ?? 0) + (float) ($deposits[$k]->rev ?? 0) + (float) ($fees[$k] ?? 0) + $manual;
             $profit = $rev - (float) ($exp[$k]->total ?? 0);
             $orders = (int) ($ordCreated[$k]->cnt ?? 0);
             $customers = (int) ($cust[$k]->cnt ?? 0);
