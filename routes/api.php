@@ -265,8 +265,6 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/dashboard/time-series', [UnifiedAdminDashboardController::class, 'timeSeries']);
         Route::get('/dashboard/v3/overview', [UnifiedAdminDashboardController::class, 'v3Overview']);
         Route::get('/dashboard/v3/revenue-series', [UnifiedAdminDashboardController::class, 'v3RevenueSeries']);
-        Route::get('/dashboard/v3/pipeline', [UnifiedAdminDashboardController::class, 'v3Pipeline']);
-        Route::get('/dashboard/v3/insights', [UnifiedAdminDashboardController::class, 'v3Insights']);
         Route::get('/dashboard/v3/geographic', [UnifiedAdminDashboardController::class, 'v3Geographic']);
         Route::post('/dashboard/manual-metrics', [UnifiedAdminDashboardController::class, 'updateManualMetrics']);
         Route::get('/dashboard/manual-metrics', [UnifiedAdminDashboardController::class, 'getManualMetrics']);

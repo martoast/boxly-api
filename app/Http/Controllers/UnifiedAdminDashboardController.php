@@ -199,223 +199,173 @@ class UnifiedAdminDashboardController extends Controller
     private const FX = 18.0; // fixed USD->MXN, consistent with the rest of the dashboard
 
     /**
-     * All-time hero + network-scale numbers for Dashboard V3.
-     * GET /admin/dashboard/v3/overview
+     * Resolve the global V3 timeframe into a single date window used by EVERY
+     * V3 section, so the whole dashboard is one source of truth. Daily buckets
+     * (through yesterday) for 30d/90d; monthly (through the current month) for
+     * 1y/all. Also returns the previous comparable window for growth deltas.
+     */
+    private function v3Window(Request $request): array
+    {
+        $request->validate(['range' => 'nullable|in:30d,90d,1y,all']);
+        $range = $request->get('range', '90d');
+        $daily = in_array($range, ['30d', '90d'], true);
+
+        if ($range === '30d') {
+            $start = now()->subDays(30)->startOfDay();
+            $end = now()->subDay()->endOfDay();
+        } elseif ($range === '90d') {
+            $start = now()->subDays(90)->startOfDay();
+            $end = now()->subDay()->endOfDay();
+        } elseif ($range === '1y') {
+            $start = now()->subMonths(11)->startOfMonth();
+            $end = now();
+        } else { // all
+            $first = array_filter([
+                Order::whereNotNull('paid_at')->min('paid_at'),
+                BusinessExpense::min('expense_date'),
+                User::where('role', 'customer')->min('created_at'),
+                PurchaseRequest::min('created_at'),
+            ]);
+            $start = empty($first) ? now()->startOfMonth() : Carbon::parse(min($first))->startOfMonth();
+            $end = now();
+        }
+
+        $len = (int) $start->diffInSeconds($end);
+        $prevEnd = $start->copy()->subSecond();
+        $prevStart = $prevEnd->copy()->subSeconds($len);
+
+        return compact('range', 'daily', 'start', 'end', 'prevStart', 'prevEnd');
+    }
+
+    /** Total revenue (MXN) within a window: paid orders + deposits + PR fees. */
+    private function revenueInWindow($start, $end): float
+    {
+        $shipping = (float) (Order::whereNotNull('paid_at')->whereBetween('paid_at', [$start, $end])
+            ->selectRaw('SUM(COALESCE(amount_paid, deposit_amount, 0)) as t')->value('t') ?? 0);
+        $deposits = (float) Order::whereNotNull('deposit_paid_at')->whereNull('paid_at')
+            ->whereBetween('deposit_paid_at', [$start, $end])->sum('deposit_amount');
+        $usd = (float) PurchaseRequest::whereIn('status', ['paid', 'purchased'])->where('currency', 'usd')
+            ->whereBetween('created_at', [$start, $end])->sum('processing_fee');
+        $mxn = (float) PurchaseRequest::whereIn('status', ['paid', 'purchased'])->where('currency', 'mxn')
+            ->whereBetween('created_at', [$start, $end])->sum('processing_fee');
+        return $shipping + $deposits + ($usd * self::FX) + $mxn;
+    }
+
+    /**
+     * Hero + network-scale KPIs for Dashboard V3, scoped to the global window.
+     * GET /admin/dashboard/v3/overview?range=30d|90d|1y|all
      */
     public function v3Overview(Request $request)
     {
-        // Revenue (all-time, MXN) — same sources as getFinancialData()/timeSeries().
-        $shipping = (float) (Order::whereNotNull('paid_at')
-            ->selectRaw('SUM(COALESCE(amount_paid, deposit_amount, 0)) as t')->value('t') ?? 0);
-        $deposits = (float) Order::whereNotNull('deposit_paid_at')->whereNull('paid_at')->sum('deposit_amount');
-        $feesUsd = (float) PurchaseRequest::whereIn('status', ['paid', 'purchased'])->where('currency', 'usd')->sum('processing_fee');
-        $feesMxn = (float) PurchaseRequest::whereIn('status', ['paid', 'purchased'])->where('currency', 'mxn')->sum('processing_fee');
+        $w = $this->v3Window($request);
+        $s = $w['start'];
+        $e = $w['end'];
 
-        // Include manually-entered revenue from months flagged manual (matches all-time card).
-        $manualRevenue = (float) MonthlyManualMetric::where('is_manual_mode', true)->sum('total_revenue');
-
-        $revenue = $shipping + $deposits + ($feesUsd * self::FX) + $feesMxn + $manualRevenue;
-        $expenses = (float) BusinessExpense::sum('amount');
+        $revenue = $this->revenueInWindow($s, $e);
+        $expenses = (float) BusinessExpense::whereBetween('expense_date', [$s, $e])->sum('amount');
         $profit = $revenue - $expenses;
         $margin = $revenue > 0 ? round(($profit / $revenue) * 100, 1) : 0;
 
-        $customers = User::where('role', 'customer')->count();
-        $orders = Order::count();
-        $packagesReceived = OrderItem::where('arrived', true)->count();
+        $customers = User::where('role', 'customer')->whereBetween('created_at', [$s, $e])->count();
+        $orders = Order::whereNotIn('status', ['cancelled'])->whereBetween('created_at', [$s, $e])->count();
 
-        $statesReached = User::where('role', 'customer')
-            ->whereNotNull('estado')->where('estado', '!=', '')
-            ->distinct()->count('estado');
-        $citiesReached = User::where('role', 'customer')
-            ->whereNotNull('municipio')->where('municipio', '!=', '')
-            ->distinct()->count('municipio');
+        // Average order value (paid orders in window) — order value only, no PR fees.
+        $paidQ = Order::whereNotNull('paid_at')->whereBetween('paid_at', [$s, $e]);
+        $paidCount = (clone $paidQ)->count();
+        $paidSum = (float) ((clone $paidQ)->selectRaw('SUM(COALESCE(amount_paid, deposit_amount, 0)) as t')->value('t') ?? 0);
+        $aov = $paidCount > 0 ? round($paidSum / $paidCount, 2) : 0;
 
         return response()->json([
             'success' => true,
             'data' => [
+                'range' => $w['range'],
                 'revenue' => round($revenue, 2),
                 'expenses' => round($expenses, 2),
                 'profit' => round($profit, 2),
                 'margin' => $margin,
                 'customers' => $customers,
                 'orders' => $orders,
-                'packages_received' => $packagesReceived,
-                'states_reached' => $statesReached,
-                'cities_reached' => $citiesReached,
+                'aov' => $aov,
             ],
             'generated_at' => now()->toIso8601String(),
         ]);
     }
 
     /**
-     * Revenue time-series for the V3 hero graph, with a range filter.
+     * Time-series for the V3 hero graph AND the Business Performance chart,
+     * scoped to the global window. Each bucket carries revenue / profit /
+     * orders / customers so one endpoint feeds every trend. Daily buckets for
+     * 30d/90d, monthly for 1y/all.
      * GET /admin/dashboard/v3/revenue-series?range=30d|90d|1y|all
-     * Daily buckets for 30d/90d, monthly for 1y/all.
      */
     public function v3RevenueSeries(Request $request)
     {
-        $request->validate(['range' => 'nullable|in:30d,90d,1y,all']);
-        $range = $request->get('range', '90d');
-
-        $daily = in_array($range, ['30d', '90d'], true);
+        $w = $this->v3Window($request);
+        $s = $w['start'];
+        $e = $w['end'];
+        $daily = $w['daily'];
         $fmt = $daily ? '%Y-%m-%d' : '%Y-%m';
 
-        // Window start.
-        if ($range === '30d') {
-            $start = now()->copy()->subDays(29)->startOfDay();
-        } elseif ($range === '90d') {
-            $start = now()->copy()->subDays(89)->startOfDay();
-        } elseif ($range === '1y') {
-            $start = now()->copy()->subMonths(11)->startOfMonth();
-        } else { // all
-            $first = array_filter([
-                Order::whereNotNull('paid_at')->min('paid_at'),
-                PurchaseRequest::whereIn('status', ['paid', 'purchased'])->min('created_at'),
-            ]);
-            $start = empty($first)
-                ? now()->copy()->startOfMonth()
-                : Carbon::parse(min($first))->startOfMonth();
-        }
-
-        // Aggregations within window, keyed by bucket.
-        $orders = Order::whereNotNull('paid_at')->where('paid_at', '>=', $start)
-            ->selectRaw("DATE_FORMAT(paid_at, '$fmt') as bk, SUM(COALESCE(amount_paid, deposit_amount, 0)) as total")
+        // Revenue + paid-order count by paid_at bucket.
+        $ord = Order::whereNotNull('paid_at')->whereBetween('paid_at', [$s, $e])
+            ->selectRaw("DATE_FORMAT(paid_at, '$fmt') as bk, SUM(COALESCE(amount_paid, deposit_amount, 0)) as rev")
             ->groupBy('bk')->get()->keyBy('bk');
-        $deposits = Order::whereNotNull('deposit_paid_at')->whereNull('paid_at')->where('deposit_paid_at', '>=', $start)
-            ->selectRaw("DATE_FORMAT(deposit_paid_at, '$fmt') as bk, SUM(deposit_amount) as total")
+        $deposits = Order::whereNotNull('deposit_paid_at')->whereNull('paid_at')->whereBetween('deposit_paid_at', [$s, $e])
+            ->selectRaw("DATE_FORMAT(deposit_paid_at, '$fmt') as bk, SUM(deposit_amount) as rev")
             ->groupBy('bk')->get()->keyBy('bk');
-        $prRows = PurchaseRequest::whereIn('status', ['paid', 'purchased'])->where('created_at', '>=', $start)
+        $prRows = PurchaseRequest::whereIn('status', ['paid', 'purchased'])->whereBetween('created_at', [$s, $e])
             ->selectRaw("DATE_FORMAT(created_at, '$fmt') as bk, currency, SUM(processing_fee) as total")
             ->groupBy('bk', 'currency')->get();
         $fees = [];
         foreach ($prRows as $r) {
             $fees[$r->bk] = ($fees[$r->bk] ?? 0) + ($r->currency === 'usd' ? $r->total * self::FX : $r->total);
         }
+        $exp = BusinessExpense::whereBetween('expense_date', [$s, $e])
+            ->selectRaw("DATE_FORMAT(expense_date, '$fmt') as bk, SUM(amount) as total")
+            ->groupBy('bk')->get()->keyBy('bk');
+        // Orders placed (created_at) + new customers, per bucket.
+        $ordCreated = Order::whereNotIn('status', ['cancelled'])->whereBetween('created_at', [$s, $e])
+            ->selectRaw("DATE_FORMAT(created_at, '$fmt') as bk, COUNT(*) as cnt")
+            ->groupBy('bk')->get()->keyBy('bk');
+        $cust = User::where('role', 'customer')->whereBetween('created_at', [$s, $e])
+            ->selectRaw("DATE_FORMAT(created_at, '$fmt') as bk, COUNT(*) as cnt")
+            ->groupBy('bk')->get()->keyBy('bk');
 
-        // Build zero-filled buckets across the window.
         $points = [];
-        $total = 0;
-        $cursor = $start->copy();
-        $end = now();
-        while ($cursor->lte($end)) {
-            $key = $cursor->format($daily ? 'Y-m-d' : 'Y-m');
-            $val = (float) ($orders[$key]->total ?? 0)
-                + (float) ($deposits[$key]->total ?? 0)
-                + (float) ($fees[$key] ?? 0);
-            $total += $val;
+        $tot = ['revenue' => 0, 'profit' => 0, 'orders' => 0, 'customers' => 0];
+        $cursor = $s->copy();
+        while ($cursor->lte($e)) {
+            $k = $cursor->format($daily ? 'Y-m-d' : 'Y-m');
+            $rev = (float) ($ord[$k]->rev ?? 0) + (float) ($deposits[$k]->rev ?? 0) + (float) ($fees[$k] ?? 0);
+            $profit = $rev - (float) ($exp[$k]->total ?? 0);
+            $orders = (int) ($ordCreated[$k]->cnt ?? 0);
+            $customers = (int) ($cust[$k]->cnt ?? 0);
             $points[] = [
-                'key' => $key,
                 'label' => $daily ? $cursor->format('d M') : $cursor->format('M Y'),
-                'revenue' => round($val, 2),
+                'revenue' => round($rev, 2),
+                'profit' => round($profit, 2),
+                'orders' => $orders,
+                'customers' => $customers,
             ];
-            $daily ? $cursor->addDay() : $cursor->addMonth();
+            $tot['revenue'] += $rev;
+            $tot['profit'] += $profit;
+            $tot['orders'] += $orders;
+            $tot['customers'] += $customers;
+            $cursor = $daily ? $cursor->addDay() : $cursor->addMonth();
         }
-
-        return response()->json([
-            'success' => true,
-            'data' => ['range' => $range, 'total' => round($total, 2), 'points' => $points],
-            'generated_at' => now()->toIso8601String(),
-        ]);
-    }
-
-    /**
-     * Operations pipeline stage counts for Dashboard V3.
-     * Maps Order statuses onto the logistics flow:
-     *   San Diego (received) -> Consolidation -> Border Crossing -> Mexico Network -> Delivered
-     * GET /admin/dashboard/v3/pipeline
-     */
-    public function v3Pipeline(Request $request)
-    {
-        $countByStatus = Order::whereNotIn('status', ['cancelled'])
-            ->selectRaw('status, COUNT(*) as cnt')
-            ->groupBy('status')->pluck('cnt', 'status');
-
-        $get = fn (...$statuses) => array_sum(array_map(fn ($s) => (int) ($countByStatus[$s] ?? 0), $statuses));
-
-        $stages = [
-            ['key' => 'received',       'count' => $get('awaiting_packages')],
-            ['key' => 'consolidating',  'count' => $get('packages_complete', 'awaiting_payment')],
-            ['key' => 'ready_to_cross', 'count' => $get('paid')],
-            ['key' => 'in_transit',     'count' => $get('shipped')],
-            ['key' => 'delivered',      'count' => $get('delivered')],
-        ];
 
         return response()->json([
             'success' => true,
             'data' => [
-                'stages' => $stages,
-                'packages_received_total' => OrderItem::where('arrived', true)->count(),
-                'packages_pending' => OrderItem::where('arrived', false)->count(),
-            ],
-            'generated_at' => now()->toIso8601String(),
-        ]);
-    }
-
-    /**
-     * Auto-generated business highlights for Dashboard V3.
-     * GET /admin/dashboard/v3/insights
-     */
-    public function v3Insights(Request $request)
-    {
-        $monthlyRevenue = function (Carbon $start, Carbon $end) {
-            $shipping = (float) (Order::whereNotNull('paid_at')->whereBetween('paid_at', [$start, $end])
-                ->selectRaw('SUM(COALESCE(amount_paid, deposit_amount, 0)) as t')->value('t') ?? 0);
-            $deposits = (float) Order::whereNotNull('deposit_paid_at')->whereNull('paid_at')
-                ->whereBetween('deposit_paid_at', [$start, $end])->sum('deposit_amount');
-            $usd = (float) PurchaseRequest::whereIn('status', ['paid', 'purchased'])->where('currency', 'usd')
-                ->whereBetween('created_at', [$start, $end])->sum('processing_fee');
-            $mxn = (float) PurchaseRequest::whereIn('status', ['paid', 'purchased'])->where('currency', 'mxn')
-                ->whereBetween('created_at', [$start, $end])->sum('processing_fee');
-            return $shipping + $deposits + ($usd * self::FX) + $mxn;
-        };
-
-        // Revenue growth (this month vs last month).
-        $curStart = now()->copy()->startOfMonth();
-        $curEnd = now()->copy()->endOfMonth();
-        $prevStart = now()->copy()->subMonth()->startOfMonth();
-        $prevEnd = now()->copy()->subMonth()->endOfMonth();
-        $curRev = $monthlyRevenue($curStart, $curEnd);
-        $prevRev = $monthlyRevenue($prevStart, $prevEnd);
-        $revenueGrowth = $prevRev > 0 ? round((($curRev - $prevRev) / $prevRev) * 100, 1) : null;
-
-        // Average order value (paid orders).
-        $paidQ = Order::whereNotNull('paid_at');
-        $paidCount = (clone $paidQ)->count();
-        $paidSum = (float) ((clone $paidQ)->selectRaw('SUM(COALESCE(amount_paid, deposit_amount, 0)) as t')->value('t') ?? 0);
-        $aov = $paidCount > 0 ? round($paidSum / $paidCount, 2) : 0;
-
-        // Most active market (state by customer count).
-        $topMarket = User::where('role', 'customer')
-            ->whereNotNull('estado')->where('estado', '!=', '')
-            ->selectRaw('estado, COUNT(*) as cnt')->groupBy('estado')
-            ->orderByDesc('cnt')->first();
-
-        // Largest box category (new OrderBox + legacy Order.box_size).
-        $boxTotals = [];
-        foreach (OrderBox::selectRaw('box_size, SUM(quantity) as q')->groupBy('box_size')->get() as $r) {
-            $boxTotals[$r->box_size] = ($boxTotals[$r->box_size] ?? 0) + (int) $r->q;
-        }
-        foreach (Order::whereNotNull('box_size')->selectRaw('box_size, COUNT(*) as q')->groupBy('box_size')->get() as $r) {
-            $boxTotals[$r->box_size] = ($boxTotals[$r->box_size] ?? 0) + (int) $r->q;
-        }
-        arsort($boxTotals);
-        $largestBox = empty($boxTotals) ? null : ['size' => array_key_first($boxTotals), 'count' => reset($boxTotals)];
-
-        // Repeat customers' share of revenue.
-        $repeatIds = Order::whereNotNull('paid_at')->select('user_id')
-            ->groupBy('user_id')->havingRaw('COUNT(*) > 1')->pluck('user_id');
-        $repeatRev = $repeatIds->isEmpty() ? 0 : (float) (Order::whereNotNull('paid_at')->whereIn('user_id', $repeatIds)
-            ->selectRaw('SUM(COALESCE(amount_paid, deposit_amount, 0)) as t')->value('t') ?? 0);
-        $repeatPct = $paidSum > 0 ? round(($repeatRev / $paidSum) * 100, 1) : 0;
-
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'revenue_growth' => $revenueGrowth, // % MoM, null if no prior month
-                'aov' => $aov,
-                'top_market' => $topMarket ? ['state' => $topMarket->estado, 'customers' => (int) $topMarket->cnt] : null,
-                'largest_box' => $largestBox,
-                'repeat_revenue_pct' => $repeatPct,
+                'range' => $w['range'],
+                'total' => round($tot['revenue'], 2),
+                'totals' => [
+                    'revenue' => round($tot['revenue'], 2),
+                    'profit' => round($tot['profit'], 2),
+                    'orders' => $tot['orders'],
+                    'customers' => $tot['customers'],
+                ],
+                'points' => $points,
             ],
             'generated_at' => now()->toIso8601String(),
         ]);
@@ -429,6 +379,9 @@ class UnifiedAdminDashboardController extends Controller
      */
     public function v3Geographic(Request $request)
     {
+        $w = $this->v3Window($request);
+        $s = $w['start'];
+        $e = $w['end'];
         $map = self::ESTADO_CODE_MAP;
         $names = self::STATE_NAMES;
         $norm = fn ($s) => \Illuminate\Support\Str::ascii(mb_strtolower(trim((string) $s)));
@@ -439,8 +392,9 @@ class UnifiedAdminDashboardController extends Controller
             $arr[$code][$field] += $val;
         };
 
-        // Customers by state.
-        $custRows = User::where('role', 'customer')->whereNotNull('estado')->where('estado', '!=', '')
+        // Customers by state (acquired in window).
+        $custRows = User::where('role', 'customer')->whereBetween('created_at', [$s, $e])
+            ->whereNotNull('estado')->where('estado', '!=', '')
             ->selectRaw('estado, COUNT(*) as c')->groupBy('estado')->get();
         foreach ($custRows as $r) {
             if ($code = $map[$norm($r->estado)] ?? null) {
@@ -448,9 +402,10 @@ class UnifiedAdminDashboardController extends Controller
             }
         }
 
-        // Orders + revenue by the order customer's state.
+        // Orders + revenue by the order customer's state (orders placed in window).
         $orderRows = Order::join('users', 'orders.user_id', '=', 'users.id')
             ->whereNotIn('orders.status', ['cancelled'])
+            ->whereBetween('orders.created_at', [$s, $e])
             ->whereNotNull('users.estado')->where('users.estado', '!=', '')
             ->selectRaw("users.estado as estado, COUNT(*) as o, SUM(CASE WHEN orders.paid_at IS NOT NULL THEN COALESCE(orders.amount_paid, orders.deposit_amount, 0) ELSE 0 END) as rev")
             ->groupBy('users.estado')->get();
@@ -478,7 +433,7 @@ class UnifiedAdminDashboardController extends Controller
             $arr[$key] ??= ['city' => $city, 'estado' => $estado, 'customers' => 0, 'orders' => 0, 'revenue' => 0];
             $arr[$key][$field] += $val;
         };
-        $custCity = User::where('role', 'customer')
+        $custCity = User::where('role', 'customer')->whereBetween('created_at', [$s, $e])
             ->whereNotNull('municipio')->where('municipio', '!=', '')
             ->selectRaw('municipio, estado, COUNT(*) as c')->groupBy('municipio', 'estado')->get();
         foreach ($custCity as $r) {
@@ -486,6 +441,7 @@ class UnifiedAdminDashboardController extends Controller
         }
         $orderCity = Order::join('users', 'orders.user_id', '=', 'users.id')
             ->whereNotIn('orders.status', ['cancelled'])
+            ->whereBetween('orders.created_at', [$s, $e])
             ->whereNotNull('users.municipio')->where('users.municipio', '!=', '')
             ->selectRaw("users.municipio as municipio, users.estado as estado, COUNT(*) as o, SUM(CASE WHEN orders.paid_at IS NOT NULL THEN COALESCE(orders.amount_paid, orders.deposit_amount, 0) ELSE 0 END) as rev")
             ->groupBy('users.municipio', 'users.estado')->get();
