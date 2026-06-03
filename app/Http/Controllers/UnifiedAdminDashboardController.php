@@ -192,6 +192,381 @@ class UnifiedAdminDashboardController extends Controller
         ]);
     }
 
+    // ============================================================
+    // DASHBOARD V3 — Executive Command Center
+    // ============================================================
+
+    private const FX = 18.0; // fixed USD->MXN, consistent with the rest of the dashboard
+
+    /**
+     * All-time hero + network-scale numbers for Dashboard V3.
+     * GET /admin/dashboard/v3/overview
+     */
+    public function v3Overview(Request $request)
+    {
+        // Revenue (all-time, MXN) — same sources as getFinancialData()/timeSeries().
+        $shipping = (float) (Order::whereNotNull('paid_at')
+            ->selectRaw('SUM(COALESCE(amount_paid, deposit_amount, 0)) as t')->value('t') ?? 0);
+        $deposits = (float) Order::whereNotNull('deposit_paid_at')->whereNull('paid_at')->sum('deposit_amount');
+        $feesUsd = (float) PurchaseRequest::whereIn('status', ['paid', 'purchased'])->where('currency', 'usd')->sum('processing_fee');
+        $feesMxn = (float) PurchaseRequest::whereIn('status', ['paid', 'purchased'])->where('currency', 'mxn')->sum('processing_fee');
+
+        // Include manually-entered revenue from months flagged manual (matches all-time card).
+        $manualRevenue = (float) MonthlyManualMetric::where('is_manual_mode', true)->sum('total_revenue');
+
+        $revenue = $shipping + $deposits + ($feesUsd * self::FX) + $feesMxn + $manualRevenue;
+        $expenses = (float) BusinessExpense::sum('amount');
+        $profit = $revenue - $expenses;
+        $margin = $revenue > 0 ? round(($profit / $revenue) * 100, 1) : 0;
+
+        $customers = User::where('role', 'customer')->count();
+        $orders = Order::count();
+        $packagesReceived = OrderItem::where('arrived', true)->count();
+
+        $statesReached = User::where('role', 'customer')
+            ->whereNotNull('estado')->where('estado', '!=', '')
+            ->distinct()->count('estado');
+        $citiesReached = User::where('role', 'customer')
+            ->whereNotNull('municipio')->where('municipio', '!=', '')
+            ->distinct()->count('municipio');
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'revenue' => round($revenue, 2),
+                'expenses' => round($expenses, 2),
+                'profit' => round($profit, 2),
+                'margin' => $margin,
+                'customers' => $customers,
+                'orders' => $orders,
+                'packages_received' => $packagesReceived,
+                'states_reached' => $statesReached,
+                'cities_reached' => $citiesReached,
+            ],
+            'generated_at' => now()->toIso8601String(),
+        ]);
+    }
+
+    /**
+     * Revenue time-series for the V3 hero graph, with a range filter.
+     * GET /admin/dashboard/v3/revenue-series?range=30d|90d|1y|all
+     * Daily buckets for 30d/90d, monthly for 1y/all.
+     */
+    public function v3RevenueSeries(Request $request)
+    {
+        $request->validate(['range' => 'nullable|in:30d,90d,1y,all']);
+        $range = $request->get('range', '90d');
+
+        $daily = in_array($range, ['30d', '90d'], true);
+        $fmt = $daily ? '%Y-%m-%d' : '%Y-%m';
+
+        // Window start.
+        if ($range === '30d') {
+            $start = now()->copy()->subDays(29)->startOfDay();
+        } elseif ($range === '90d') {
+            $start = now()->copy()->subDays(89)->startOfDay();
+        } elseif ($range === '1y') {
+            $start = now()->copy()->subMonths(11)->startOfMonth();
+        } else { // all
+            $first = array_filter([
+                Order::whereNotNull('paid_at')->min('paid_at'),
+                PurchaseRequest::whereIn('status', ['paid', 'purchased'])->min('created_at'),
+            ]);
+            $start = empty($first)
+                ? now()->copy()->startOfMonth()
+                : Carbon::parse(min($first))->startOfMonth();
+        }
+
+        // Aggregations within window, keyed by bucket.
+        $orders = Order::whereNotNull('paid_at')->where('paid_at', '>=', $start)
+            ->selectRaw("DATE_FORMAT(paid_at, '$fmt') as bk, SUM(COALESCE(amount_paid, deposit_amount, 0)) as total")
+            ->groupBy('bk')->get()->keyBy('bk');
+        $deposits = Order::whereNotNull('deposit_paid_at')->whereNull('paid_at')->where('deposit_paid_at', '>=', $start)
+            ->selectRaw("DATE_FORMAT(deposit_paid_at, '$fmt') as bk, SUM(deposit_amount) as total")
+            ->groupBy('bk')->get()->keyBy('bk');
+        $prRows = PurchaseRequest::whereIn('status', ['paid', 'purchased'])->where('created_at', '>=', $start)
+            ->selectRaw("DATE_FORMAT(created_at, '$fmt') as bk, currency, SUM(processing_fee) as total")
+            ->groupBy('bk', 'currency')->get();
+        $fees = [];
+        foreach ($prRows as $r) {
+            $fees[$r->bk] = ($fees[$r->bk] ?? 0) + ($r->currency === 'usd' ? $r->total * self::FX : $r->total);
+        }
+
+        // Build zero-filled buckets across the window.
+        $points = [];
+        $total = 0;
+        $cursor = $start->copy();
+        $end = now();
+        while ($cursor->lte($end)) {
+            $key = $cursor->format($daily ? 'Y-m-d' : 'Y-m');
+            $val = (float) ($orders[$key]->total ?? 0)
+                + (float) ($deposits[$key]->total ?? 0)
+                + (float) ($fees[$key] ?? 0);
+            $total += $val;
+            $points[] = [
+                'key' => $key,
+                'label' => $daily ? $cursor->format('d M') : $cursor->format('M Y'),
+                'revenue' => round($val, 2),
+            ];
+            $daily ? $cursor->addDay() : $cursor->addMonth();
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => ['range' => $range, 'total' => round($total, 2), 'points' => $points],
+            'generated_at' => now()->toIso8601String(),
+        ]);
+    }
+
+    /**
+     * Operations pipeline stage counts for Dashboard V3.
+     * Maps Order statuses onto the logistics flow:
+     *   San Diego (received) -> Consolidation -> Border Crossing -> Mexico Network -> Delivered
+     * GET /admin/dashboard/v3/pipeline
+     */
+    public function v3Pipeline(Request $request)
+    {
+        $countByStatus = Order::whereNotIn('status', ['cancelled'])
+            ->selectRaw('status, COUNT(*) as cnt')
+            ->groupBy('status')->pluck('cnt', 'status');
+
+        $get = fn (...$statuses) => array_sum(array_map(fn ($s) => (int) ($countByStatus[$s] ?? 0), $statuses));
+
+        $stages = [
+            ['key' => 'received',       'count' => $get('awaiting_packages')],
+            ['key' => 'consolidating',  'count' => $get('packages_complete', 'awaiting_payment')],
+            ['key' => 'ready_to_cross', 'count' => $get('paid')],
+            ['key' => 'in_transit',     'count' => $get('shipped')],
+            ['key' => 'delivered',      'count' => $get('delivered')],
+        ];
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'stages' => $stages,
+                'packages_received_total' => OrderItem::where('arrived', true)->count(),
+                'packages_pending' => OrderItem::where('arrived', false)->count(),
+            ],
+            'generated_at' => now()->toIso8601String(),
+        ]);
+    }
+
+    /**
+     * Auto-generated business highlights for Dashboard V3.
+     * GET /admin/dashboard/v3/insights
+     */
+    public function v3Insights(Request $request)
+    {
+        $monthlyRevenue = function (Carbon $start, Carbon $end) {
+            $shipping = (float) (Order::whereNotNull('paid_at')->whereBetween('paid_at', [$start, $end])
+                ->selectRaw('SUM(COALESCE(amount_paid, deposit_amount, 0)) as t')->value('t') ?? 0);
+            $deposits = (float) Order::whereNotNull('deposit_paid_at')->whereNull('paid_at')
+                ->whereBetween('deposit_paid_at', [$start, $end])->sum('deposit_amount');
+            $usd = (float) PurchaseRequest::whereIn('status', ['paid', 'purchased'])->where('currency', 'usd')
+                ->whereBetween('created_at', [$start, $end])->sum('processing_fee');
+            $mxn = (float) PurchaseRequest::whereIn('status', ['paid', 'purchased'])->where('currency', 'mxn')
+                ->whereBetween('created_at', [$start, $end])->sum('processing_fee');
+            return $shipping + $deposits + ($usd * self::FX) + $mxn;
+        };
+
+        // Revenue growth (this month vs last month).
+        $curStart = now()->copy()->startOfMonth();
+        $curEnd = now()->copy()->endOfMonth();
+        $prevStart = now()->copy()->subMonth()->startOfMonth();
+        $prevEnd = now()->copy()->subMonth()->endOfMonth();
+        $curRev = $monthlyRevenue($curStart, $curEnd);
+        $prevRev = $monthlyRevenue($prevStart, $prevEnd);
+        $revenueGrowth = $prevRev > 0 ? round((($curRev - $prevRev) / $prevRev) * 100, 1) : null;
+
+        // Average order value (paid orders).
+        $paidQ = Order::whereNotNull('paid_at');
+        $paidCount = (clone $paidQ)->count();
+        $paidSum = (float) ((clone $paidQ)->selectRaw('SUM(COALESCE(amount_paid, deposit_amount, 0)) as t')->value('t') ?? 0);
+        $aov = $paidCount > 0 ? round($paidSum / $paidCount, 2) : 0;
+
+        // Most active market (state by customer count).
+        $topMarket = User::where('role', 'customer')
+            ->whereNotNull('estado')->where('estado', '!=', '')
+            ->selectRaw('estado, COUNT(*) as cnt')->groupBy('estado')
+            ->orderByDesc('cnt')->first();
+
+        // Largest box category (new OrderBox + legacy Order.box_size).
+        $boxTotals = [];
+        foreach (OrderBox::selectRaw('box_size, SUM(quantity) as q')->groupBy('box_size')->get() as $r) {
+            $boxTotals[$r->box_size] = ($boxTotals[$r->box_size] ?? 0) + (int) $r->q;
+        }
+        foreach (Order::whereNotNull('box_size')->selectRaw('box_size, COUNT(*) as q')->groupBy('box_size')->get() as $r) {
+            $boxTotals[$r->box_size] = ($boxTotals[$r->box_size] ?? 0) + (int) $r->q;
+        }
+        arsort($boxTotals);
+        $largestBox = empty($boxTotals) ? null : ['size' => array_key_first($boxTotals), 'count' => reset($boxTotals)];
+
+        // Repeat customers' share of revenue.
+        $repeatIds = Order::whereNotNull('paid_at')->select('user_id')
+            ->groupBy('user_id')->havingRaw('COUNT(*) > 1')->pluck('user_id');
+        $repeatRev = $repeatIds->isEmpty() ? 0 : (float) (Order::whereNotNull('paid_at')->whereIn('user_id', $repeatIds)
+            ->selectRaw('SUM(COALESCE(amount_paid, deposit_amount, 0)) as t')->value('t') ?? 0);
+        $repeatPct = $paidSum > 0 ? round(($repeatRev / $paidSum) * 100, 1) : 0;
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'revenue_growth' => $revenueGrowth, // % MoM, null if no prior month
+                'aov' => $aov,
+                'top_market' => $topMarket ? ['state' => $topMarket->estado, 'customers' => (int) $topMarket->cnt] : null,
+                'largest_box' => $largestBox,
+                'repeat_revenue_pct' => $repeatPct,
+            ],
+            'generated_at' => now()->toIso8601String(),
+        ]);
+    }
+
+    /**
+     * Geographic reach by Mexican state for Dashboard V3.
+     * Aggregates customers, orders and revenue, keyed by the 3-letter state
+     * codes used by the @svg-maps/mexico choropleth (agu, jal, cmx, ...).
+     * GET /admin/dashboard/v3/geographic
+     */
+    public function v3Geographic(Request $request)
+    {
+        $map = self::ESTADO_CODE_MAP;
+        $names = self::STATE_NAMES;
+        $norm = fn ($s) => \Illuminate\Support\Str::ascii(mb_strtolower(trim((string) $s)));
+
+        $byCode = [];
+        $bump = function (&$arr, $code, $field, $val) {
+            $arr[$code] ??= ['customers' => 0, 'orders' => 0, 'revenue' => 0];
+            $arr[$code][$field] += $val;
+        };
+
+        // Customers by state.
+        $custRows = User::where('role', 'customer')->whereNotNull('estado')->where('estado', '!=', '')
+            ->selectRaw('estado, COUNT(*) as c')->groupBy('estado')->get();
+        foreach ($custRows as $r) {
+            if ($code = $map[$norm($r->estado)] ?? null) {
+                $bump($byCode, $code, 'customers', (int) $r->c);
+            }
+        }
+
+        // Orders + revenue by the order customer's state.
+        $orderRows = Order::join('users', 'orders.user_id', '=', 'users.id')
+            ->whereNotIn('orders.status', ['cancelled'])
+            ->whereNotNull('users.estado')->where('users.estado', '!=', '')
+            ->selectRaw("users.estado as estado, COUNT(*) as o, SUM(CASE WHEN orders.paid_at IS NOT NULL THEN COALESCE(orders.amount_paid, orders.deposit_amount, 0) ELSE 0 END) as rev")
+            ->groupBy('users.estado')->get();
+        foreach ($orderRows as $r) {
+            if ($code = $map[$norm($r->estado)] ?? null) {
+                $bump($byCode, $code, 'orders', (int) $r->o);
+                $bump($byCode, $code, 'revenue', (float) $r->rev);
+            }
+        }
+
+        $states = [];
+        foreach ($byCode as $code => $v) {
+            $states[] = [
+                'code' => $code,
+                'name' => $names[$code] ?? $code,
+                'customers' => (int) $v['customers'],
+                'orders' => (int) $v['orders'],
+                'revenue' => round($v['revenue'], 2),
+            ];
+        }
+
+        // --- Cities (municipio) for the Mapbox map points ---
+        $byCity = [];
+        $cityBump = function (&$arr, $key, $city, $estado, $field, $val) {
+            $arr[$key] ??= ['city' => $city, 'estado' => $estado, 'customers' => 0, 'orders' => 0, 'revenue' => 0];
+            $arr[$key][$field] += $val;
+        };
+        $custCity = User::where('role', 'customer')
+            ->whereNotNull('municipio')->where('municipio', '!=', '')
+            ->selectRaw('municipio, estado, COUNT(*) as c')->groupBy('municipio', 'estado')->get();
+        foreach ($custCity as $r) {
+            $cityBump($byCity, $norm($r->municipio) . '|' . $norm($r->estado), $r->municipio, $r->estado, 'customers', (int) $r->c);
+        }
+        $orderCity = Order::join('users', 'orders.user_id', '=', 'users.id')
+            ->whereNotIn('orders.status', ['cancelled'])
+            ->whereNotNull('users.municipio')->where('users.municipio', '!=', '')
+            ->selectRaw("users.municipio as municipio, users.estado as estado, COUNT(*) as o, SUM(CASE WHEN orders.paid_at IS NOT NULL THEN COALESCE(orders.amount_paid, orders.deposit_amount, 0) ELSE 0 END) as rev")
+            ->groupBy('users.municipio', 'users.estado')->get();
+        foreach ($orderCity as $r) {
+            $key = $norm($r->municipio) . '|' . $norm($r->estado);
+            $cityBump($byCity, $key, $r->municipio, $r->estado, 'orders', (int) $r->o);
+            $cityBump($byCity, $key, $r->municipio, $r->estado, 'revenue', (float) $r->rev);
+        }
+        $cities = array_map(fn ($v) => [
+            'city' => $v['city'],
+            'estado' => $v['estado'],
+            'customers' => (int) $v['customers'],
+            'orders' => (int) $v['orders'],
+            'revenue' => round($v['revenue'], 2),
+        ], array_values($byCity));
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'states' => $states,
+                'cities' => $cities,
+                'totals' => [
+                    'customers' => array_sum(array_column($states, 'customers')),
+                    'orders' => array_sum(array_column($states, 'orders')),
+                    'revenue' => round(array_sum(array_column($states, 'revenue')), 2),
+                    'states_active' => count($states),
+                ],
+            ],
+            'generated_at' => now()->toIso8601String(),
+        ]);
+    }
+
+    /** Normalized (Str::ascii + lowercase) estado name => @svg-maps/mexico code. */
+    private const ESTADO_CODE_MAP = [
+        'aguascalientes' => 'agu',
+        'baja california' => 'bcn',
+        'baja california sur' => 'bcs',
+        'campeche' => 'cam',
+        'chiapas' => 'chp',
+        'chihuahua' => 'chh',
+        'coahuila' => 'coa', 'coahuila de zaragoza' => 'coa',
+        'colima' => 'col',
+        'durango' => 'dur',
+        'guanajuato' => 'gua',
+        'guerrero' => 'gro',
+        'hidalgo' => 'hid',
+        'jalisco' => 'jal',
+        'ciudad de mexico' => 'cmx', 'cdmx' => 'cmx', 'distrito federal' => 'cmx', 'mexico city' => 'cmx',
+        'mexico' => 'mex', 'estado de mexico' => 'mex', 'edomex' => 'mex', 'state of mexico' => 'mex',
+        'michoacan' => 'mic', 'michoacan de ocampo' => 'mic',
+        'morelos' => 'mor',
+        'nayarit' => 'nay',
+        'nuevo leon' => 'nle',
+        'oaxaca' => 'oax',
+        'puebla' => 'pue',
+        'queretaro' => 'que', 'queretaro de arteaga' => 'que',
+        'quintana roo' => 'roo',
+        'san luis potosi' => 'slp',
+        'sinaloa' => 'sin',
+        'sonora' => 'son',
+        'tabasco' => 'tab',
+        'tamaulipas' => 'tam',
+        'tlaxcala' => 'tla',
+        'veracruz' => 'ver', 'veracruz de ignacio de la llave' => 'ver',
+        'yucatan' => 'yuc',
+        'zacatecas' => 'zac',
+    ];
+
+    /** Code => Spanish display name. */
+    private const STATE_NAMES = [
+        'agu' => 'Aguascalientes', 'bcn' => 'Baja California', 'bcs' => 'Baja California Sur',
+        'cam' => 'Campeche', 'chp' => 'Chiapas', 'chh' => 'Chihuahua', 'coa' => 'Coahuila',
+        'col' => 'Colima', 'dur' => 'Durango', 'gua' => 'Guanajuato', 'gro' => 'Guerrero',
+        'hid' => 'Hidalgo', 'jal' => 'Jalisco', 'cmx' => 'Ciudad de México', 'mex' => 'Estado de México',
+        'mic' => 'Michoacán', 'mor' => 'Morelos', 'nay' => 'Nayarit', 'nle' => 'Nuevo León',
+        'oax' => 'Oaxaca', 'pue' => 'Puebla', 'que' => 'Querétaro', 'roo' => 'Quintana Roo',
+        'slp' => 'San Luis Potosí', 'sin' => 'Sinaloa', 'son' => 'Sonora', 'tab' => 'Tabasco',
+        'tam' => 'Tamaulipas', 'tla' => 'Tlaxcala', 'ver' => 'Veracruz', 'yuc' => 'Yucatán',
+        'zac' => 'Zacatecas',
+    ];
+
     /**
      * Update manual metrics for a specific month
      *
