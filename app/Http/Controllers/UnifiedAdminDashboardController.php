@@ -252,6 +252,20 @@ class UnifiedAdminDashboardController extends Controller
     }
 
     /**
+     * Manually-entered revenue for months flagged is_manual_mode that fall in
+     * the window. Added on top of calculated revenue to match the legacy
+     * all-time dashboard (early months were logged by hand, not as orders).
+     * Only meaningful for monthly windows (1y/all); manual rows are monthly.
+     */
+    private function manualRevenueInWindow($start, $end): float
+    {
+        $from = $start->copy()->startOfMonth();
+        return (float) MonthlyManualMetric::where('is_manual_mode', true)->get()
+            ->filter(fn ($m) => Carbon::create($m->year, $m->month, 1)->betweenIncluded($from, $end))
+            ->sum('total_revenue');
+    }
+
+    /**
      * Hero + network-scale KPIs for Dashboard V3, scoped to the global window.
      * GET /admin/dashboard/v3/overview?range=30d|90d|1y|all
      */
@@ -262,6 +276,9 @@ class UnifiedAdminDashboardController extends Controller
         $e = $w['end'];
 
         $revenue = $this->revenueInWindow($s, $e);
+        if (! $w['daily']) {
+            $revenue += $this->manualRevenueInWindow($s, $e);
+        }
         $expenses = (float) BusinessExpense::whereBetween('expense_date', [$s, $e])->sum('amount');
         $profit = $revenue - $expenses;
         $margin = $revenue > 0 ? round(($profit / $revenue) * 100, 1) : 0;
@@ -331,12 +348,22 @@ class UnifiedAdminDashboardController extends Controller
             ->selectRaw("DATE_FORMAT(created_at, '$fmt') as bk, COUNT(*) as cnt")
             ->groupBy('bk')->get()->keyBy('bk');
 
+        // Manually-entered revenue per month (only for monthly windows), so the
+        // chart total matches the legacy all-time headline.
+        $manualByMonth = [];
+        if (! $daily) {
+            foreach (MonthlyManualMetric::where('is_manual_mode', true)->get() as $m) {
+                $key = sprintf('%04d-%02d', $m->year, $m->month);
+                $manualByMonth[$key] = ($manualByMonth[$key] ?? 0) + (float) $m->total_revenue;
+            }
+        }
+
         $points = [];
         $tot = ['revenue' => 0, 'profit' => 0, 'orders' => 0, 'customers' => 0];
         $cursor = $s->copy();
         while ($cursor->lte($e)) {
             $k = $cursor->format($daily ? 'Y-m-d' : 'Y-m');
-            $rev = (float) ($ord[$k]->rev ?? 0) + (float) ($deposits[$k]->rev ?? 0) + (float) ($fees[$k] ?? 0);
+            $rev = (float) ($ord[$k]->rev ?? 0) + (float) ($deposits[$k]->rev ?? 0) + (float) ($fees[$k] ?? 0) + (float) ($manualByMonth[$k] ?? 0);
             $profit = $rev - (float) ($exp[$k]->total ?? 0);
             $orders = (int) ($ordCreated[$k]->cnt ?? 0);
             $customers = (int) ($cust[$k]->cnt ?? 0);
