@@ -218,10 +218,16 @@ class AdminOrderController extends Controller
 
         $paymentMethod = $request->payment_method ?? 'stripe';
 
-        if ($order->status !== Order::STATUS_PACKAGES_COMPLETE) {
+        // Allow consolidating a freshly-completed order, OR re-opening consolidation for an
+        // order already sitting in awaiting_payment that hasn't been paid yet (e.g. boxes were
+        // set up manually and the invoice / bank-transfer details were never sent).
+        $canConsolidate = $order->status === Order::STATUS_PACKAGES_COMPLETE
+            || ($order->status === Order::STATUS_AWAITING_PAYMENT && !$order->paid_at);
+
+        if (!$canConsolidate) {
             return response()->json([
                 'success' => false,
-                'message' => 'Order must be in packages_complete status to consolidate'
+                'message' => 'Order must be in packages_complete or unpaid awaiting_payment status to consolidate'
             ], 400);
         }
 
@@ -230,6 +236,22 @@ class AdminOrderController extends Controller
         try {
             $user = $order->user;
             $stripe = Cashier::stripe();
+
+            // If re-consolidating an order that already has a Stripe invoice (regenerating the
+            // charge or switching to bank transfer), cancel the previous unpaid invoice so the
+            // customer isn't left with two. Best-effort — never block re-consolidation on this.
+            if ($order->stripe_invoice_id) {
+                try {
+                    $existingInvoice = $stripe->invoices->retrieve($order->stripe_invoice_id);
+                    if ($existingInvoice->status === 'open') {
+                        $stripe->invoices->voidInvoice($order->stripe_invoice_id);
+                    } elseif ($existingInvoice->status === 'draft') {
+                        $stripe->invoices->delete($order->stripe_invoice_id);
+                    }
+                } catch (\Exception $e) {
+                    \Log::warning("Could not void previous invoice {$order->stripe_invoice_id}: {$e->getMessage()}");
+                }
+            }
 
             // 1. Fetch all box details from Stripe and calculate totals
             $boxEntries = [];
