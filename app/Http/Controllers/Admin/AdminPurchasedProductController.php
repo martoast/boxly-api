@@ -23,6 +23,13 @@ class AdminPurchasedProductController extends Controller
         if ($status = $request->input('status')) {
             $query->where('status', $status);
         }
+        // Date filtering (on the purchase date) — e.g. last 7/30/90 days.
+        if ($from = $request->input('date_from')) {
+            $query->whereDate('order_date', '>=', $from);
+        }
+        if ($to = $request->input('date_to')) {
+            $query->whereDate('order_date', '<=', $to);
+        }
 
         $records = $query->latest()->paginate((int) $request->input('per_page', 50));
 
