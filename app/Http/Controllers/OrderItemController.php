@@ -8,6 +8,7 @@ use App\Models\Order;
 use App\Models\OrderItem;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -98,6 +99,13 @@ class OrderItemController extends Controller
             ], 201);
         } catch (\Exception $e) {
             DB::rollBack();
+            // Log the real cause — previously this 500 was swallowed silently
+            // (debug off → null error), leaving prod logs blind to failures.
+            Log::error('Failed to add item to order', [
+                'order_id' => $order->id,
+                'user_id' => $request->user()?->id,
+                'error' => $e->getMessage(),
+            ]);
             // Clean up uploaded files if needed
             return response()->json([
                 'success' => false,
