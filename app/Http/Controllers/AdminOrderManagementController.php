@@ -21,27 +21,32 @@ class AdminOrderManagementController extends Controller
     public function createOrder(Request $request)
     {
         $isShipping = $request->order_type === 'shipping' || $request->order_type === null;
+        // Shell = a quick stub created from the ops board. The address is filled
+        // in later (when the order is actually worked), so don't require it now.
+        $isShell = $request->boolean('shell');
+        $requireAddress = $isShipping && !$isShell;
         $hasFullAddress = !empty($request->input('delivery_address.full_address'));
 
         $request->validate([
             'user_id' => 'required|exists:users,id',
             'status' => 'nullable|string|in:' . implode(',', array_keys(Order::getStatuses())),
             'order_type' => 'nullable|string|in:shipping,crossing',
+            'shell' => 'nullable|boolean',
 
-            // Delivery address required only for shipping orders
-            'delivery_address' => $isShipping ? 'required|array' : 'nullable|array',
+            // Delivery address required only for shipping orders (never for shells)
+            'delivery_address' => $requireAddress ? 'required|array' : 'nullable|array',
 
             // Option 1: Simple full_address string (admin convenience)
             'delivery_address.full_address' => 'nullable|string|max:1000',
 
-            // Option 2: Individual fields (only required if full_address not provided AND shipping)
-            'delivery_address.street' => ($isShipping && !$hasFullAddress) ? 'required|string|max:255' : 'nullable|string|max:255',
-            'delivery_address.exterior_number' => ($isShipping && !$hasFullAddress) ? 'required|string|max:20' : 'nullable|string|max:20',
+            // Option 2: Individual fields (only required if full_address not provided AND address required)
+            'delivery_address.street' => ($requireAddress && !$hasFullAddress) ? 'required|string|max:255' : 'nullable|string|max:255',
+            'delivery_address.exterior_number' => ($requireAddress && !$hasFullAddress) ? 'required|string|max:20' : 'nullable|string|max:20',
             'delivery_address.interior_number' => 'nullable|string|max:20',
-            'delivery_address.colonia' => ($isShipping && !$hasFullAddress) ? 'required|string|max:100' : 'nullable|string|max:100',
-            'delivery_address.municipio' => ($isShipping && !$hasFullAddress) ? 'required|string|max:100' : 'nullable|string|max:100',
-            'delivery_address.estado' => ($isShipping && !$hasFullAddress) ? 'required|string|max:100' : 'nullable|string|max:100',
-            'delivery_address.postal_code' => ($isShipping && !$hasFullAddress) ? 'required|regex:/^\d{5}$/' : 'nullable|regex:/^\d{5}$/',
+            'delivery_address.colonia' => ($requireAddress && !$hasFullAddress) ? 'required|string|max:100' : 'nullable|string|max:100',
+            'delivery_address.municipio' => ($requireAddress && !$hasFullAddress) ? 'required|string|max:100' : 'nullable|string|max:100',
+            'delivery_address.estado' => ($requireAddress && !$hasFullAddress) ? 'required|string|max:100' : 'nullable|string|max:100',
+            'delivery_address.postal_code' => ($requireAddress && !$hasFullAddress) ? 'required|regex:/^\d{5}$/' : 'nullable|regex:/^\d{5}$/',
             'delivery_address.referencias' => 'nullable|string|max:500',
 
             'is_rural' => 'boolean',
