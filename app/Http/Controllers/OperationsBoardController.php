@@ -57,10 +57,11 @@ class OperationsBoardController extends Controller
             ? Carbon::parse($request->end_date)
             : $start->copy()->addDays(6))->endOfDay();
 
-        // --- Weekday columns: consolidated orders scheduled in the window.
+        // --- Weekday columns: any active order scheduled (planned_ship_date)
+        // within the window, regardless of whether it's consolidated yet.
         // Bounded by the visible week, so we load them all in one shot. ---
         $scheduled = Order::with(['user', 'boxes', 'items'])
-            ->where('status', Order::STATUS_AWAITING_PAYMENT)
+            ->whereIn('status', $this->activeStatuses)
             ->whereNotNull('planned_ship_date')
             ->whereBetween('planned_ship_date', [$start, $end])
             ->get();
@@ -80,17 +81,8 @@ class OperationsBoardController extends Controller
         $search = trim((string) $request->input('search', ''));
 
         $backlogQuery = Order::with(['user', 'boxes', 'items'])
-            ->where(function ($q) {
-                $q->whereIn('status', [
-                        Order::STATUS_COLLECTING,
-                        Order::STATUS_AWAITING_PACKAGES,
-                        Order::STATUS_PACKAGES_COMPLETE,
-                    ])
-                  ->orWhere(function ($q2) {
-                      $q2->where('status', Order::STATUS_AWAITING_PAYMENT)
-                         ->whereNull('planned_ship_date');
-                  });
-            })
+            ->whereIn('status', $this->activeStatuses)
+            ->whereNull('planned_ship_date')
             ->when($search === '' && $sinceDays > 0, function ($q) use ($sinceDays) {
                 $q->where('created_at', '>=', Carbon::now()->subDays($sinceDays));
             });
@@ -188,10 +180,12 @@ class OperationsBoardController extends Controller
             'notify' => 'nullable|boolean',
         ]);
 
-        if ($order->status !== Order::STATUS_AWAITING_PAYMENT) {
+        // Any active order can be scheduled onto a day (planning is decoupled from
+        // consolidation). Shipped/delivered/cancelled orders are off the board.
+        if (!in_array($order->status, $this->activeStatuses, true)) {
             return response()->json([
                 'success' => false,
-                'message' => 'Only consolidated orders can be rescheduled. Consolidate the order to set its ship date.',
+                'message' => 'Only active orders can be scheduled.',
             ], 400);
         }
 
@@ -242,7 +236,9 @@ class OperationsBoardController extends Controller
     {
         return match ($order->status) {
             Order::STATUS_AWAITING_PAYMENT => 'ready_to_ship',
-            Order::STATUS_PACKAGES_COMPLETE => 'needs_ship_date',
+            // A packages-complete box only "needs a date" until it's been
+            // scheduled onto a day; once scheduled it's just a ready box.
+            Order::STATUS_PACKAGES_COMPLETE => $order->planned_ship_date ? 'active_box' : 'needs_ship_date',
             Order::STATUS_AWAITING_PACKAGES => $arrivedCount > 0 ? 'active_box' : 'inventory_expected',
             default => 'collecting',
         };
