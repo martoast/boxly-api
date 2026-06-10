@@ -23,6 +23,9 @@ use Illuminate\Support\Carbon;
  */
 class OperationsBoardController extends Controller
 {
+    /** How far back the (un-searched) backlog reaches, to keep old data out. */
+    protected const BACKLOG_RECENCY_DAYS = 90;
+
     /** Statuses that still live on the board (not yet shipped/delivered/cancelled). */
     protected array $activeStatuses = [
         Order::STATUS_COLLECTING,
@@ -37,7 +40,14 @@ class OperationsBoardController extends Controller
      */
     public function index(Request $request)
     {
-        $request->validate(['start_date' => 'nullable|date', 'end_date' => 'nullable|date']);
+        $request->validate([
+            'start_date' => 'nullable|date',
+            'end_date' => 'nullable|date',
+            'page' => 'nullable|integer|min:1',
+            'per_page' => 'nullable|integer|min:1|max:100',
+            'since_days' => 'nullable|integer|min:0|max:3650',
+            'search' => 'nullable|string|max:100',
+        ]);
 
         // Rolling window — the frontend sends the first/last working day shown.
         $start = ($request->filled('start_date')
@@ -47,39 +57,76 @@ class OperationsBoardController extends Controller
             ? Carbon::parse($request->end_date)
             : $start->copy()->addDays(6))->endOfDay();
 
-        $orders = Order::with(['user', 'boxes', 'items'])
-            ->whereIn('status', $this->activeStatuses)
+        // --- Weekday columns: consolidated orders scheduled in the window.
+        // Bounded by the visible week, so we load them all in one shot. ---
+        $scheduled = Order::with(['user', 'boxes', 'items'])
+            ->where('status', Order::STATUS_AWAITING_PAYMENT)
+            ->whereNotNull('planned_ship_date')
+            ->whereBetween('planned_ship_date', [$start, $end])
             ->get();
 
-        $days = [];          // 'YYYY-MM-DD' => [cards]  (scheduled, in this week)
-        $needsShipDate = []; // packages_complete + awaiting_payment without a date
-        $inProgress = [];    // collecting + awaiting_packages
-
-        foreach ($orders as $order) {
-            $card = $this->toCard($order);
-
-            if ($order->status === Order::STATUS_AWAITING_PAYMENT && $order->planned_ship_date) {
-                $date = Carbon::parse($order->planned_ship_date);
-                if ($date->between($start, $end)) {
-                    $days[$date->toDateString()][] = $card;
-                }
-                // scheduled outside this window => simply not shown here
-            } else {
-                // Everything else still needs a ship date, so it lives in the
-                // backlog until consolidated/scheduled: awaiting_payment without
-                // a date, packages_complete, awaiting_packages, and collecting.
-                // (Each keeps its own badge so the warehouse can tell them apart.)
-                $needsShipDate[] = $card;
-            }
+        $days = []; // 'YYYY-MM-DD' => [cards]
+        foreach ($scheduled as $order) {
+            $days[Carbon::parse($order->planned_ship_date)->toDateString()][] = $this->toCard($order);
         }
+
+        // --- Backlog ("Needs Ship Date"): everything still without a scheduled
+        // ship date. This is the unbounded list, so it's paginated + searchable
+        // so the page never has to load/compute every order at once. ---
+        // Only recent orders: old/abandoned/messy data from all-time would
+        // otherwise flood the backlog. A search bypasses the cutoff so a real
+        // older order can still be found by name/phone/number.
+        $sinceDays = (int) $request->input('since_days', self::BACKLOG_RECENCY_DAYS);
+        $search = trim((string) $request->input('search', ''));
+
+        $backlogQuery = Order::with(['user', 'boxes', 'items'])
+            ->where(function ($q) {
+                $q->whereIn('status', [
+                        Order::STATUS_COLLECTING,
+                        Order::STATUS_AWAITING_PACKAGES,
+                        Order::STATUS_PACKAGES_COMPLETE,
+                    ])
+                  ->orWhere(function ($q2) {
+                      $q2->where('status', Order::STATUS_AWAITING_PAYMENT)
+                         ->whereNull('planned_ship_date');
+                  });
+            })
+            ->when($search === '' && $sinceDays > 0, function ($q) use ($sinceDays) {
+                $q->where('created_at', '>=', Carbon::now()->subDays($sinceDays));
+            });
+        if ($search !== '') {
+            $digits = preg_replace('/\D/', '', $search);
+            $backlogQuery->where(function ($q) use ($search, $digits) {
+                $q->where('order_number', 'like', "%{$search}%")
+                  ->orWhere('tracking_number', 'like', "%{$search}%")
+                  ->orWhereHas('user', function ($u) use ($search, $digits) {
+                      $u->where('name', 'like', "%{$search}%")
+                        ->orWhere('email', 'like', "%{$search}%");
+                      if ($digits !== '') {
+                          $u->orWhere('phone', 'like', "%{$digits}%");
+                      }
+                  });
+            });
+        }
+
+        $backlog = $backlogQuery
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->paginate((int) $request->input('per_page', 30));
 
         return response()->json([
             'success' => true,
             'start_date' => $start->toDateString(),
             'end_date' => $end->toDateString(),
             'days' => $days,
-            'needs_ship_date' => $needsShipDate,
-            'in_progress' => $inProgress,
+            'needs_ship_date' => $backlog->getCollection()->map(fn ($o) => $this->toCard($o))->values(),
+            'needs_ship_date_meta' => [
+                'current_page' => $backlog->currentPage(),
+                'last_page' => $backlog->lastPage(),
+                'total' => $backlog->total(),
+                'has_more' => $backlog->hasMorePages(),
+            ],
+            'in_progress' => [], // retained for response-shape compatibility
         ]);
     }
 
