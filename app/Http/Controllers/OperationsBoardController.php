@@ -177,6 +177,7 @@ class OperationsBoardController extends Controller
             'user_id' => $order->user_id,
             'customer_name' => $order->user?->name,
             'customer_email' => $order->user?->email,
+            'customer_phone' => $order->user?->phone,
             'order_type' => $order->order_type ?? 'shipping',
             'box_summary' => $this->boxSummary($order),
             'status' => $order->status,
