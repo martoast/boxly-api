@@ -11,11 +11,12 @@ use Illuminate\Support\Carbon;
  *
  * Read-only views over the existing order lifecycle (no payment logic here):
  *   - `awaiting_payment` (+ planned_ship_date)  => 🔵 Ready to Ship, on its day
- *   - `awaiting_payment` (no date / legacy)      => backlog "Needs Ship Date"
- *   - `packages_complete`                        => backlog "Needs Ship Date"
- *   - `awaiting_packages` (some arrived)         => 🟢 Active Box (in progress)
- *   - `awaiting_packages` (none arrived)         => 🟡 Inventory Expected (in progress)
- *   - `collecting`                               => ⚪ Collecting (in progress)
+ *   - everything else (no scheduled ship date)   => backlog "Needs Ship Date":
+ *       · `awaiting_payment` (no date / legacy)  => 🟠 Needs Date
+ *       · `packages_complete`                    => 🟠 Needs Date
+ *       · `awaiting_packages` (some arrived)     => 🟢 Active Box
+ *       · `awaiting_packages` (none arrived)     => 🟡 Inventory Expected
+ *       · `collecting`                           => ⚪ Collecting
  *
  * The ship date is set at consolidation; this controller only reads it and
  * lets an admin re-schedule an already-consolidated order between days.
@@ -57,20 +58,18 @@ class OperationsBoardController extends Controller
         foreach ($orders as $order) {
             $card = $this->toCard($order);
 
-            if ($order->status === Order::STATUS_AWAITING_PAYMENT) {
-                if ($order->planned_ship_date) {
-                    $date = Carbon::parse($order->planned_ship_date);
-                    if ($date->between($start, $end)) {
-                        $days[$date->toDateString()][] = $card;
-                    }
-                    // scheduled outside this window => simply not shown here
-                } else {
-                    $needsShipDate[] = $card; // consolidated but unscheduled
+            if ($order->status === Order::STATUS_AWAITING_PAYMENT && $order->planned_ship_date) {
+                $date = Carbon::parse($order->planned_ship_date);
+                if ($date->between($start, $end)) {
+                    $days[$date->toDateString()][] = $card;
                 }
-            } elseif ($order->status === Order::STATUS_PACKAGES_COMPLETE) {
-                $needsShipDate[] = $card;
+                // scheduled outside this window => simply not shown here
             } else {
-                $inProgress[] = $card; // collecting / awaiting_packages
+                // Everything else still needs a ship date, so it lives in the
+                // backlog until consolidated/scheduled: awaiting_payment without
+                // a date, packages_complete, awaiting_packages, and collecting.
+                // (Each keeps its own badge so the warehouse can tell them apart.)
+                $needsShipDate[] = $card;
             }
         }
 
