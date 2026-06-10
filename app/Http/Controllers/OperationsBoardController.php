@@ -190,8 +190,9 @@ class OperationsBoardController extends Controller
         }
 
         $order->skipEmailNotifications = true;
-        // Admin toggle from the reschedule popup — default to notifying the customer.
-        $order->skipShipDateEmail = ! $request->boolean('notify', true);
+        // Admin opts IN to emailing via the popup toggle — default is no email,
+        // so scheduling/dragging a card never surprises the customer.
+        $order->skipShipDateEmail = ! $request->boolean('notify', false);
         $order->planned_ship_date = $request->planned_ship_date; // null clears it (un-schedule)
         $order->save();
 
