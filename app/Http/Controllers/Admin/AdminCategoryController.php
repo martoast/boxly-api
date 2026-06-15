@@ -5,14 +5,12 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\Category;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Storage;
 
 class AdminCategoryController extends Controller
 {
     public function index(Request $request)
     {
-        $query = Category::query()->withCount('products');
+        $query = Category::query();
 
         if ($search = $request->input('search')) {
             $query->where('name', 'like', "%{$search}%");
@@ -28,7 +26,7 @@ class AdminCategoryController extends Controller
 
     public function show(Category $category)
     {
-        return response()->json(['success' => true, 'data' => $category->loadCount('products')]);
+        return response()->json(['success' => true, 'data' => $category]);
     }
 
     public function store(Request $request)
@@ -37,7 +35,6 @@ class AdminCategoryController extends Controller
             'name'        => 'required|string|max:255',
             'slug'        => 'nullable|string|max:255|unique:categories,slug',
             'description' => 'nullable|string',
-            'image_url'   => 'nullable|url|max:500',
             'is_active'   => 'nullable|boolean',
             'sort_order'  => 'nullable|integer|min:0',
         ]);
@@ -52,7 +49,6 @@ class AdminCategoryController extends Controller
             'name'        => 'sometimes|string|max:255',
             'slug'        => 'sometimes|string|max:255|unique:categories,slug,' . $category->id,
             'description' => 'nullable|string',
-            'image_url'   => 'nullable|url|max:500',
             'is_active'   => 'nullable|boolean',
             'sort_order'  => 'nullable|integer|min:0',
         ]);
@@ -65,28 +61,5 @@ class AdminCategoryController extends Controller
     {
         $category->delete(); // cascades pivot rows
         return response()->json(['success' => true, 'message' => 'Category deleted']);
-    }
-
-    public function uploadImage(Request $request, Category $category)
-    {
-        $request->validate([
-            'image' => 'required|image|mimes:jpeg,jpg,png,webp|max:5120',
-        ]);
-
-        try {
-            $file = $request->file('image');
-            $path = "categories/{$category->slug}/img-" . time() . '.' . $file->getClientOriginalExtension();
-            Storage::disk('spaces')->putFileAs(dirname($path), $file, basename($path), [
-                'visibility' => 'public',
-                'CacheControl' => 'public, max-age=31536000, immutable',
-            ]);
-            $url = config('filesystems.disks.spaces.url') . '/' . $path;
-
-            $category->update(['image_url' => $url]);
-            return response()->json(['success' => true, 'data' => $category->fresh()]);
-        } catch (\Exception $e) {
-            Log::error('Category image upload failed', ['category_id' => $category->id, 'error' => $e->getMessage()]);
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
-        }
     }
 }

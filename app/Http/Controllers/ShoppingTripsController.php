@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Category;
 use App\Models\ShoppingTrip;
 use App\Models\Store;
 use Illuminate\Http\Request;
@@ -49,6 +50,23 @@ class ShoppingTripsController extends Controller
                 'per_store_fee_usd'  => (float) config('services.in_person.per_store_fee_usd', 10),
                 'service_fee_percent'=> (float) config('services.commission.default_percent', 8),
             ],
+        ]);
+    }
+
+    /**
+     * Active product categories for the per-store interest picker in the
+     * in-person flow.
+     */
+    public function categories(Request $request)
+    {
+        $categories = Category::active()
+            ->orderBy('sort_order')
+            ->orderBy('name')
+            ->get(['id', 'name', 'slug', 'image_url']);
+
+        return response()->json([
+            'success' => true,
+            'data'    => $categories,
         ]);
     }
 }

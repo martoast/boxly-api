@@ -11,8 +11,8 @@ use Stripe\StripeClient;
  *  • main()      — the original account (boxes / shipping / Cashier-managed
  *                  customers via User->stripe_id). Identical to Cashier::stripe()
  *                  so call sites stay readable.
- *  • shopping()  — the second account, used only for Boxly Store + Purchase
- *                  Request invoices. Customers there live in
+ *  • shopping()  — the second account, used only for Purchase Request
+ *                  invoices + in-person deposits. Customers there live in
  *                  User->stripe_shopping_id, created on demand.
  *
  * Use this helper in any code path that needs to talk to Stripe so it's

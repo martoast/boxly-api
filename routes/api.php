@@ -29,15 +29,10 @@ use App\Http\Controllers\AdminAffiliateController;
 use App\Http\Controllers\AdminCampaignController;
 use App\Http\Controllers\CampaignTrackingController;
 use App\Http\Controllers\EmployeeOrderController;
-use App\Http\Controllers\StoreProductController;
-use App\Http\Controllers\StoreCheckoutController;
 use App\Http\Controllers\ShoppingTripsController;
 use App\Http\Controllers\Admin\AdminShoppingTripsController;
-use App\Http\Controllers\Admin\AdminProductController;
 use App\Http\Controllers\Admin\AdminStoreController;
 use App\Http\Controllers\Admin\AdminCategoryController;
-use App\Http\Controllers\Admin\AdminGenderController;
-use App\Http\Controllers\Admin\AdminStoreSalesController;
 use App\Http\Controllers\Admin\AdminPurchasedProductController;
 use App\Http\Controllers\Admin\AdminTokenController;
 
@@ -65,25 +60,6 @@ Route::get('/', function () {
 // Public Product Routes (Stripe boxes)
 Route::get('/products', [ProductController::class, 'index']);
 Route::get('/products/{priceId}', [ProductController::class, 'show']); // Added this
-
-// Public Boxly Store Routes (anyone can browse + view product detail).
-//
-// Wrapped in edge.cache middleware so Cloudflare can cache responses
-// at the Mexico edge — drops API call latency from ~250ms to ~30ms
-// for cache hits, transforming /shop's cold-cache TTFB. Cache-Control
-// args: max-age=300 (browser 5 min), s-maxage=3600 (edge 1 hour),
-// stale-while-revalidate=86400 (24h SWR window). Admin writes will
-// take up to 1 hour to fully propagate publicly; if/when that becomes
-// an issue we'll add a Cloudflare API purge step on admin updates.
-Route::middleware('edge.cache:300,3600,86400')->prefix('store')->group(function () {
-    Route::get('/products', [StoreProductController::class, 'index']);
-    Route::get('/products/featured', [StoreProductController::class, 'featured']);
-    Route::get('/products/{slug}', [StoreProductController::class, 'show']);
-    Route::get('/hero', [\App\Http\Controllers\ShopHeroController::class, 'publicShow']);
-    Route::get('/categories', [StoreProductController::class, 'categories']);
-    Route::get('/stores', [StoreProductController::class, 'stores']);
-    Route::get('/genders', [StoreProductController::class, 'genders']);
-});
 
 Route::get('/user-types', function () {
     return response()->json([
@@ -223,11 +199,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::prefix('shopping-trips')->group(function () {
         Route::get('/availability', [ShoppingTripsController::class, 'availability']);
         Route::get('/in-person-stores', [ShoppingTripsController::class, 'inPersonStores']);
+        Route::get('/categories', [ShoppingTripsController::class, 'categories']);
         Route::post('/book', [\App\Http\Controllers\ShoppingTripBookingController::class, 'store']);
     });
-
-    // Boxly Store — checkout flows directly into the assisted Purchase Request pipeline
-    Route::post('/store/checkout', [StoreCheckoutController::class, 'create']);
 
     Route::prefix('orders')->group(function () {
         Route::get('/', [OrderController::class, 'index']);
@@ -423,7 +397,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/{affiliate}/record-payout', [AdminAffiliateController::class, 'recordPayout']);
         });
 
-        // Boxly Store — Stores (brands)
+        // In-person shopping — stores the team can visit at Las Americas
         Route::prefix('stores')->group(function () {
             Route::get('/', [AdminStoreController::class, 'index']);
             Route::post('/', [AdminStoreController::class, 'store']);
@@ -431,62 +405,15 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::put('/{store}', [AdminStoreController::class, 'update']);
             Route::delete('/{store}', [AdminStoreController::class, 'destroy']);
             Route::post('/{store}/logo', [AdminStoreController::class, 'uploadLogo']);
-            Route::post('/{store}/cover-image', [AdminStoreController::class, 'uploadCoverImage']);
         });
 
-        // Boxly Store — Categories
+        // In-person shopping — category taxonomy for the store picker
         Route::prefix('categories')->group(function () {
             Route::get('/', [AdminCategoryController::class, 'index']);
             Route::post('/', [AdminCategoryController::class, 'store']);
             Route::get('/{category}', [AdminCategoryController::class, 'show']);
             Route::put('/{category}', [AdminCategoryController::class, 'update']);
             Route::delete('/{category}', [AdminCategoryController::class, 'destroy']);
-            Route::post('/{category}/image', [AdminCategoryController::class, 'uploadImage']);
-        });
-
-        // Boxly Store — Genders
-        Route::prefix('genders')->group(function () {
-            Route::get('/', [AdminGenderController::class, 'index']);
-            Route::post('/', [AdminGenderController::class, 'store']);
-            Route::get('/{gender}', [AdminGenderController::class, 'show']);
-            Route::put('/{gender}', [AdminGenderController::class, 'update']);
-            Route::delete('/{gender}', [AdminGenderController::class, 'destroy']);
-            Route::post('/{gender}/image', [AdminGenderController::class, 'uploadImage']);
-        });
-
-        // Boxly Store — Sales (read-only view over store-checkout PRs)
-        Route::prefix('store-sales')->group(function () {
-            Route::get('/', [AdminStoreSalesController::class, 'index']);
-            Route::get('/stats', [AdminStoreSalesController::class, 'stats']);
-        });
-
-        // Boxly Store — Admin Product Management
-        Route::prefix('products')->group(function () {
-            Route::get('/', [AdminProductController::class, 'index']);
-            Route::post('/', [AdminProductController::class, 'store']);
-            Route::delete('/bulk', [AdminProductController::class, 'bulkDestroy']);
-            Route::put('/bulk-restore', [AdminProductController::class, 'bulkRestore']);
-            Route::delete('/bulk-force', [AdminProductController::class, 'bulkForceDestroy']);
-            Route::post('/bulk-categorize', [AdminProductController::class, 'bulkCategorize']);
-            Route::post('/bulk-gender', [AdminProductController::class, 'bulkGender']);
-            Route::get('/expiring', [AdminProductController::class, 'expiring']);
-            Route::get('/{product}', [AdminProductController::class, 'show']);
-            Route::put('/{product}', [AdminProductController::class, 'update']);
-            Route::delete('/{product}', [AdminProductController::class, 'destroy']);
-            Route::delete('/{product}/force', [AdminProductController::class, 'forceDestroy']);
-            Route::post('/{product}/images', [AdminProductController::class, 'uploadImages']);
-            Route::delete('/{product}/images/{index}', [AdminProductController::class, 'deleteImage']);
-            // Variants
-            Route::post('/{product}/variants', [AdminProductController::class, 'addVariant']);
-            Route::post('/{product}/variants/sync', [AdminProductController::class, 'syncVariants']);
-            Route::delete('/{product}/variants/{variant}', [AdminProductController::class, 'deleteVariant']);
-        });
-
-        // Editable storefront hero — single active campaign at a time.
-        Route::prefix('store-hero')->group(function () {
-            Route::get('/', [\App\Http\Controllers\ShopHeroController::class, 'show']);
-            Route::put('/', [\App\Http\Controllers\ShopHeroController::class, 'update']);
-            Route::post('/image', [\App\Http\Controllers\ShopHeroController::class, 'uploadImage']);
         });
 
         Route::prefix('campaigns')->group(function () {
@@ -519,7 +446,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     /*
     |--------------------------------------------------------------------------
-    | Shopping Team Routes (Velonie — storefront CRUD + PR fulfillment)
+    | Shopping Team Routes (Velonie — PR fulfillment + in-person store/category mgmt)
     | Mounts the existing admin controllers; gated so admins (full visibility)
     | and shopping employees both pass.
     |--------------------------------------------------------------------------
@@ -558,33 +485,6 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::delete('/{purchaseRequest}/items/{item}', [AdminPurchaseRequestController::class, 'deleteItem']);
         });
 
-        Route::prefix('products')->group(function () {
-            Route::get('/', [AdminProductController::class, 'index']);
-            Route::post('/', [AdminProductController::class, 'store']);
-            Route::delete('/bulk', [AdminProductController::class, 'bulkDestroy']);
-            Route::put('/bulk-restore', [AdminProductController::class, 'bulkRestore']);
-            Route::delete('/bulk-force', [AdminProductController::class, 'bulkForceDestroy']);
-            Route::post('/bulk-categorize', [AdminProductController::class, 'bulkCategorize']);
-            Route::post('/bulk-gender', [AdminProductController::class, 'bulkGender']);
-            Route::get('/expiring', [AdminProductController::class, 'expiring']);
-            Route::get('/{product}', [AdminProductController::class, 'show']);
-            Route::put('/{product}', [AdminProductController::class, 'update']);
-            Route::delete('/{product}', [AdminProductController::class, 'destroy']);
-            Route::delete('/{product}/force', [AdminProductController::class, 'forceDestroy']);
-            Route::post('/{product}/images', [AdminProductController::class, 'uploadImages']);
-            Route::delete('/{product}/images/{index}', [AdminProductController::class, 'deleteImage']);
-            Route::post('/{product}/variants', [AdminProductController::class, 'addVariant']);
-            Route::post('/{product}/variants/sync', [AdminProductController::class, 'syncVariants']);
-            Route::delete('/{product}/variants/{variant}', [AdminProductController::class, 'deleteVariant']);
-        });
-
-        // Editable storefront hero — single active campaign at a time.
-        Route::prefix('store-hero')->group(function () {
-            Route::get('/', [\App\Http\Controllers\ShopHeroController::class, 'show']);
-            Route::put('/', [\App\Http\Controllers\ShopHeroController::class, 'update']);
-            Route::post('/image', [\App\Http\Controllers\ShopHeroController::class, 'uploadImage']);
-        });
-
         Route::prefix('stores')->group(function () {
             Route::get('/', [AdminStoreController::class, 'index']);
             Route::post('/', [AdminStoreController::class, 'store']);
@@ -592,7 +492,6 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::put('/{store}', [AdminStoreController::class, 'update']);
             Route::delete('/{store}', [AdminStoreController::class, 'destroy']);
             Route::post('/{store}/logo', [AdminStoreController::class, 'uploadLogo']);
-            Route::post('/{store}/cover-image', [AdminStoreController::class, 'uploadCoverImage']);
         });
 
         Route::prefix('categories')->group(function () {
@@ -601,21 +500,6 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/{category}', [AdminCategoryController::class, 'show']);
             Route::put('/{category}', [AdminCategoryController::class, 'update']);
             Route::delete('/{category}', [AdminCategoryController::class, 'destroy']);
-            Route::post('/{category}/image', [AdminCategoryController::class, 'uploadImage']);
-        });
-
-        Route::prefix('genders')->group(function () {
-            Route::get('/', [AdminGenderController::class, 'index']);
-            Route::post('/', [AdminGenderController::class, 'store']);
-            Route::get('/{gender}', [AdminGenderController::class, 'show']);
-            Route::put('/{gender}', [AdminGenderController::class, 'update']);
-            Route::delete('/{gender}', [AdminGenderController::class, 'destroy']);
-            Route::post('/{gender}/image', [AdminGenderController::class, 'uploadImage']);
-        });
-
-        Route::prefix('store-sales')->group(function () {
-            Route::get('/', [AdminStoreSalesController::class, 'index']);
-            Route::get('/stats', [AdminStoreSalesController::class, 'stats']);
         });
 
         Route::prefix('purchased-products')->group(function () {

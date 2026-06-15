@@ -6,7 +6,6 @@ use App\Models\Order;
 use App\Models\PurchaseRequest;
 use App\Models\Affiliate;
 use App\Models\AffiliateConversion;
-use App\Models\Product;
 use Illuminate\Http\Request;
 use Stripe\Event;
 use Stripe\Webhook;
@@ -33,8 +32,8 @@ class StripeWebhookController extends Controller
     }
 
     /**
-     * Webhook for the SHOPPING Stripe account (Boxly Store / Purchase
-     * Request invoices). Separate signing secret = separate verification.
+     * Webhook for the SHOPPING Stripe account (Purchase Request invoices +
+     * in-person deposits). Separate signing secret = separate verification.
      *
      * Configured in Stripe Dashboard at:
      *   https://api.boxly.mx/webhooks/stripe-shopping
@@ -77,10 +76,8 @@ class StripeWebhookController extends Controller
     }
 
     /**
-     * Handle a completed Stripe Checkout Session — fired for Boxly Store purchases.
-     * The store checkout creates a PurchaseRequest in `quoted` status; when the
-     * Checkout Session completes we flip it to `paid` so the admin can buy it
-     * from the source store via the existing PR flow.
+     * Handle a completed Stripe Checkout Session — fired for in-person
+     * deposits and trip-booking deposits paid through Stripe Checkout.
      */
     protected function handleCheckoutSessionCompleted(Event $event)
     {
@@ -93,10 +90,6 @@ class StripeWebhookController extends Controller
             'type' => $type,
             'metadata' => $metadata,
         ]);
-
-        if ($type === 'store_purchase' && isset($metadata['purchase_request_id'])) {
-            $this->handleStorePurchasePaid($session, $metadata);
-        }
 
         if ($type === 'in_person_deposit' && isset($metadata['purchase_request_id'])) {
             $this->handleInPersonDepositPaid($session, $metadata);
@@ -242,44 +235,6 @@ class StripeWebhookController extends Controller
             ]);
         } catch (\Exception $e) {
             Log::error('Failed to handle in-person deposit paid', [
-                'session_id' => $session->id,
-                'error'      => $e->getMessage(),
-            ]);
-        }
-    }
-
-    protected function handleStorePurchasePaid($session, array $metadata)
-    {
-        $pr = PurchaseRequest::find($metadata['purchase_request_id']);
-        if (! $pr) {
-            Log::warning('Purchase request not found for store checkout completion', [
-                'purchase_request_id' => $metadata['purchase_request_id'],
-            ]);
-            return;
-        }
-
-        if ($pr->status === PurchaseRequest::STATUS_PAID) return;
-
-        try {
-            $pr->update([
-                'status'  => PurchaseRequest::STATUS_PAID,
-                'paid_at' => now(),
-            ]);
-
-            try {
-                Mail::to($pr->user)->queue(new PurchaseRequestPaymentReceived($pr));
-            } catch (\Exception $e) {
-                Log::error('Failed to queue store purchase paid email', ['error' => $e->getMessage()]);
-            }
-
-            $this->notifyShoppingTeamOfPaidPR($pr);
-
-            Log::info('Store purchase paid', [
-                'purchase_request_id' => $pr->id,
-                'session_id'          => $session->id,
-            ]);
-        } catch (\Exception $e) {
-            Log::error('Failed to handle store purchase paid', [
                 'session_id' => $session->id,
                 'error'      => $e->getMessage(),
             ]);

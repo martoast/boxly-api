@@ -13,7 +13,7 @@ class AdminStoreController extends Controller
 {
     public function index(Request $request)
     {
-        $query = Store::query()->withCount('products');
+        $query = Store::query();
 
         if ($search = $request->input('search')) {
             $query->where('name', 'like', "%{$search}%");
@@ -29,7 +29,7 @@ class AdminStoreController extends Controller
 
     public function show(Store $store)
     {
-        return response()->json(['success' => true, 'data' => $store->loadCount('products')]);
+        return response()->json(['success' => true, 'data' => $store]);
     }
 
     public function store(Request $request)
@@ -37,12 +37,9 @@ class AdminStoreController extends Controller
         $validated = $request->validate([
             'name'            => 'required|string|max:255',
             'slug'            => 'nullable|string|max:255|unique:stores,slug',
-            'base_url'        => 'nullable|url|max:500',
             'logo_url'        => 'nullable|url|max:500',
-            'cover_image_url' => 'nullable|url|max:500',
             'description'     => 'nullable|string',
             'is_active'             => 'nullable|boolean',
-            'show_on_landing'       => 'nullable|boolean',
             'is_in_person_available'=> 'nullable|boolean',
             'sort_order'            => 'nullable|integer|min:0',
         ]);
@@ -56,12 +53,9 @@ class AdminStoreController extends Controller
         $validated = $request->validate([
             'name'            => 'sometimes|string|max:255',
             'slug'            => 'sometimes|string|max:255|unique:stores,slug,' . $store->id,
-            'base_url'        => 'nullable|url|max:500',
             'logo_url'        => 'nullable|url|max:500',
-            'cover_image_url' => 'nullable|url|max:500',
             'description'     => 'nullable|string',
             'is_active'             => 'nullable|boolean',
-            'show_on_landing'       => 'nullable|boolean',
             'is_in_person_available'=> 'nullable|boolean',
             'sort_order'            => 'nullable|integer|min:0',
         ]);
@@ -99,34 +93,6 @@ class AdminStoreController extends Controller
             return response()->json(['success' => true, 'data' => $store->fresh()]);
         } catch (\Exception $e) {
             Log::error('Store logo upload failed', ['store_id' => $store->id, 'error' => $e->getMessage()]);
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
-        }
-    }
-
-    /**
-     * Upload an editorial cover image to Spaces and set cover_image_url.
-     * Used by the brand showcase tiles on /shop and the brand index page.
-     */
-    public function uploadCoverImage(Request $request, Store $store)
-    {
-        $request->validate([
-            'image' => 'required|image|mimes:jpeg,jpg,png,webp|max:10240',
-        ]);
-
-        try {
-            $file = $request->file('image');
-            $path = "stores/{$store->slug}/cover-" . time() . '.' . $file->getClientOriginalExtension();
-            Storage::disk('spaces')->putFileAs(dirname($path), $file, basename($path), [
-                'visibility' => 'public',
-                'CacheControl' => 'public, max-age=31536000, immutable',
-            ]);
-            $url = config('filesystems.disks.spaces.url') . '/' . $path;
-
-            $store->update(['cover_image_url' => $url]);
-
-            return response()->json(['success' => true, 'data' => $store->fresh()]);
-        } catch (\Exception $e) {
-            Log::error('Store cover image upload failed', ['store_id' => $store->id, 'error' => $e->getMessage()]);
             return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }
     }

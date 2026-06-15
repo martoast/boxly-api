@@ -4,7 +4,6 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Support\Str;
 
 class Category extends Model
@@ -44,11 +43,6 @@ class Category extends Model
             $slug = $base . '-' . $i++;
         }
         return $slug;
-    }
-
-    public function products(): BelongsToMany
-    {
-        return $this->belongsToMany(Product::class)->withTimestamps();
     }
 
     public function scopeActive($query)
