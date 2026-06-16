@@ -172,6 +172,19 @@ class StripeWebhookController extends Controller
                 'trip_id'        => $trip->id,
             ]);
         });
+
+        // Email the customer their booking confirmation — only on the confirmed
+        // path (not the auto-refunded race loser). Best-effort.
+        if ($booking->status === \App\Models\ShoppingTripBooking::STATUS_CONFIRMED) {
+            try {
+                Mail::to($booking->user)->queue(new \App\Mail\ShoppingTripBookingConfirmed($booking));
+            } catch (\Exception $e) {
+                Log::error('Failed to queue trip booking confirmation email', [
+                    'booking_id' => $booking->id,
+                    'error'      => $e->getMessage(),
+                ]);
+            }
+        }
     }
 
     /**
