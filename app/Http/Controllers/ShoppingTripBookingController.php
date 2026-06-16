@@ -154,6 +154,9 @@ class ShoppingTripBookingController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Could not initiate payment. Please try again.',
+                // TEMP debug — remove after diagnosing the prod 500.
+                'debug'   => $e->getMessage(),
+                'debug_type' => get_class($e),
             ], 500);
         }
     }
