@@ -8,7 +8,7 @@ use Illuminate\Http\Request;
 
 /**
  * Admin CRUD for the in-person shopping schedule. The customer-facing
- * /shop/in-person flow reads from the open trips this controller creates.
+ * /in-person flow reads from the open trips this controller creates.
  */
 class AdminShoppingTripsController extends Controller
 {

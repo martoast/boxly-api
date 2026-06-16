@@ -8,7 +8,7 @@ use App\Models\Store;
 use Illuminate\Http\Request;
 
 /**
- * Customer-facing reads that feed the in-person shopping flow at /shop/in-person.
+ * Customer-facing reads that feed the in-person shopping flow at /in-person.
  * Admin CRUD for trips lives in AdminShoppingTripsController.
  */
 class ShoppingTripsController extends Controller

@@ -231,7 +231,7 @@ class PurchaseRequestController extends Controller
                         'request_number'      => $purchaseRequest->request_number,
                     ],
                 ],
-                'success_url'           => config('app.frontend_url') . '/shop/in-person/success?ref=' . urlencode($purchaseRequest->request_number),
+                'success_url'           => config('app.frontend_url') . '/in-person/success?ref=' . urlencode($purchaseRequest->request_number),
                 // Cancel takes them back to this PR's detail so the awaiting-
                 // deposit banner is right there with the same Pay CTA.
                 'cancel_url'            => config('app.frontend_url') . '/app/purchase-requests/' . $purchaseRequest->id,
@@ -496,8 +496,8 @@ class PurchaseRequestController extends Controller
                         'request_number'      => $pr->request_number,
                     ],
                 ],
-                'success_url'           => config('app.frontend_url') . '/shop/in-person/success?ref=' . urlencode($pr->request_number),
-                'cancel_url'            => config('app.frontend_url') . '/shop/in-person/review?cancelled=1',
+                'success_url'           => config('app.frontend_url') . '/in-person/success?ref=' . urlencode($pr->request_number),
+                'cancel_url'            => config('app.frontend_url') . '/in-person/review?cancelled=1',
             ]);
 
             $pr->update([

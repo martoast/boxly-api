@@ -86,9 +86,14 @@ class ShoppingTripBookingController extends Controller
                 ? $trip->trip_date->isoFormat('D [de] MMMM')
                 : (string) $trip->trip_date;
 
+            // Ensure the user has a customer on the MAIN Stripe account. Cashier's
+            // stripeCustomerId() only returns an existing id (null for users who
+            // never had one) — passing null/empty makes Stripe reject the session.
+            $customerId = $user->stripeCustomerId() ?: $user->createOrGetStripeCustomer()->id;
+
             $session = $stripe->checkout->sessions->create([
                 'mode'       => 'payment',
-                'customer'   => $user->stripeCustomerId(),
+                'customer'   => $customerId,
                 'line_items' => [[
                     'quantity'   => 1,
                     'price_data' => [
@@ -118,8 +123,8 @@ class ShoppingTripBookingController extends Controller
                         'booking_number'          => $booking->booking_number,
                     ],
                 ],
-                'success_url' => config('app.frontend_url') . '/shop/in-person/success?ref=' . urlencode($booking->booking_number),
-                'cancel_url'  => config('app.frontend_url') . '/shop/in-person/review?cancelled=1',
+                'success_url' => config('app.frontend_url') . '/in-person/success?ref=' . urlencode($booking->booking_number),
+                'cancel_url'  => config('app.frontend_url') . '/in-person/review?cancelled=1',
             ]);
 
             $booking->update(['stripe_checkout_session_id' => $session->id]);
