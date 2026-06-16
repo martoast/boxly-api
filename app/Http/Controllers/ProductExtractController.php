@@ -201,6 +201,7 @@ class ProductExtractController extends Controller
             'url'   => 'required|url|max:2000',
             'query' => 'nullable|string|max:200',
             'limit' => 'nullable|integer|min:1|max:24',
+            'sale'  => 'nullable|boolean',
         ]);
 
         $origin = $this->origin($validated['url']);
@@ -209,9 +210,15 @@ class ProductExtractController extends Controller
         }
 
         $limit = $validated['limit'] ?? 12;
-        $products = ! empty($validated['query'])
-            ? $this->shopifySearch($origin, $validated['query'], $limit)
-            : $this->shopifyProducts($origin, $limit);
+        $sale  = (bool) ($validated['sale'] ?? false);
+
+        if ($sale) {
+            $products = $this->shopifyProducts($origin, $limit, true);
+        } elseif (! empty($validated['query'])) {
+            $products = $this->shopifySearch($origin, $validated['query'], $limit);
+        } else {
+            $products = $this->shopifyProducts($origin, $limit);
+        }
 
         return response()->json([
             'success' => true,
@@ -228,10 +235,16 @@ class ProductExtractController extends Controller
         return $p['scheme'] . '://' . $p['host'];
     }
 
-    /** Latest products via Shopify products.json (sorted newest first). */
-    private function shopifyProducts(string $origin, int $limit): array
+    /**
+     * Latest products via Shopify products.json (sorted newest first). When
+     * $onlySale is set, returns only items whose compare_at_price beats the
+     * current price (i.e. real deals).
+     */
+    private function shopifyProducts(string $origin, int $limit, bool $onlySale = false): array
     {
-        $body = $this->fetch($origin . '/products.json?limit=' . min($limit * 2, 50));
+        // Pull a wider window when hunting for deals — sale items are sparse.
+        $fetch = $onlySale ? min($limit * 5, 150) : min($limit * 2, 50);
+        $body = $this->fetch($origin . '/products.json?limit=' . $fetch);
         if (! $body) {
             return [];
         }
@@ -245,14 +258,28 @@ class ProductExtractController extends Controller
         ));
 
         $out = [];
-        foreach (array_slice($items, 0, $limit) as $p) {
+        foreach ($items as $p) {
             $variant = $p['variants'][0] ?? null;
+            $price   = isset($variant['price']) ? (float) $variant['price'] : null;
+            $compare = isset($variant['compare_at_price']) ? (float) $variant['compare_at_price'] : null;
+            $onSale  = $compare && $price && $compare > $price;
+
+            if ($onlySale && ! $onSale) {
+                continue;
+            }
+
             $out[] = [
-                'title' => $p['title'] ?? null,
-                'price' => isset($variant['price']) ? (float) $variant['price'] : null,
-                'image' => $p['images'][0]['src'] ?? null,
-                'url'   => $origin . '/products/' . ($p['handle'] ?? ''),
+                'title'   => $p['title'] ?? null,
+                'price'   => $price,
+                'was'     => $onSale ? $compare : null,
+                'on_sale' => $onSale,
+                'image'   => $p['images'][0]['src'] ?? null,
+                'url'     => $origin . '/products/' . ($p['handle'] ?? ''),
             ];
+
+            if (count($out) >= $limit) {
+                break;
+            }
         }
         return $out;
     }
@@ -282,15 +309,24 @@ class ProductExtractController extends Controller
             if ($price && $price >= 1000 && strpos((string) $raw, '.') === false) {
                 $price = $price / 100;
             }
+            // Best-effort sale detection (predictive search may include it).
+            $cmpRaw = $p['compare_at_price'] ?? null;
+            $compare = $cmpRaw !== null ? (float) preg_replace('/[^0-9.]/', '', (string) $cmpRaw) : null;
+            if ($compare && $compare >= 1000 && strpos((string) $cmpRaw, '.') === false) {
+                $compare = $compare / 100;
+            }
+            $onSale = $compare && $price && $compare > $price;
             $u = $p['url'] ?? null;
             if ($u && ! str_starts_with($u, 'http')) {
                 $u = $origin . $u;
             }
             $out[] = [
-                'title' => $p['title'] ?? null,
-                'price' => $price ?: null,
-                'image' => $p['image'] ?? ($p['featured_image']['url'] ?? null),
-                'url'   => $u,
+                'title'   => $p['title'] ?? null,
+                'price'   => $price ?: null,
+                'was'     => $onSale ? $compare : null,
+                'on_sale' => $onSale,
+                'image'   => $p['image'] ?? ($p['featured_image']['url'] ?? null),
+                'url'     => $u,
             ];
         }
         return $out;
