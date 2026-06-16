@@ -128,9 +128,27 @@ class ConversationController extends Controller
 
     private function titleFrom($content): string
     {
-        $text = is_string($content) ? $content : ($content['text'] ?? json_encode($content));
+        $text = '';
+
+        if (is_string($content)) {
+            $text = $content;
+        } elseif (is_array($content)) {
+            if (isset($content['text']) && is_string($content['text'])) {
+                $text = $content['text'];
+            } elseif (isset($content['parts']) && is_array($content['parts'])) {
+                // Frontend sends { parts: [{ type: 'text', text: '...' }, ...] } —
+                // use the first non-empty text part for the thread title.
+                foreach ($content['parts'] as $part) {
+                    if (($part['type'] ?? null) === 'text' && ! empty($part['text'])) {
+                        $text = $part['text'];
+                        break;
+                    }
+                }
+            }
+        }
+
         $text = trim(preg_replace('/\s+/', ' ', strip_tags((string) $text)));
 
-        return mb_substr($text, 0, 60) ?: 'New chat';
+        return mb_substr($text, 0, 60) ?: 'Nuevo chat';
     }
 }
