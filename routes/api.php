@@ -105,6 +105,8 @@ Route::get('/campaign/click/{token}', [CampaignTrackingController::class, 'click
 // Public product extraction for the AI shopping assistant (rate-limited).
 Route::post('/products/extract', [\App\Http\Controllers\ProductExtractController::class, 'extract'])
     ->middleware('throttle:30,1');
+Route::post('/products/store-feed', [\App\Http\Controllers\ProductExtractController::class, 'storeFeed'])
+    ->middleware('throttle:30,1');
 
 Route::middleware(['web'])->group(function () {
     Route::get('/auth/{provider}/redirect', AuthSocialRedirectController::class)

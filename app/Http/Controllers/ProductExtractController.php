@@ -189,4 +189,110 @@ class ProductExtractController extends Controller
         $host = preg_replace('/^www\./', '', $host);
         return $host;
     }
+
+    /**
+     * Pull a real product feed from a (Shopify) US store — the latest drop, or a
+     * keyword search within the store. Powers the assistant's browse_store tool.
+     * Returns [] for non-Shopify stores (assistant falls back to web search).
+     */
+    public function storeFeed(Request $request)
+    {
+        $validated = $request->validate([
+            'url'   => 'required|url|max:2000',
+            'query' => 'nullable|string|max:200',
+            'limit' => 'nullable|integer|min:1|max:24',
+        ]);
+
+        $origin = $this->origin($validated['url']);
+        if (! $origin) {
+            return response()->json(['success' => false, 'message' => 'Invalid store URL.'], 422);
+        }
+
+        $limit = $validated['limit'] ?? 12;
+        $products = ! empty($validated['query'])
+            ? $this->shopifySearch($origin, $validated['query'], $limit)
+            : $this->shopifyProducts($origin, $limit);
+
+        return response()->json([
+            'success' => true,
+            'data'    => ['store' => $this->storeFromUrl($validated['url']), 'products' => $products],
+        ]);
+    }
+
+    private function origin(string $url): ?string
+    {
+        $p = parse_url($url);
+        if (empty($p['scheme']) || empty($p['host'])) {
+            return null;
+        }
+        return $p['scheme'] . '://' . $p['host'];
+    }
+
+    /** Latest products via Shopify products.json (sorted newest first). */
+    private function shopifyProducts(string $origin, int $limit): array
+    {
+        $body = $this->fetch($origin . '/products.json?limit=' . min($limit * 2, 50));
+        if (! $body) {
+            return [];
+        }
+        $items = json_decode($body, true)['products'] ?? null;
+        if (! is_array($items)) {
+            return [];
+        }
+        usort($items, fn ($a, $b) => strcmp(
+            (string) ($b['published_at'] ?? $b['created_at'] ?? ''),
+            (string) ($a['published_at'] ?? $a['created_at'] ?? '')
+        ));
+
+        $out = [];
+        foreach (array_slice($items, 0, $limit) as $p) {
+            $variant = $p['variants'][0] ?? null;
+            $out[] = [
+                'title' => $p['title'] ?? null,
+                'price' => isset($variant['price']) ? (float) $variant['price'] : null,
+                'image' => $p['images'][0]['src'] ?? null,
+                'url'   => $origin . '/products/' . ($p['handle'] ?? ''),
+            ];
+        }
+        return $out;
+    }
+
+    /** Keyword search within a Shopify store via predictive search. */
+    private function shopifySearch(string $origin, string $query, int $limit): array
+    {
+        $url = $origin . '/search/suggest.json?' . http_build_query([
+            'q'                 => $query,
+            'resources[type]'   => 'product',
+            'resources[limit]'  => min($limit, 10),
+        ]);
+        $body = $this->fetch($url);
+        if (! $body) {
+            return [];
+        }
+        $items = json_decode($body, true)['resources']['results']['products'] ?? null;
+        if (! is_array($items)) {
+            return [];
+        }
+
+        $out = [];
+        foreach (array_slice($items, 0, $limit) as $p) {
+            $raw = $p['price'] ?? null;
+            $price = $raw !== null ? (float) preg_replace('/[^0-9.]/', '', (string) $raw) : null;
+            // Predictive search sometimes returns the price in cents.
+            if ($price && $price >= 1000 && strpos((string) $raw, '.') === false) {
+                $price = $price / 100;
+            }
+            $u = $p['url'] ?? null;
+            if ($u && ! str_starts_with($u, 'http')) {
+                $u = $origin . $u;
+            }
+            $out[] = [
+                'title' => $p['title'] ?? null,
+                'price' => $price ?: null,
+                'image' => $p['image'] ?? ($p['featured_image']['url'] ?? null),
+                'url'   => $u,
+            ];
+        }
+        return $out;
+    }
 }
