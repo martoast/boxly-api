@@ -79,7 +79,7 @@ class ProductExtractController extends Controller
     /** Shopify stores expose <product-url>.js with clean JSON. */
     private function parseShopify(string $url): ?array
     {
-        if (! preg_match('#^(https?://[^/]+/.*/products/[^/?#]+)#', $url, $m)) {
+        if (! preg_match('~^(https?://[^/]+/(?:.*/)?products/[^/?#]+)~', $url, $m)) {
             return null;
         }
         $key = config('services.scraperapi.key');
