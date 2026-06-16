@@ -121,6 +121,13 @@ Route::middleware('auth:sanctum')->group(function () {
     // connect flow to skip the manual copy/paste of a token.
     Route::post('/me/extension-token', [\App\Http\Controllers\ExtensionTokenController::class, 'issue']);
 
+    // Self-issued Sanctum token for the Boxly MCP server — lets a customer
+    // connect their account to their own AI (Claude Code / Desktop). Distinct
+    // token name from the extension so the two connections don't clobber each
+    // other. Revoke disconnects the AI.
+    Route::post('/me/mcp-token', [\App\Http\Controllers\McpTokenController::class, 'issue']);
+    Route::delete('/me/mcp-token', [\App\Http\Controllers\McpTokenController::class, 'revoke']);
+
     Route::get('/user', function (Request $request) {
         $user = $request->user();
         $response = [
