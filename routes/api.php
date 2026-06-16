@@ -102,11 +102,20 @@ Route::post('/funnel-capture', [FunnelCaptureController::class, 'store']);
 Route::get('/campaign/pixel/{token}', [CampaignTrackingController::class, 'pixel']);
 Route::get('/campaign/click/{token}', [CampaignTrackingController::class, 'click']);
 
+// Public product extraction for the AI shopping assistant (rate-limited).
+Route::post('/products/extract', [\App\Http\Controllers\ProductExtractController::class, 'extract'])
+    ->middleware('throttle:30,1');
+
 Route::middleware(['web'])->group(function () {
     Route::get('/auth/{provider}/redirect', AuthSocialRedirectController::class)
         ->whereIn('provider', ['google', 'facebook']);
     Route::get('/auth/{provider}/callback', AuthSocialCallbackController::class)
         ->whereIn('provider', ['google', 'facebook']);
+
+    // Public inline account creation from the chat assistant. In the web group
+    // so Auth::login sets the SPA session cookie. Rate-limited.
+    Route::post('/auth/chat-register', [\App\Http\Controllers\Auth\ChatRegisterController::class, 'store'])
+        ->middleware('throttle:10,1');
 });
 
 /*
@@ -127,6 +136,21 @@ Route::middleware('auth:sanctum')->group(function () {
     // other. Revoke disconnects the AI.
     Route::post('/me/mcp-token', [\App\Http\Controllers\McpTokenController::class, 'issue']);
     Route::delete('/me/mcp-token', [\App\Http\Controllers\McpTokenController::class, 'revoke']);
+
+    // AI shopping assistant — chat threads (history sidebar + resume)
+    Route::prefix('conversations')->group(function () {
+        Route::get('/', [\App\Http\Controllers\ConversationController::class, 'index']);
+        Route::post('/', [\App\Http\Controllers\ConversationController::class, 'store']);
+        Route::post('/claim', [\App\Http\Controllers\ConversationController::class, 'claim']);
+        Route::get('/{conversation}', [\App\Http\Controllers\ConversationController::class, 'show']);
+        Route::patch('/{conversation}', [\App\Http\Controllers\ConversationController::class, 'update']);
+        Route::delete('/{conversation}', [\App\Http\Controllers\ConversationController::class, 'destroy']);
+        Route::post('/{conversation}/messages', [\App\Http\Controllers\ConversationController::class, 'addMessages']);
+    });
+
+    // AI shopping assistant — learned shopping profile (cross-chat memory)
+    Route::get('/me/shopping-profile', [\App\Http\Controllers\ShoppingProfileController::class, 'show']);
+    Route::put('/me/shopping-profile', [\App\Http\Controllers\ShoppingProfileController::class, 'update']);
 
     Route::get('/user', function (Request $request) {
         $user = $request->user();

@@ -54,6 +54,7 @@ class User extends Authenticatable
         'registration_source',
         'form_1583_completed_at',
         'stripe_shopping_id',
+        'shopping_profile',
     ];
 
     /**
@@ -78,7 +79,13 @@ class User extends Authenticatable
             'password' => 'hashed',
             'registration_source' => 'array', // Automatically cast JSON to array
             'form_1583_completed_at' => 'datetime',
+            'shopping_profile' => 'array',
         ];
+    }
+
+    public function conversations()
+    {
+        return $this->hasMany(Conversation::class)->orderByDesc('last_message_at')->orderByDesc('id');
     }
 
     /**
