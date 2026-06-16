@@ -86,10 +86,10 @@ class ShoppingTripBookingController extends Controller
                 ? $trip->trip_date->isoFormat('D [de] MMMM')
                 : (string) $trip->trip_date;
 
-            // Ensure the user has a customer on the MAIN Stripe account. Cashier's
-            // stripeCustomerId() only returns an existing id (null for users who
-            // never had one) — passing null/empty makes Stripe reject the session.
-            $customerId = $user->stripeCustomerId() ?: $user->createOrGetStripeCustomer()->id;
+            // Ensure the user has a customer on the MAIN Stripe account, creating
+            // one if needed. (There is no stripeCustomerId() method on the model —
+            // calling it was the original cause of the 500.)
+            $customerId = $user->createOrGetStripeCustomer()->id;
 
             $session = $stripe->checkout->sessions->create([
                 'mode'       => 'payment',
@@ -154,9 +154,6 @@ class ShoppingTripBookingController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Could not initiate payment. Please try again.',
-                // TEMP debug — remove after diagnosing the prod 500.
-                'debug'   => $e->getMessage(),
-                'debug_type' => get_class($e),
             ], 500);
         }
     }
