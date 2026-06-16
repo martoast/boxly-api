@@ -41,7 +41,7 @@ class AdminUpdateOrderStatusTool extends AdminTool
                 'status' => $arguments['status'] ?? null,
                 'estimated_delivery_date' => $arguments['estimated_delivery_date'] ?? null,
                 'notes' => $arguments['notes'] ?? null,
-            ]);
+            ], ['order' => $order]);
             return $this->ok(app(AdminOrderController::class)->updateStatus($form, $order));
         });
     }
