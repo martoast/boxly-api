@@ -29,7 +29,7 @@ class ListOrdersTool extends BoxlyTool
     public function handle(array $arguments): ToolResult
     {
         return $this->guard(function () use ($arguments) {
-            request()->merge(['status' => $arguments['status'] ?? null, 'search' => $arguments['search'] ?? null]);
+            $this->mergeInput(['status' => $arguments['status'] ?? null, 'search' => $arguments['search'] ?? null]);
             return $this->ok(app(OrderController::class)->index(request()));
         });
     }

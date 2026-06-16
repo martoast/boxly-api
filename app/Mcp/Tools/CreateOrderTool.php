@@ -40,7 +40,7 @@ class CreateOrderTool extends BoxlyTool
             if ($type !== 'crossing' && ! empty($arguments['delivery_address'])) {
                 $merge['delivery_address'] = ['full_address' => $arguments['delivery_address']];
             }
-            request()->merge($merge);
+            $this->mergeInput($merge);
             return $this->ok(app(OrderController::class)->create(request()));
         });
     }

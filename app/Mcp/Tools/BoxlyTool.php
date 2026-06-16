@@ -22,6 +22,16 @@ abstract class BoxlyTool extends Tool
     }
 
     /**
+     * Merge tool arguments into the request, dropping nulls so controller
+     * defaults (e.g. $request->input('year', now()->year)) still apply for
+     * omitted arguments.
+     */
+    protected function mergeInput(array $data): void
+    {
+        request()->merge(array_filter($data, fn ($v) => $v !== null));
+    }
+
+    /**
      * Normalize a controller JsonResponse (or array) into a ToolResult.
      * Unwraps the common { success, data } envelope.
      */

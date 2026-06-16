@@ -50,7 +50,7 @@ class CreatePurchaseRequestTool extends BoxlyTool
                 'notes' => $it['notes'] ?? null,
             ], $arguments['items'] ?? []);
 
-            request()->merge(['currency' => 'usd', 'items' => $items]);
+            $this->mergeInput(['currency' => 'usd', 'items' => $items]);
             return $this->ok(app(PurchaseRequestController::class)->store(request()));
         });
     }
