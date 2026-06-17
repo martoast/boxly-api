@@ -140,6 +140,8 @@ Route::middleware('auth:sanctum')->group(function () {
     // other. Revoke disconnects the AI.
     Route::post('/me/mcp-token', [\App\Http\Controllers\McpTokenController::class, 'issue']);
     Route::delete('/me/mcp-token', [\App\Http\Controllers\McpTokenController::class, 'revoke']);
+    // Ephemeral token for the in-app AI chat (separate from the MCP token).
+    Route::post('/me/chat-token', [\App\Http\Controllers\McpTokenController::class, 'chatToken']);
 
     // AI shopping assistant — chat threads (history sidebar + resume)
     Route::prefix('conversations')->group(function () {

@@ -14,6 +14,7 @@ class ConversationController extends Controller
     public function index(Request $request)
     {
         $conversations = $request->user()->conversations()
+            ->limit(100)
             ->get(['id', 'title', 'last_message_at', 'created_at']);
 
         return response()->json(['success' => true, 'data' => $conversations]);

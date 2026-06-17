@@ -24,6 +24,26 @@ class McpTokenController extends Controller
 {
     private const TOKEN_NAME = 'claude-mcp';
 
+    private const CHAT_TOKEN_NAME = 'boxly-web-chat';
+
+    /**
+     * Lightweight token for the in-app AI chat's server-to-server tool calls.
+     * DISTINCT name from the user's pasted MCP token so opening the web chat
+     * never invalidates their Claude Desktop connection. One active per user.
+     */
+    public function chatToken(Request $request)
+    {
+        $user = $request->user();
+        if (! $user) {
+            return response()->json(['success' => false, 'message' => 'Unauthenticated'], 401);
+        }
+
+        $user->tokens()->where('name', self::CHAT_TOKEN_NAME)->delete();
+        $token = $user->createToken(self::CHAT_TOKEN_NAME);
+
+        return response()->json(['success' => true, 'token' => $token->plainTextToken]);
+    }
+
     public function issue(Request $request)
     {
         $user = $request->user();
