@@ -74,9 +74,12 @@ class ProductExtractController extends Controller
     public function search(Request $request)
     {
         $validated = $request->validate([
-            'query' => 'required|string|max:200',
-            'store' => 'nullable|string|max:100',
-            'limit' => 'nullable|integer|min:1|max:40',
+            'query'     => 'required|string|max:200',
+            'store'     => 'nullable|string|max:100',
+            'limit'     => 'nullable|integer|min:1|max:40',
+            'min_price' => 'nullable|numeric|min:0',
+            'max_price' => 'nullable|numeric|min:0',
+            'sale'      => 'nullable|boolean',
         ]);
 
         $limit = $validated['limit'] ?? 16;
@@ -90,6 +93,27 @@ class ProductExtractController extends Controller
         }
         if ($products === null) {
             return response()->json(['success' => false, 'message' => 'Search failed.'], 502);
+        }
+
+        // Structured filters Google can't do reliably from text: price range and
+        // sale-only. (Size/color/style/etc. are matched via the query itself.)
+        $min      = isset($validated['min_price']) ? (float) $validated['min_price'] : null;
+        $max      = isset($validated['max_price']) ? (float) $validated['max_price'] : null;
+        $saleOnly = (bool) ($validated['sale'] ?? false);
+        if ($min !== null || $max !== null || $saleOnly) {
+            $products = array_values(array_filter($products, function ($p) use ($min, $max, $saleOnly) {
+                if ($saleOnly && empty($p['on_sale'])) {
+                    return false;
+                }
+                $price = $p['price'] ?? null;
+                if ($min !== null && ($price === null || $price < $min)) {
+                    return false;
+                }
+                if ($max !== null && ($price === null || $price > $max)) {
+                    return false;
+                }
+                return true;
+            }));
         }
 
         // When a store was specified, surface that store's items first.
@@ -146,13 +170,17 @@ class ProductExtractController extends Controller
             if ($price === null && ! empty($r['price'])) {
                 $price = (float) preg_replace('/[^0-9.]/', '', (string) $r['price']);
             }
+            $old = $r['extracted_old_price'] ?? null;
+            $onSale = $old && $price && $old > $price;
             $products[] = [
-                'title' => $title,
-                'price' => $price ?: null,
-                'store' => $r['source'] ?? null,
+                'title'   => $title,
+                'price'   => $price ?: null,
+                'was'     => $onSale ? $old : null,
+                'on_sale' => $onSale,
+                'store'   => $r['source'] ?? null,
                 // SerpAPI-hosted thumbnail is the most reliable to load.
-                'image' => $r['serpapi_thumbnail'] ?? $r['thumbnail'] ?? null,
-                'url'   => $r['product_link'] ?? ('https://www.google.com/search?tbm=shop&q=' . urlencode($title)),
+                'image'   => $r['serpapi_thumbnail'] ?? $r['thumbnail'] ?? null,
+                'url'     => $r['product_link'] ?? ('https://www.google.com/search?tbm=shop&q=' . urlencode($title)),
             ];
         }
         return $products;
