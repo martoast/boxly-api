@@ -196,6 +196,10 @@ class ProductExtractController extends Controller
                 // SerpAPI-hosted thumbnail is the most reliable to load.
                 'image'   => $r['serpapi_thumbnail'] ?? $r['thumbnail'] ?? null,
                 'url'     => $r['product_link'] ?? ('https://www.google.com/search?tbm=shop&q=' . urlencode($title)),
+                // Extra detail for the product modal (already in the result).
+                'snippet' => $r['snippet'] ?? null,
+                'rating'  => $r['rating'] ?? null,
+                'reviews' => $r['reviews'] ?? null,
             ];
         }
         return $products;
