@@ -55,6 +55,11 @@ class ConversationController extends Controller
         $hasMore = $rows->count() > $limit;
         $messages = $rows->take($limit)->sortBy('id')->values();
 
+        // Single source of truth: every product ever shown in this chat,
+        // deduped, so the assistant can re-display earlier items even after the
+        // message window is paginated. Only on the first page (no cursor).
+        $products = $before ? [] : $this->deriveProducts($conversation);
+
         return response()->json([
             'success' => true,
             'data' => [
@@ -62,6 +67,7 @@ class ConversationController extends Controller
                 'title' => $conversation->title,
                 'messages' => $messages,
                 'has_more' => $hasMore,
+                'products' => $products,
             ],
         ]);
     }
@@ -143,6 +149,73 @@ class ConversationController extends Controller
     private function authorizeOwner(Request $request, Conversation $conversation): void
     {
         abort_unless($conversation->user_id === $request->user()->id, 403, 'Not your conversation.');
+    }
+
+    /**
+     * Deduplicated registry of every product shown in this conversation, scanned
+     * from all message parts (tool outputs). Each product gets a stable id (FNV
+     * hash of its URL) so the assistant can reference/re-display it later.
+     */
+    private function deriveProducts(Conversation $conversation): array
+    {
+        $seen = [];
+        $out = [];
+        foreach ($conversation->messages()->get(['content']) as $m) {
+            $parts = is_array($m->content) ? ($m->content['parts'] ?? []) : [];
+            if (! is_array($parts)) {
+                continue;
+            }
+            foreach ($parts as $part) {
+                $prods = $part['output']['products'] ?? null;
+                if (! is_array($prods)) {
+                    continue;
+                }
+                foreach ($prods as $p) {
+                    if (! is_array($p)) {
+                        continue;
+                    }
+                    $url = $p['url'] ?? $p['product_url'] ?? null;
+                    $title = $p['title'] ?? $p['name'] ?? null;
+                    if (! $title && ! $url) {
+                        continue;
+                    }
+                    $id = $this->productId($url ?: ($title . ($p['store'] ?? '')));
+                    if (isset($seen[$id])) {
+                        continue;
+                    }
+                    $seen[$id] = true;
+                    $img = $p['image'] ?? $p['image_url'] ?? null;
+                    if (is_string($img) && str_starts_with($img, 'data:')) {
+                        $img = null; // never carry base64 in the registry
+                    }
+                    $out[] = [
+                        'id'      => $id,
+                        'title'   => $title,
+                        'store'   => $p['store'] ?? null,
+                        'price'   => $p['price'] ?? $p['price_usd'] ?? null,
+                        'was'     => $p['was'] ?? null,
+                        'on_sale' => $p['on_sale'] ?? false,
+                        'image'   => $img,
+                        'url'     => $url,
+                        'snippet' => $p['snippet'] ?? null,
+                        'token'   => $p['token'] ?? null,
+                    ];
+                }
+            }
+        }
+        return array_slice($out, -80); // cap the registry
+    }
+
+    /** FNV-1a 32-bit → base36, MUST match the JS implementation in the chat. */
+    private function productId(string $s): string
+    {
+        $h = 2166136261;
+        $len = strlen($s);
+        for ($i = 0; $i < $len; $i++) {
+            $h ^= ord($s[$i]);
+            $h = ($h * 16777619) & 0xFFFFFFFF;
+        }
+        return 'p' . base_convert((string) $h, 10, 36);
     }
 
     private function titleFrom($content): string
