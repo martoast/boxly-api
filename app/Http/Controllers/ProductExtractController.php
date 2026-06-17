@@ -502,8 +502,16 @@ class ProductExtractController extends Controller
         } elseif (! empty($validated['query'])) {
             $products = $this->shopifySearch($origin, $validated['query'], $limit);
         } else {
-            $products = $this->shopifyProducts($origin, $limit);
+            // Wider window so on-sale items deeper in the catalog can surface,
+            // not just whatever's in the newest handful.
+            $products = $this->shopifyProducts($origin, $limit * 4);
         }
+
+        // Deals first (deal finder) — stable sort keeps the rest of the catalog
+        // in its normal order right after, then trim to the requested limit, so
+        // results lead with the deals but are never sparse.
+        usort($products, fn ($a, $b) => (empty($a['on_sale']) ? 1 : 0) <=> (empty($b['on_sale']) ? 1 : 0));
+        $products = array_slice($products, 0, $limit);
 
         return response()->json([
             'success' => true,
