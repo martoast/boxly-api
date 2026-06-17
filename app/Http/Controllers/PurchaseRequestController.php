@@ -47,6 +47,7 @@ class PurchaseRequestController extends Controller
             'items.*.quantity' => 'required|integer|min:1',
             'items.*.options' => 'nullable', // Can be array or JSON string via FormData
             'items.*.notes' => 'nullable|string|max:500',
+            'items.*.product_image_url' => 'nullable|string|max:2000', // image URL (assistant flow)
             'items.*.image' => 'nullable|file|mimes:jpg,jpeg,png,webp,pdf|max:10240', // 10MB max
         ]);
 
@@ -81,6 +82,7 @@ class PurchaseRequestController extends Controller
                     'purchase_request_id' => $pr->id,
                     'product_name' => $itemData['product_name'],
                     'product_url' => $itemData['product_url'],
+                    'product_image_url' => $itemData['product_image_url'] ?? null,
                     'price' => $itemData['price'],
                     'quantity' => $itemData['quantity'],
                     'options' => $options,
