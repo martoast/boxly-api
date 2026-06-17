@@ -95,16 +95,13 @@ class ProductExtractController extends Controller
             return response()->json(['success' => false, 'message' => 'Search failed.'], 502);
         }
 
-        // Structured filters Google can't do reliably from text: price range and
-        // sale-only. (Size/color/style/etc. are matched via the query itself.)
-        $min      = isset($validated['min_price']) ? (float) $validated['min_price'] : null;
-        $max      = isset($validated['max_price']) ? (float) $validated['max_price'] : null;
-        $saleOnly = (bool) ($validated['sale'] ?? false);
-        if ($min !== null || $max !== null || $saleOnly) {
-            $products = array_values(array_filter($products, function ($p) use ($min, $max, $saleOnly) {
-                if ($saleOnly && empty($p['on_sale'])) {
-                    return false;
-                }
+        // Budget filters are strict (price range). The `sale` flag is NOT a hard
+        // filter — deals are sorted first below, but non-sale items stay so the
+        // result is a lively hybrid instead of a sparse deals-only list.
+        $min = isset($validated['min_price']) ? (float) $validated['min_price'] : null;
+        $max = isset($validated['max_price']) ? (float) $validated['max_price'] : null;
+        if ($min !== null || $max !== null) {
+            $products = array_values(array_filter($products, function ($p) use ($min, $max) {
                 $price = $p['price'] ?? null;
                 if ($min !== null && ($price === null || $price < $min)) {
                     return false;
@@ -495,11 +492,12 @@ class ProductExtractController extends Controller
         }
 
         $limit = $validated['limit'] ?? 12;
-        $sale  = (bool) ($validated['sale'] ?? false);
 
-        if ($sale) {
-            $products = $this->shopifyProducts($origin, $limit, true);
-        } elseif (! empty($validated['query'])) {
+        // NOTE: the `sale` flag is intentionally NOT a hard filter. Stores like
+        // YoungLA rarely discount, so sale-only would return a lonely 1-item
+        // gallery. Instead we ALWAYS return a lively hybrid (deals + the rest of
+        // the catalog) with the deals sorted first — a much better experience.
+        if (! empty($validated['query'])) {
             $products = $this->shopifySearch($origin, $validated['query'], $limit);
         } else {
             // Wider window so on-sale items deeper in the catalog can surface,
@@ -507,9 +505,8 @@ class ProductExtractController extends Controller
             $products = $this->shopifyProducts($origin, $limit * 4);
         }
 
-        // Deals first (deal finder) — stable sort keeps the rest of the catalog
-        // in its normal order right after, then trim to the requested limit, so
-        // results lead with the deals but are never sparse.
+        // Deals first (stable — keeps the rest of the catalog in normal order),
+        // then trim to the requested limit.
         usort($products, fn ($a, $b) => (empty($a['on_sale']) ? 1 : 0) <=> (empty($b['on_sale']) ? 1 : 0));
         $products = array_slice($products, 0, $limit);
 
