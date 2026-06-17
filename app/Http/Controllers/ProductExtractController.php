@@ -63,6 +63,92 @@ class ProductExtractController extends Controller
         ]);
     }
 
+    /**
+     * Universal product search across the ENTIRE US market via Google Shopping
+     * (ScraperAPI structured endpoint). Works for ANY store/brand regardless of
+     * platform (Shopify, headless, JS-rendered, Cloudflare-protected) because
+     * Google already crawled them. Returns normalized products with embedded
+     * (base64) images, prices, and the source store for each.
+     */
+    public function search(Request $request)
+    {
+        $validated = $request->validate([
+            'query' => 'required|string|max:200',
+            'store' => 'nullable|string|max:100',
+            'limit' => 'nullable|integer|min:1|max:40',
+        ]);
+
+        $key = config('services.scraperapi.key');
+        if (! $key) {
+            return response()->json(['success' => false, 'message' => 'Search not configured.'], 503);
+        }
+
+        $limit = $validated['limit'] ?? 16;
+        $store = trim($validated['store'] ?? '');
+        // Bias the query toward the store when one is specified.
+        $q = $store !== '' ? $store . ' ' . $validated['query'] : $validated['query'];
+
+        try {
+            $res = Http::timeout(70)->get('https://api.scraperapi.com/structured/google/shopping', [
+                'api_key' => $key,
+                'query'   => $q,
+                'country' => 'us',
+            ]);
+        } catch (\Throwable $e) {
+            return response()->json(['success' => false, 'message' => 'Search failed.'], 502);
+        }
+
+        if (! $res->successful()) {
+            return response()->json(['success' => false, 'message' => 'Search failed.'], 502);
+        }
+
+        $results = $res->json('shopping_results') ?? [];
+        if (! is_array($results)) {
+            $results = [];
+        }
+
+        $products = [];
+        foreach ($results as $r) {
+            $title = $r['title'] ?? null;
+            if (! $title) {
+                continue;
+            }
+            $price = $r['extracted_price'] ?? null;
+            if ($price === null && ! empty($r['price'])) {
+                $price = (float) preg_replace('/[^0-9.]/', '', (string) $r['price']);
+            }
+            $img = $r['thumbnail'] ?? null;
+            if ($img && ! Str::startsWith($img, ['data:', 'http'])) {
+                $img = null;
+            }
+            $products[] = [
+                'title' => $title,
+                'price' => $price ?: null,
+                'store' => $r['source'] ?? null,
+                'image' => $img,
+                // Google links are catalog views, not direct buy URLs — give a
+                // viewable Shopping search link; the real merchant URL gets
+                // resolved at order time via extract_product.
+                'url'   => 'https://www.google.com/search?tbm=shop&q=' . urlencode($title),
+            ];
+        }
+
+        // When a store was specified, surface that store's items first.
+        if ($store !== '') {
+            $needle = mb_strtolower($store);
+            usort($products, function ($a, $b) use ($needle) {
+                $am = str_contains(mb_strtolower((string) ($a['store'] ?? '')), $needle) ? 0 : 1;
+                $bm = str_contains(mb_strtolower((string) ($b['store'] ?? '')), $needle) ? 0 : 1;
+                return $am <=> $bm;
+            });
+        }
+
+        return response()->json([
+            'success' => true,
+            'data'    => ['query' => $q, 'products' => array_slice($products, 0, $limit)],
+        ]);
+    }
+
     private function fetch(string $url): ?string
     {
         $key = config('services.scraperapi.key');

@@ -16,8 +16,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->validateCsrfTokens(except: [
             'webhooks/*',
             'stripe/*',
-            'products/extract',   // public, server-to-server (AI assistant)
-            'products/store-feed',
+            'products/*',         // public, server-to-server (AI assistant)
         ]);
         $middleware->append(JsonResponse::class);
         $middleware->statefulApi();
