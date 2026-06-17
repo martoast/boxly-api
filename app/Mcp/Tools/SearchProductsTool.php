@@ -19,13 +19,16 @@ class SearchProductsTool extends BoxlyTool
 
     public function description(): string
     {
-        return 'Search real products across the ENTIRE US market (Google Shopping). Works for ANY store/brand on any platform (Shopify, headless, JS-rendered, even Cloudflare-blocked sites like Gymshark/Nike). Returns products with title, USD price, the store each comes from, and a link. Use to find anything the user wants Boxly to buy in the US and ship to Mexico.';
+        return 'Search real products across the ENTIRE US market (Google Shopping). Works for ANY store/brand on any platform (Shopify, headless, JS-rendered, even Cloudflare-blocked sites like Gymshark/Nike). Returns products (title, USD price, sale/was price, store, link), plus the price_range found. Put descriptive attributes (color, size, gender, fit, material, category) IN the query; use min_price/max_price for budget and sale for deals.';
     }
 
     public function schema(ToolInputSchema $schema): ToolInputSchema
     {
-        $schema->string('query')->description('What to find, e.g. "fleece joggers", "white sneakers under 150".')->required();
+        $schema->string('query')->description('What to find, with attributes baked in, e.g. "black wide-leg jeans women size 30".')->required();
         $schema->string('store')->description('Optional brand/store to focus on, e.g. "Gymshark".');
+        $schema->number('min_price')->description('Minimum USD price.');
+        $schema->number('max_price')->description('Maximum USD price (budget, e.g. "under 50").');
+        $schema->boolean('sale')->description('True to return only items currently on sale.');
         $schema->integer('limit')->description('Max results (default 12).');
 
         return $schema;
@@ -35,9 +38,12 @@ class SearchProductsTool extends BoxlyTool
     {
         return $this->guard(function () use ($arguments) {
             $this->mergeInput([
-                'query' => $arguments['query'] ?? null,
-                'store' => $arguments['store'] ?? null,
-                'limit' => $arguments['limit'] ?? 12,
+                'query'     => $arguments['query'] ?? null,
+                'store'     => $arguments['store'] ?? null,
+                'min_price' => $arguments['min_price'] ?? null,
+                'max_price' => $arguments['max_price'] ?? null,
+                'sale'      => $arguments['sale'] ?? null,
+                'limit'     => $arguments['limit'] ?? 12,
             ]);
 
             $data = app(ProductExtractController::class)->search(request())->getData(true);
