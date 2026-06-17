@@ -38,12 +38,30 @@ class ConversationController extends Controller
     {
         $this->authorizeOwner($request, $conversation);
 
+        // Paginated newest-first with a cursor: return the latest $limit
+        // messages (or the $limit just before $before), serve them ascending,
+        // and tell the client whether older ones remain.
+        $limit = min(max((int) $request->query('limit', 30), 1), 100);
+        $before = $request->query('before');
+
+        // reorder() clears the relation's default orderBy('id') so newest-first
+        // pagination actually takes effect.
+        $query = $conversation->messages()->reorder('id', 'desc');
+        if ($before) {
+            $query->where('id', '<', (int) $before);
+        }
+        $rows = $query->limit($limit + 1)->get(['id', 'role', 'content', 'created_at']);
+
+        $hasMore = $rows->count() > $limit;
+        $messages = $rows->take($limit)->sortBy('id')->values();
+
         return response()->json([
             'success' => true,
             'data' => [
                 'id' => $conversation->id,
                 'title' => $conversation->title,
-                'messages' => $conversation->messages()->get(['id', 'role', 'content', 'created_at']),
+                'messages' => $messages,
+                'has_more' => $hasMore,
             ],
         ]);
     }
