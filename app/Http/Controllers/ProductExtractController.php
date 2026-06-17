@@ -126,9 +126,16 @@ class ProductExtractController extends Controller
             });
         }
 
+        $shown = array_slice($products, 0, $limit);
+
+        // Price range across the shown results, so the assistant can tell the
+        // customer "I found options between $X and $Y".
+        $prices = array_values(array_filter(array_map(fn ($p) => $p['price'] ?? null, $shown), fn ($v) => $v !== null));
+        $range = $prices ? ['min' => min($prices), 'max' => max($prices)] : null;
+
         return response()->json([
             'success' => true,
-            'data'    => ['query' => $q, 'products' => array_slice($products, 0, $limit)],
+            'data'    => ['query' => $q, 'products' => $shown, 'price_range' => $range],
         ]);
     }
 
