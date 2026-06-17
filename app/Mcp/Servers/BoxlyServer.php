@@ -35,6 +35,13 @@ class BoxlyServer extends Server
 
     public array $tools = [];
 
+    // Product discovery (public catalog search) — shared by customers and admins.
+    private const PRODUCT_TOOLS = [
+        Tools\SearchProductsTool::class,
+        Tools\BrowseStoreTool::class,
+        Tools\ExtractProductTool::class,
+    ];
+
     private const CUSTOMER_TOOLS = [
         Tools\ListOrdersTool::class,
         Tools\GetOrderTool::class,
@@ -84,6 +91,9 @@ class BoxlyServer extends Server
     - You can never charge the user; get_order_payment_link only returns a
       Stripe URL for them to open themselves.
     - The Boxly US warehouse (casillero) address comes from get_profile.
+    - To find products to buy: search_products searches the whole US market (any
+      store), browse_store pulls a specific Shopify store's catalog, and
+      extract_product confirms a product page before you create a request.
     - Amounts are MXN unless noted (purchase-request item prices are USD).
     TXT;
 
@@ -101,6 +111,9 @@ class BoxlyServer extends Server
     - Expense shorthand: "expense for Paco/Jesus for <date> for <amount>" =
       category shipping, description = the courier name. Amounts MXN.
     - Campaigns are created as drafts and are never sent automatically.
+    - Product discovery (to help a customer or research): search_products searches
+      the whole US market (any store), browse_store pulls a Shopify store's
+      catalog, extract_product reads one product page.
     TXT;
 
     public function boot(): void
@@ -110,7 +123,11 @@ class BoxlyServer extends Server
 
         $this->instructions = $isAdmin ? self::ADMIN_INSTRUCTIONS : self::CUSTOMER_INSTRUCTIONS;
 
-        foreach ($isAdmin ? self::ADMIN_TOOLS : self::CUSTOMER_TOOLS as $tool) {
+        $tools = array_merge(
+            $isAdmin ? self::ADMIN_TOOLS : self::CUSTOMER_TOOLS,
+            self::PRODUCT_TOOLS,
+        );
+        foreach ($tools as $tool) {
             $this->addTool($tool);
         }
     }

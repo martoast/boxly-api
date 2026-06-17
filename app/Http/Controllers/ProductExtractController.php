@@ -89,10 +89,15 @@ class ProductExtractController extends Controller
         $q = $store !== '' ? $store . ' ' . $validated['query'] : $validated['query'];
 
         try {
-            $res = Http::timeout(70)->get('https://api.scraperapi.com/structured/google/shopping', [
-                'api_key' => $key,
-                'query'   => $q,
-                'country' => 'us',
+            // Google must be scraped through advanced/residential proxies —
+            // plain and premium modes 500 intermittently (~55s), while
+            // ultra_premium returns reliably (~20-25s). Costs more credits, but
+            // this is a core feature; upgrade the ScraperAPI plan for volume.
+            $res = Http::timeout(45)->get('https://api.scraperapi.com/structured/google/shopping', [
+                'api_key'       => $key,
+                'query'         => $q,
+                'country'       => 'us',
+                'ultra_premium' => 'true',
             ]);
         } catch (\Throwable $e) {
             return response()->json(['success' => false, 'message' => 'Search failed.'], 502);

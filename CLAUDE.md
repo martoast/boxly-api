@@ -115,6 +115,16 @@ id (`Order::find($id)`). Return `ToolResult::error('… not found.')` when missi
 
 ## Current tools
 
+**Product discovery (3, shared by customer + admin):** `search_products`
+(universal — Google Shopping via ScraperAPI structured endpoint; finds products
+from ANY US store/brand on any platform, returns title/USD price/store/link),
+`browse_store` (a Shopify store's own catalog: latest drop, in-store search, or
+`sale:true` deals), `extract_product` (clean details from one product URL).
+Registered in `PRODUCT_TOOLS` and merged into both role toolsets in `boot()`.
+These delegate to `ProductExtractController` (public `/products/*` endpoints).
+`search_products` strips base64 thumbnails from the MCP payload (huge/useless to
+an agent).
+
 **Customer (9):** `list_orders`, `get_order`, `track_order`,
 `list_purchase_requests`, `get_purchase_request`, `get_profile`, `create_order`,
 `create_purchase_request`, `get_order_payment_link` (returns a Stripe link only,
