@@ -28,6 +28,7 @@ class CreatePurchaseRequestTool extends BoxlyTool
                 'properties' => [
                     'product_name' => ['type' => 'string', 'description' => 'Product name.'],
                     'product_url' => ['type' => 'string', 'description' => 'Product URL (the link to buy).'],
+                    'product_image_url' => ['type' => 'string', 'description' => 'Image URL of the product (so Boxly can find it; re-hosted permanently on creation).'],
                     'price' => ['type' => 'number', 'description' => 'Listed price in USD (0 if unknown).'],
                     'quantity' => ['type' => 'integer', 'description' => 'Quantity (default 1).'],
                     'notes' => ['type' => 'string', 'description' => 'Optional notes (size, color, variant).'],
@@ -45,6 +46,7 @@ class CreatePurchaseRequestTool extends BoxlyTool
             $items = array_map(fn ($it) => [
                 'product_name' => $it['product_name'] ?? null,
                 'product_url' => $it['product_url'] ?? null,
+                'product_image_url' => $it['product_image_url'] ?? null,
                 'price' => $it['price'] ?? 0,
                 'quantity' => $it['quantity'] ?? 1,
                 'notes' => $it['notes'] ?? null,

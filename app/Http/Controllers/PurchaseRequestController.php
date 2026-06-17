@@ -36,6 +36,50 @@ class PurchaseRequestController extends Controller
     /**
      * Create a new purchase request
      */
+    /**
+     * Download a product image URL and store it permanently in our Spaces
+     * bucket, then point the item's image_url at it. Best-effort: on any failure
+     * the item keeps its original product_image_url. Only runs at PR creation.
+     */
+    private function rehostItemImage(PurchaseRequestItem $item, string $sourceUrl, $user, PurchaseRequest $pr): void
+    {
+        try {
+            $res = \Illuminate\Support\Facades\Http::timeout(20)
+                ->withHeaders(['User-Agent' => 'Mozilla/5.0 (compatible; BoxlyBot/1.0)'])
+                ->get($sourceUrl);
+            if (! $res->successful() || ! $res->body()) {
+                return;
+            }
+            $body = $res->body();
+            $type = strtolower((string) $res->header('Content-Type'));
+            if (! str_contains($type, 'image')) {
+                return; // not an image
+            }
+            $ext = match (true) {
+                str_contains($type, 'png')  => 'png',
+                str_contains($type, 'webp') => 'webp',
+                str_contains($type, 'gif')  => 'gif',
+                default                     => 'jpg',
+            };
+
+            $userName = Str::slug($user->name);
+            $path = "users/{$userName}-{$user->id}/requests/{$pr->request_number}/items/{$item->id}/image-" . time() . ".{$ext}";
+
+            Storage::disk('spaces')->put($path, $body, 'public');
+            $url = config('filesystems.disks.spaces.url') . '/' . $path;
+
+            $item->update([
+                'image_path'      => $path,
+                'image_filename'  => basename($path),
+                'image_mime_type' => $type,
+                'image_size'      => strlen($body),
+                'image_url'       => $url, // permanent, hosted by us (display prefers this)
+            ]);
+        } catch (\Throwable $e) {
+            Log::warning('PR item image re-host failed: ' . $e->getMessage());
+        }
+    }
+
     public function store(Request $request)
     {
         $request->validate([
@@ -118,6 +162,10 @@ class PurchaseRequestController extends Controller
                         'image_size' => $file->getSize(),
                         'image_url' => $url,
                     ]);
+                } elseif (! empty($itemData['product_image_url'])) {
+                    // No uploaded file — re-host the provided image URL to our
+                    // bucket so it's permanent (source thumbnails can expire).
+                    $this->rehostItemImage($item, $itemData['product_image_url'], $user, $pr);
                 }
             }
 
