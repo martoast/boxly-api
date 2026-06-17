@@ -20,6 +20,14 @@ return [
         'key' => env('SCRAPERAPI_KEY'),
     ],
 
+    /**
+     * SerpAPI — fast, reliable Google Shopping results (the assistant's primary
+     * universal product-search engine; ScraperAPI is the fallback).
+     */
+    'serpapi' => [
+        'key' => env('SERPAPI_KEY'),
+    ],
+
     'resend' => [
         'key' => env('RESEND_KEY'),
     ],
