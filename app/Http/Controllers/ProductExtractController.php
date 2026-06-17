@@ -116,15 +116,23 @@ class ProductExtractController extends Controller
             }));
         }
 
-        // When a store was specified, surface that store's items first.
-        if ($store !== '') {
-            $needle = mb_strtolower($store);
-            usort($products, function ($a, $b) use ($needle) {
+        // Ordering: when a store was specified, its items first; then DEALS
+        // first (Boxly is a deal finder). usort is stable in PHP 8+, so this
+        // only reorders by these keys and otherwise preserves Google's relevance
+        // order — non-sale items still appear, just after the deals.
+        $needle = $store !== '' ? mb_strtolower($store) : '';
+        usort($products, function ($a, $b) use ($needle) {
+            if ($needle !== '') {
                 $am = str_contains(mb_strtolower((string) ($a['store'] ?? '')), $needle) ? 0 : 1;
                 $bm = str_contains(mb_strtolower((string) ($b['store'] ?? '')), $needle) ? 0 : 1;
-                return $am <=> $bm;
-            });
-        }
+                if ($am !== $bm) {
+                    return $am <=> $bm;
+                }
+            }
+            $as = empty($a['on_sale']) ? 1 : 0;
+            $bs = empty($b['on_sale']) ? 1 : 0;
+            return $as <=> $bs;
+        });
 
         $shown = array_slice($products, 0, $limit);
 
