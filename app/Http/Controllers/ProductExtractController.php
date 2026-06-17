@@ -147,6 +147,60 @@ class ProductExtractController extends Controller
         ]);
     }
 
+    /**
+     * Full product detail for the modal: more images, description, and direct
+     * seller links — fetched lazily (one SerpAPI call) when a product opens,
+     * keyed by the immersive page token from search_products.
+     */
+    public function details(Request $request)
+    {
+        $validated = $request->validate(['token' => 'required|string|max:6000']);
+
+        $key = config('services.serpapi.key');
+        if (! $key) {
+            return response()->json(['success' => false, 'message' => 'Not configured.'], 503);
+        }
+
+        try {
+            $res = Http::timeout(40)->get('https://serpapi.com/search.json', [
+                'engine'     => 'google_immersive_product',
+                'page_token' => $validated['token'],
+                'api_key'    => $key,
+            ]);
+        } catch (\Throwable $e) {
+            return response()->json(['success' => false, 'message' => 'Failed.'], 502);
+        }
+        if (! $res->successful()) {
+            return response()->json(['success' => false, 'message' => 'Failed.'], 502);
+        }
+
+        $pr = $res->json('product_results') ?? [];
+
+        $images = array_values(array_filter(
+            array_map(fn ($t) => is_array($t) ? ($t['link'] ?? null) : $t, $pr['thumbnails'] ?? []),
+            fn ($v) => is_string($v) && str_starts_with($v, 'http')
+        ));
+
+        // First seller with a real link → a direct merchant URL (much better than
+        // the Google view link for "see it" and for placing the request).
+        $link = null;
+        foreach ($pr['stores'] ?? [] as $s) {
+            if (! empty($s['link'])) {
+                $link = $s['link'];
+                break;
+            }
+        }
+
+        return response()->json([
+            'success' => true,
+            'data'    => [
+                'images'      => array_slice($images, 0, 8),
+                'description' => $pr['about_the_product']['description'] ?? null,
+                'link'        => $link,
+            ],
+        ]);
+    }
+
     /** Primary: SerpAPI Google Shopping (fast, reliable). Null on failure. */
     private function shoppingViaSerpapi(string $q): ?array
     {
@@ -200,6 +254,9 @@ class ProductExtractController extends Controller
                 'snippet' => $r['snippet'] ?? null,
                 'rating'  => $r['rating'] ?? null,
                 'reviews' => $r['reviews'] ?? null,
+                // Token to lazily fetch full details (more images, description,
+                // direct seller links) when the product modal opens.
+                'token'   => $r['immersive_product_page_token'] ?? null,
             ];
         }
         return $products;
