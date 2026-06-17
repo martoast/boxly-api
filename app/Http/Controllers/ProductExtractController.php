@@ -44,6 +44,15 @@ class ProductExtractController extends Controller
             ], 422);
         }
 
+        // Fallbacks for non-Shopify / headless stores (e.g. Gymshark) that keep
+        // the price/image in an app-state blob rather than the Product JSON-LD.
+        if (empty($product['price'])) {
+            $product['price'] = $this->priceFromHtml($html);
+        }
+        if (empty($product['image'])) {
+            $product['image'] = $this->meta($html, 'og:image') ?? $this->meta($html, 'twitter:image');
+        }
+
         return response()->json([
             'success' => true,
             'data' => array_merge([
@@ -161,6 +170,30 @@ class ProductExtractController extends Controller
             'price' => $price !== null ? (float) $price : null,
             'image' => $this->meta($html, 'og:image'),
         ];
+    }
+
+    /**
+     * Last-resort price recovery: scan the raw HTML for an embedded schema.org
+     * Offer (works when the price lives in an app-state/remix blob instead of
+     * the Product JSON-LD, as on headless Shopify stores like Gymshark).
+     */
+    private function priceFromHtml(string $html): ?float
+    {
+        // "priceCurrency":"USD","price":40  (or price before currency)
+        if (preg_match('/"priceCurrency"\s*:\s*"[A-Z]{3}"\s*,\s*"price"\s*:\s*"?([0-9]+(?:\.[0-9]{1,2})?)/i', $html, $m)) {
+            return (float) $m[1];
+        }
+        if (preg_match('/"price"\s*:\s*"?([0-9]+(?:\.[0-9]{1,2})?)"?\s*,\s*"priceCurrency"\s*:\s*"[A-Z]{3}"/i', $html, $m)) {
+            return (float) $m[1];
+        }
+        // Common meta fallbacks.
+        foreach (['product:price:amount', 'og:price:amount', 'twitter:data1'] as $prop) {
+            $val = $this->meta($html, $prop);
+            if ($val && preg_match('/([0-9]+(?:\.[0-9]{1,2})?)/', $val, $m)) {
+                return (float) $m[1];
+            }
+        }
+        return null;
     }
 
     private function meta(string $html, string $prop): ?string
