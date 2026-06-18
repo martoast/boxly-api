@@ -20,18 +20,24 @@ class ShoppingProfileController extends Controller
     }
 
     /**
-     * Merge-update the profile. The AI sends only the keys it learned; we deep
-     * merge so nothing previously learned is lost.
+     * Update the profile. Two modes:
+     *  - default (AI tool): deep-merge the partial keys it learned, so nothing
+     *    previously learned is lost (lists union, keys overwrite).
+     *  - replace=true (the user editing their own profile in the web app): set
+     *    the profile to exactly what was sent, so removals (a brand, a size)
+     *    actually stick — a union-merge could never delete.
      */
     public function update(Request $request)
     {
         $validated = $request->validate([
             'profile' => 'required|array',
+            'replace' => 'sometimes|boolean',
         ]);
 
         $user = $request->user();
-        $current = $user->shopping_profile ?? [];
-        $merged = $this->deepMerge($current, $validated['profile']);
+        $merged = $request->boolean('replace')
+            ? $validated['profile']
+            : $this->deepMerge($user->shopping_profile ?? [], $validated['profile']);
         $merged['updated_at'] = now()->toIso8601String();
 
         $user->shopping_profile = $merged;
