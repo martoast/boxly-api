@@ -215,7 +215,7 @@ class ProductExtractController extends Controller
             'title' => null, 'price' => null, 'was' => null, 'on_sale' => false,
             'store' => null, 'buy_url' => $validated['url'] ?? null,
             'images' => [], 'description' => null,
-            'options' => [], 'variants' => [], 'has_variants' => false,
+            'options' => [], 'variants' => [], 'has_variants' => false, 'available' => true,
         ];
 
         // 1) SerpAPI immersive — extra images, description, and (crucially) a real
@@ -235,36 +235,528 @@ class ProductExtractController extends Controller
             $out['store'] = $this->storeFromUrl($buy);
         }
 
-        // 2) Shopify variants — the real win: live sizes, prices and stock.
-        if ($buy && ($sh = $this->shopifyVariants($buy))) {
-            $out['title']        = $sh['title'] ?: $out['title'];
-            $out['price']        = $sh['price'] ?? $out['price'];
-            $out['was']          = $sh['was'] ?? $out['was'];
-            $out['on_sale']      = $sh['on_sale'] ?: $out['on_sale'];
-            $out['options']      = $sh['options'];
-            $out['variants']     = $sh['variants'];
-            $out['has_variants'] = count($sh['variants']) > 0;
-            if (! empty($sh['images'])) {
-                $out['images'] = $sh['images'];
+        // 2) Layered, platform-aware extraction — pull the real product as the
+        //    store would render it (variants, sizes, colors, price, stock).
+        //    Priority: structured APIs (Amazon/Walmart) → Shopify .js → HTML
+        //    cascade (JSON-LD / WooCommerce / Magento), escalating to a rendered
+        //    fetch when a plain fetch comes back thin.
+        $detail = $buy && ! $this->isGoogleLink($buy) ? $this->extractDetail($buy) : null;
+        if ($detail) {
+            $out['title']        = $detail['title'] ?: $out['title'];
+            $out['price']        = $detail['price'] ?? $out['price'];
+            $out['was']          = $detail['was'] ?? $out['was'];
+            $out['on_sale']      = $detail['on_sale'] ?? $out['on_sale'];
+            $out['options']      = $detail['options'] ?? [];
+            $out['variants']     = $detail['variants'] ?? [];
+            $out['has_variants'] = count($out['variants']) > 0;
+            if (! empty($detail['unavailable'])) {
+                $out['available'] = false;
+            }
+            if (! empty($detail['description'])) {
+                $out['description'] = $out['description'] ?: $detail['description'];
+            }
+            if (! empty($detail['images'])) {
+                // Prefer store images (more, higher-res); keep immersive as backup.
+                $out['images'] = array_merge($detail['images'], $out['images']);
             }
         }
 
-        // 3) Non-Shopify fallback: JSON-LD / meta for title/price/image.
-        if (! $out['title'] && $buy && ! $this->isGoogleLink($buy)) {
-            if ($html = $this->fetch($buy)) {
-                if ($p = ($this->parseJsonLd($html) ?? $this->parseMeta($html))) {
-                    $out['title'] = $out['title'] ?: ($p['title'] ?? null);
-                    $out['price'] = $out['price'] ?? ($p['price'] ?? null);
-                    if (empty($out['images']) && ! empty($p['image'])) {
-                        $out['images'] = [$p['image']];
+        $out['images'] = array_slice(array_values(array_unique(array_filter($out['images']))), 0, 12);
+
+        return response()->json(['success' => true, 'data' => $out]);
+    }
+
+    /**
+     * Route a product URL to the best available extractor and return normalized
+     * detail: { title, price, was, on_sale, description, options[], variants[],
+     * images[] }. Each extractor returns the same shape; null when it can't.
+     */
+    private function extractDetail(string $url): ?array
+    {
+        $host = strtolower((string) parse_url($url, PHP_URL_HOST));
+
+        if (str_contains($host, 'amazon.')) {
+            return $this->amazonStructured($url);
+        }
+        if (str_contains($host, 'walmart.')) {
+            return $this->walmartStructured($url);
+        }
+        // Shopify exposes clean variant JSON — best source when present.
+        if ($sh = $this->shopifyVariants($url)) {
+            $sh['description'] = $sh['description'] ?? null;
+            return $sh;
+        }
+
+        return $this->htmlCascade($url);
+    }
+
+    /** Amazon: ScraperAPI structured product (ASIN) — options, price, stock, images. */
+    private function amazonStructured(string $url): ?array
+    {
+        $key = config('services.scraperapi.key');
+        if (! $key) {
+            return null;
+        }
+        if (! preg_match('~/(?:dp|gp/product|gp/aw/d|product)/([A-Z0-9]{10})~i', $url, $m)
+            && ! preg_match('~[/?]([A-Z0-9]{10})(?:[/?&]|$)~', $url, $m)) {
+            return null;
+        }
+        try {
+            $res = Http::timeout(70)->get('https://api.scraperapi.com/structured/amazon/product', [
+                'api_key' => $key, 'asin' => $m[1], 'country' => 'us',
+            ]);
+            if (! $res->successful()) {
+                return null;
+            }
+            $d = $res->json();
+        } catch (\Throwable $e) {
+            return null;
+        }
+        if (! is_array($d) || empty($d['name'])) {
+            return null;
+        }
+
+        $price = $this->money($d['pricing'] ?? null);
+        $was = $this->money($d['list_price'] ?? null);
+        $onSale = $was && $price && $was > $price;
+
+        $images = array_values(array_unique(array_filter(
+            array_merge($d['high_res_images'] ?? [], $d['images'] ?? []),
+            fn ($i) => is_string($i) && str_starts_with($i, 'http')
+        )));
+
+        $options = [];
+        foreach (($d['customization_options'] ?? []) as $name => $vals) {
+            if (! is_array($vals)) {
+                continue;
+            }
+            $values = array_values(array_filter(array_map(
+                fn ($v) => is_array($v) ? ($v['value'] ?? null) : (is_string($v) ? $v : null),
+                $vals
+            )));
+            if ($values) {
+                $options[] = ['name' => $this->optionLabel((string) $name), 'values' => $values];
+            }
+        }
+
+        $bullets = $d['feature_bullets'] ?? null;
+
+        return [
+            'title'       => $d['name'],
+            'price'       => $price,
+            'was'         => $onSale ? $was : null,
+            'on_sale'     => $onSale,
+            'description' => is_array($bullets) && $bullets ? '• ' . implode("\n• ", array_slice($bullets, 0, 6)) : null,
+            'options'     => $options,   // selectable attributes (no per-combo matrix)
+            'variants'    => [],         // Amazon needs a call per ASIN — selection saved as a note
+            'images'      => array_slice($images, 0, 12),
+        ];
+    }
+
+    /** Walmart: ScraperAPI structured product (item id) — price, stock, images. */
+    private function walmartStructured(string $url): ?array
+    {
+        $key = config('services.scraperapi.key');
+        if (! $key) {
+            return null;
+        }
+        if (! preg_match('~/ip/(?:[^/]+/)?(\d{6,})~', $url, $m) && ! preg_match('~(\d{8,})~', $url, $m)) {
+            return null;
+        }
+        try {
+            $res = Http::timeout(70)->get('https://api.scraperapi.com/structured/walmart/product', [
+                'api_key' => $key, 'product_id' => $m[1],
+            ]);
+            if (! $res->successful()) {
+                return null;
+            }
+            $d = $res->json();
+        } catch (\Throwable $e) {
+            return null;
+        }
+        if (! is_array($d) || empty($d['product_name'])) {
+            return null;
+        }
+
+        $price = $this->money($d['price'] ?? null);
+        $was = $this->money($d['old_price'] ?? null);
+        $onSale = $was && $price && $was > $price;
+        $av = strtoupper((string) ($d['product_availability'] ?? ''));
+        $available = $av === '' || (str_contains($av, 'IN_STOCK') || str_contains($av, 'AVAILABLE'));
+
+        $images = array_values(array_filter(($d['images'] ?? []), fn ($i) => is_string($i) && str_starts_with($i, 'http')));
+
+        // Build option lists from Walmart variants when the product has them.
+        $options = [];
+        foreach (($d['variants'] ?? []) as $v) {
+            if (! is_array($v)) {
+                continue;
+            }
+            $name = $this->optionLabel((string) ($v['name'] ?? $v['type'] ?? 'Opción'));
+            $values = [];
+            foreach (($v['values'] ?? $v['options'] ?? []) as $val) {
+                $label = is_array($val) ? ($val['name'] ?? $val['value'] ?? null) : $val;
+                if ($label) {
+                    $values[] = $label;
+                }
+            }
+            if ($values) {
+                $options[] = ['name' => $name, 'values' => array_values(array_unique($values))];
+            }
+        }
+
+        return [
+            'title'       => $d['product_name'],
+            'price'       => $price,
+            'was'         => $onSale ? $was : null,
+            'on_sale'     => $onSale,
+            'description' => $d['product_short_description'] ?? null,
+            'options'     => $options,
+            'variants'    => [],
+            'images'      => array_slice($images, 0, 12),
+            'unavailable' => ! $available,
+        ];
+    }
+
+    /**
+     * Generic HTML extraction for every other store: fetch (escalating to a
+     * rendered fetch when the plain HTML is thin/JS-only), then pull variants
+     * from WooCommerce / Magento / JSON-LD, plus images and base price.
+     */
+    private function htmlCascade(string $url): ?array
+    {
+        $html = $this->fetch($url, false);
+        $r = $html ? $this->extractFromHtml($html, $url) : null;
+
+        // Escalate to a rendered fetch if we got nothing useful (blocked or JS-only).
+        $thin = ! $r || (empty($r['variants']) && empty($r['options']) && empty($r['price']) && empty($r['title']));
+        if ($thin) {
+            if ($html2 = $this->fetch($url, true)) {
+                $r2 = $this->extractFromHtml($html2, $url);
+                if ($r2) {
+                    $r = $r ? $this->mergeDetail($r, $r2) : $r2;
+                }
+            }
+        }
+
+        return $r;
+    }
+
+    private function extractFromHtml(string $html, string $url): ?array
+    {
+        $base = [
+            'title' => null, 'price' => null, 'was' => null, 'on_sale' => false,
+            'description' => null, 'options' => [], 'variants' => [], 'images' => [],
+        ];
+
+        // Variants — first platform that yields a matrix wins.
+        $matrix = $this->wooVariants($html) ?? $this->magentoVariants($html) ?? $this->jsonLdVariants($html);
+        if ($matrix) {
+            $base = $this->mergeDetail($base, $matrix);
+        }
+
+        // Base title/price/image from structured data when still missing.
+        if (! $base['title'] || $base['price'] === null) {
+            if ($p = ($this->parseJsonLd($html) ?? $this->parseMeta($html))) {
+                $base['title'] = $base['title'] ?: ($p['title'] ?? null);
+                $base['price'] = $base['price'] ?? ($p['price'] ?? null);
+                if (! empty($p['image'])) {
+                    $base['images'][] = $p['image'];
+                }
+            }
+        }
+
+        $base['images'] = array_merge($base['images'], $this->gatherImages($html));
+        $base['images'] = array_slice(array_values(array_unique(array_filter($base['images']))), 0, 12);
+
+        $hasAnything = $base['title'] || $base['price'] !== null || $base['variants'] || $base['options'];
+        return $hasAnything ? $base : null;
+    }
+
+    /** WooCommerce: the variations form embeds the full variant JSON. */
+    private function wooVariants(string $html): ?array
+    {
+        if (! preg_match('~data-product_variations\s*=\s*([\'"])(.*?)\1~s', $html, $m)) {
+            return null;
+        }
+        $json = html_entity_decode($m[2], ENT_QUOTES | ENT_HTML5);
+        $vars = json_decode($json, true);
+        if (! is_array($vars) || ! $vars) {
+            return null;
+        }
+
+        $variants = [];
+        $optionVals = [];
+        $minPrice = null;
+        $minWas = null;
+        $anySale = false;
+        foreach ($vars as $v) {
+            if (! is_array($v)) {
+                continue;
+            }
+            $price = isset($v['display_price']) ? (float) $v['display_price'] : null;
+            $reg = isset($v['display_regular_price']) ? (float) $v['display_regular_price'] : null;
+            $onSale = $reg && $price && $reg > $price;
+            if ($price !== null && ($minPrice === null || $price < $minPrice)) {
+                $minPrice = $price;
+            }
+            if ($onSale) {
+                $anySale = true;
+                $minWas = $minWas === null ? $reg : min($minWas, $reg);
+            }
+            $opts = [];
+            foreach (($v['attributes'] ?? []) as $attrKey => $attrVal) {
+                if ($attrVal === '' || $attrVal === null) {
+                    continue;
+                }
+                $name = $this->optionLabel(preg_replace('~^attribute_(pa_)?~', '', (string) $attrKey));
+                $opts[$name] = (string) $attrVal;
+                $optionVals[$name][$attrVal] = true;
+            }
+            $variants[] = [
+                'id'        => $v['variation_id'] ?? null,
+                'title'     => implode(' / ', array_values($opts)),
+                'options'   => $opts,
+                'price'     => $price,
+                'was'       => $onSale ? $reg : null,
+                'on_sale'   => $onSale,
+                'available' => (bool) ($v['is_in_stock'] ?? true),
+            ];
+        }
+        if (! $variants) {
+            return null;
+        }
+        $options = [];
+        foreach ($optionVals as $name => $vals) {
+            $options[] = ['name' => $name, 'values' => array_keys($vals)];
+        }
+
+        return [
+            'title' => null, 'description' => null, 'images' => [],
+            'price' => $minPrice, 'was' => $anySale ? $minWas : null, 'on_sale' => $anySale,
+            'options' => $options, 'variants' => $variants,
+        ];
+    }
+
+    /** Magento: the swatch/config script embeds jsonConfig with options + prices. */
+    private function magentoVariants(string $html): ?array
+    {
+        if (! preg_match('~"jsonConfig"\s*:\s*(\{.*?\})\s*,\s*"~s', $html, $m)
+            && ! preg_match('~Magento_Swatches/js/swatch-renderer["\']\s*:\s*(\{.*?\})\s*\}\s*\}~s', $html, $m)) {
+            return null;
+        }
+        $cfg = json_decode($m[1], true);
+        if (! is_array($cfg) || empty($cfg['attributes'])) {
+            return null;
+        }
+
+        $options = [];
+        foreach ($cfg['attributes'] as $attr) {
+            if (! is_array($attr) || empty($attr['options'])) {
+                continue;
+            }
+            $values = array_values(array_filter(array_map(
+                fn ($o) => is_array($o) ? ($o['label'] ?? null) : null,
+                $attr['options']
+            )));
+            if ($values) {
+                $options[] = ['name' => $this->optionLabel((string) ($attr['label'] ?? 'Opción')), 'values' => $values];
+            }
+        }
+        if (! $options) {
+            return null;
+        }
+
+        $prices = $cfg['optionPrices'] ?? [];
+        $finals = [];
+        foreach ($prices as $p) {
+            if (isset($p['finalPrice']['amount'])) {
+                $finals[] = (float) $p['finalPrice']['amount'];
+            }
+        }
+
+        return [
+            'title' => null, 'description' => null, 'images' => [],
+            'price' => $finals ? min($finals) : null, 'was' => null, 'on_sale' => false,
+            'options' => $options, 'variants' => [],
+        ];
+    }
+
+    /**
+     * JSON-LD ProductGroup/Product with multiple offers → an option list with
+     * per-offer price + availability (covers many custom/brand stores).
+     */
+    private function jsonLdVariants(string $html): ?array
+    {
+        if (! preg_match_all('#<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>#is', $html, $matches)) {
+            return null;
+        }
+        foreach ($matches[1] as $block) {
+            $json = json_decode(trim($block), true);
+            if (! is_array($json)) {
+                continue;
+            }
+            foreach ($this->flattenJsonLd($json) as $node) {
+                $type = $node['@type'] ?? null;
+                $isProduct = $type === 'Product' || $type === 'ProductGroup'
+                    || (is_array($type) && (in_array('Product', $type, true) || in_array('ProductGroup', $type, true)));
+                if (! $isProduct) {
+                    continue;
+                }
+
+                // ProductGroup: each hasVariant is a Product with its own offer.
+                $variantsRaw = $node['hasVariant'] ?? null;
+                if (is_array($variantsRaw) && $variantsRaw) {
+                    $r = $this->variantsFromNodes($variantsRaw);
+                    if ($r) {
+                        return $r;
+                    }
+                }
+
+                // Product with an array of offers (often per size).
+                $offers = $node['offers'] ?? null;
+                if (is_array($offers) && array_is_list($offers) && count($offers) > 1) {
+                    $values = [];
+                    $variants = [];
+                    $minP = null;
+                    foreach ($offers as $o) {
+                        if (! is_array($o)) {
+                            continue;
+                        }
+                        $label = $o['name'] ?? $o['sku'] ?? null;
+                        $price = isset($o['price']) ? (float) $o['price'] : ($o['lowPrice'] ?? null);
+                        $avail = stripos((string) ($o['availability'] ?? ''), 'InStock') !== false
+                            || ($o['availability'] ?? '') === '';
+                        if ($price !== null && ($minP === null || $price < $minP)) {
+                            $minP = $price;
+                        }
+                        if ($label) {
+                            $values[] = (string) $label;
+                            $variants[] = [
+                                'id' => $o['sku'] ?? null, 'title' => (string) $label,
+                                'options' => ['Opción' => (string) $label],
+                                'price' => $price, 'was' => null, 'on_sale' => false,
+                                'available' => $avail,
+                            ];
+                        }
+                    }
+                    if ($variants) {
+                        return [
+                            'title' => $node['name'] ?? null, 'description' => $node['description'] ?? null, 'images' => [],
+                            'price' => $minP, 'was' => null, 'on_sale' => false,
+                            'options' => [['name' => 'Opción', 'values' => array_values(array_unique($values))]],
+                            'variants' => $variants,
+                        ];
                     }
                 }
             }
         }
 
-        $out['images'] = array_slice(array_values(array_unique(array_filter($out['images']))), 0, 10);
+        return null;
+    }
 
-        return response()->json(['success' => true, 'data' => $out]);
+    /** Build a single-option matrix from a list of variant Product nodes. */
+    private function variantsFromNodes(array $nodes): ?array
+    {
+        $variants = [];
+        $values = [];
+        $minP = null;
+        foreach ($nodes as $n) {
+            if (! is_array($n)) {
+                continue;
+            }
+            $offer = $n['offers'] ?? null;
+            if (is_array($offer) && array_is_list($offer)) {
+                $offer = $offer[0] ?? null;
+            }
+            $price = isset($offer['price']) ? (float) $offer['price'] : null;
+            $avail = stripos((string) ($offer['availability'] ?? ''), 'InStock') !== false || ($offer['availability'] ?? '') === '';
+            $label = $n['name'] ?? $n['sku'] ?? null;
+            if (! $label) {
+                continue;
+            }
+            if ($price !== null && ($minP === null || $price < $minP)) {
+                $minP = $price;
+            }
+            $values[] = (string) $label;
+            $variants[] = [
+                'id' => $n['sku'] ?? null, 'title' => (string) $label,
+                'options' => ['Opción' => (string) $label],
+                'price' => $price, 'was' => null, 'on_sale' => false, 'available' => $avail,
+            ];
+        }
+        if (! $variants) {
+            return null;
+        }
+
+        return [
+            'title' => null, 'description' => null, 'images' => [],
+            'price' => $minP, 'was' => null, 'on_sale' => false,
+            'options' => [['name' => 'Opción', 'values' => array_values(array_unique($values))]],
+            'variants' => $variants,
+        ];
+    }
+
+    /** Collect product images from og:image tags and JSON-LD image arrays. */
+    private function gatherImages(string $html): array
+    {
+        $images = [];
+        if (preg_match_all('~<meta[^>]+property=["\']og:image(?::secure_url)?["\'][^>]+content=["\']([^"\']+)["\']~i', $html, $m)) {
+            foreach ($m[1] as $u) {
+                if (str_starts_with($u, 'http')) {
+                    $images[] = $u;
+                }
+            }
+        }
+        return array_values(array_unique($images));
+    }
+
+    /** Merge two detail arrays, preferring non-empty values from $b. */
+    private function mergeDetail(array $a, array $b): array
+    {
+        foreach (['title', 'price', 'was', 'description'] as $k) {
+            if (($a[$k] ?? null) === null || ($a[$k] ?? '') === '') {
+                $a[$k] = $b[$k] ?? ($a[$k] ?? null);
+            }
+        }
+        if (! empty($b['on_sale'])) {
+            $a['on_sale'] = true;
+        }
+        foreach (['options', 'variants', 'images'] as $k) {
+            if (empty($a[$k]) && ! empty($b[$k])) {
+                $a[$k] = $b[$k];
+            }
+        }
+
+        return $a;
+    }
+
+    private function money($v): ?float
+    {
+        if ($v === null || $v === '') {
+            return null;
+        }
+        if (is_numeric($v)) {
+            return (float) $v;
+        }
+        $s = str_replace(',', '', (string) $v);
+        if (preg_match('/([0-9]+(?:\.[0-9]{1,2})?)/', $s, $m)) {
+            return (float) $m[1];
+        }
+
+        return null;
+    }
+
+    private function optionLabel(string $raw): string
+    {
+        $clean = ucwords(trim(str_replace(['_', '-'], ' ', $raw)));
+        $map = [
+            'Color' => 'Color', 'Colour' => 'Color', 'Size' => 'Talla', 'Sizes' => 'Talla',
+            'Material Type' => 'Material', 'Style' => 'Estilo', 'Style Name' => 'Estilo',
+            'Pattern' => 'Diseño', 'Pa Color' => 'Color', 'Pa Size' => 'Talla',
+        ];
+
+        return $map[$clean] ?? ($clean ?: 'Opción');
     }
 
     private function isGoogleLink(?string $u): bool
@@ -504,15 +996,16 @@ class ProductExtractController extends Controller
         return $products;
     }
 
-    private function fetch(string $url): ?string
+    private function fetch(string $url, bool $render = false): ?string
     {
         $key = config('services.scraperapi.key');
         try {
             if ($key) {
-                $res = Http::timeout(45)->get('https://api.scraperapi.com', [
+                $res = Http::timeout($render ? 70 : 45)->get('https://api.scraperapi.com', [
                     'api_key' => $key,
                     'url' => $url,
-                    'render' => 'false',
+                    'render' => $render ? 'true' : 'false',
+                    'country_code' => 'us',
                 ]);
             } else {
                 // No ScraperAPI key (e.g. local) — try a direct fetch.
