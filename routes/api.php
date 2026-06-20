@@ -111,6 +111,8 @@ Route::post('/products/search', [\App\Http\Controllers\ProductExtractController:
     ->middleware('throttle:30,1');
 Route::post('/products/details', [\App\Http\Controllers\ProductExtractController::class, 'details'])
     ->middleware('throttle:60,1');
+Route::post('/products/page', [\App\Http\Controllers\ProductExtractController::class, 'page'])
+    ->middleware('throttle:60,1');
 
 Route::middleware(['web'])->group(function () {
     Route::get('/auth/{provider}/redirect', AuthSocialRedirectController::class)

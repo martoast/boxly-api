@@ -198,6 +198,198 @@ class ProductExtractController extends Controller
         ]);
     }
 
+    /**
+     * Dynamic product page: build full detail on the fly for the results→detail
+     * flow. Merges SerpAPI immersive (images/description/direct seller link) with
+     * live Shopify variant data (sizes/prices/stock) when the seller is Shopify,
+     * falling back to JSON-LD/meta for other stores. Input: { url?, token? }.
+     */
+    public function page(Request $request)
+    {
+        $validated = $request->validate([
+            'url'   => 'nullable|string|max:2000',
+            'token' => 'nullable|string|max:6000',
+        ]);
+
+        $out = [
+            'title' => null, 'price' => null, 'was' => null, 'on_sale' => false,
+            'store' => null, 'buy_url' => $validated['url'] ?? null,
+            'images' => [], 'description' => null,
+            'options' => [], 'variants' => [], 'has_variants' => false,
+        ];
+
+        // 1) SerpAPI immersive — extra images, description, and (crucially) a real
+        //    merchant link instead of the Google view link.
+        if (! empty($validated['token'])) {
+            if ($imm = $this->immersive($validated['token'])) {
+                $out['images']      = $imm['images'];
+                $out['description'] = $imm['description'];
+                if (empty($out['buy_url']) || $this->isGoogleLink($out['buy_url'])) {
+                    $out['buy_url'] = $imm['link'] ?: $out['buy_url'];
+                }
+            }
+        }
+
+        $buy = $out['buy_url'];
+        if ($buy) {
+            $out['store'] = $this->storeFromUrl($buy);
+        }
+
+        // 2) Shopify variants — the real win: live sizes, prices and stock.
+        if ($buy && ($sh = $this->shopifyVariants($buy))) {
+            $out['title']        = $sh['title'] ?: $out['title'];
+            $out['price']        = $sh['price'] ?? $out['price'];
+            $out['was']          = $sh['was'] ?? $out['was'];
+            $out['on_sale']      = $sh['on_sale'] ?: $out['on_sale'];
+            $out['options']      = $sh['options'];
+            $out['variants']     = $sh['variants'];
+            $out['has_variants'] = count($sh['variants']) > 0;
+            if (! empty($sh['images'])) {
+                $out['images'] = $sh['images'];
+            }
+        }
+
+        // 3) Non-Shopify fallback: JSON-LD / meta for title/price/image.
+        if (! $out['title'] && $buy && ! $this->isGoogleLink($buy)) {
+            if ($html = $this->fetch($buy)) {
+                if ($p = ($this->parseJsonLd($html) ?? $this->parseMeta($html))) {
+                    $out['title'] = $out['title'] ?: ($p['title'] ?? null);
+                    $out['price'] = $out['price'] ?? ($p['price'] ?? null);
+                    if (empty($out['images']) && ! empty($p['image'])) {
+                        $out['images'] = [$p['image']];
+                    }
+                }
+            }
+        }
+
+        $out['images'] = array_slice(array_values(array_unique(array_filter($out['images']))), 0, 10);
+
+        return response()->json(['success' => true, 'data' => $out]);
+    }
+
+    private function isGoogleLink(?string $u): bool
+    {
+        return is_string($u) && (str_contains($u, 'google.com') || str_contains($u, 'gstatic.com'));
+    }
+
+    /** SerpAPI immersive product → images, description, direct seller link. */
+    private function immersive(string $token): ?array
+    {
+        $key = config('services.serpapi.key');
+        if (! $key) {
+            return null;
+        }
+        try {
+            $res = Http::timeout(40)->get('https://serpapi.com/search.json', [
+                'engine' => 'google_immersive_product', 'page_token' => $token, 'api_key' => $key,
+            ]);
+            if (! $res->successful()) {
+                return null;
+            }
+        } catch (\Throwable $e) {
+            return null;
+        }
+        $pr = $res->json('product_results') ?? [];
+        $images = array_values(array_filter(
+            array_map(fn ($t) => is_array($t) ? ($t['link'] ?? null) : $t, $pr['thumbnails'] ?? []),
+            fn ($v) => is_string($v) && str_starts_with($v, 'http')
+        ));
+        $link = null;
+        foreach ($pr['stores'] ?? [] as $s) {
+            if (! empty($s['link'])) { $link = $s['link']; break; }
+        }
+
+        return ['images' => array_slice($images, 0, 8), 'description' => $pr['about_the_product']['description'] ?? null, 'link' => $link];
+    }
+
+    /**
+     * Live Shopify variant data via <product-url>.js — every size/option with its
+     * price, compare_at (sale) price and in-stock flag.
+     */
+    private function shopifyVariants(string $url): ?array
+    {
+        if (! preg_match('~^(https?://[^/]+/(?:.*/)?products/[^/?#]+)~', $url, $m)) {
+            return null;
+        }
+        $jsUrl = $m[1] . '.js';
+        $key = config('services.scraperapi.key');
+        try {
+            $target = $key
+                ? 'https://api.scraperapi.com?' . http_build_query(['api_key' => $key, 'url' => $jsUrl])
+                : $jsUrl;
+            $res = Http::timeout(30)->get($target);
+            if (! $res->successful()) {
+                return null;
+            }
+            $data = $res->json();
+            if (! is_array($data) || empty($data['title'])) {
+                return null;
+            }
+        } catch (\Throwable $e) {
+            return null;
+        }
+
+        $optionNames = array_map(fn ($o) => is_array($o) ? ($o['name'] ?? 'Opción') : $o, $data['options'] ?? []);
+
+        $variants = [];
+        $minPrice = null;
+        $minCompare = null;
+        $anyOnSale = false;
+        foreach ($data['variants'] ?? [] as $v) {
+            $price = isset($v['price']) ? round(((float) $v['price']) / 100, 2) : null;
+            $compareRaw = $v['compare_at_price'] ?? null;
+            $compare = $compareRaw ? round(((float) $compareRaw) / 100, 2) : null;
+            $onSale = $compare && $price && $compare > $price;
+            if ($onSale) {
+                $anyOnSale = true;
+                if ($minCompare === null || $compare < $minCompare) $minCompare = $compare;
+            }
+            if ($price !== null && ($minPrice === null || $price < $minPrice)) $minPrice = $price;
+
+            $opts = [];
+            foreach ([1, 2, 3] as $i) {
+                $name = $optionNames[$i - 1] ?? null;
+                $val = $v['option' . $i] ?? null;
+                if ($name && $val !== null && $val !== '') $opts[$name] = $val;
+            }
+            $variants[] = [
+                'id'        => $v['id'] ?? null,
+                'title'     => $v['title'] ?? implode(' / ', array_values($opts)),
+                'options'   => $opts,
+                'price'     => $price,
+                'was'       => $onSale ? $compare : null,
+                'on_sale'   => $onSale,
+                'available' => (bool) ($v['available'] ?? false),
+            ];
+        }
+
+        // Distinct values per option, preserving order.
+        $optionList = [];
+        foreach ($optionNames as $name) {
+            $vals = [];
+            foreach ($variants as $v) {
+                $val = $v['options'][$name] ?? null;
+                if ($val !== null && ! in_array($val, $vals, true)) $vals[] = $val;
+            }
+            if ($vals) $optionList[] = ['name' => $name, 'values' => $vals];
+        }
+
+        $images = array_map(
+            fn ($img) => str_starts_with((string) $img, 'http') ? $img : 'https:' . $img,
+            $data['images'] ?? []
+        );
+
+        return [
+            'title'    => $data['title'],
+            'price'    => $minPrice,
+            'was'      => $anyOnSale ? $minCompare : null,
+            'on_sale'  => $anyOnSale,
+            'options'  => $optionList,
+            'variants' => $variants,
+            'images'   => array_slice(array_values(array_filter($images)), 0, 10),
+        ];
+    }
+
     /** Primary: SerpAPI Google Shopping (fast, reliable). Null on failure. */
     private function shoppingViaSerpapi(string $q): ?array
     {
