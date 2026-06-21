@@ -600,10 +600,11 @@ class ProductExtractController extends Controller
     }
 
     /**
-     * Next.js stores embed the full product (with per-size stock) in a
-     * __NEXT_DATA__ script. Targets the productData.product.availableSizes shape
-     * used by Gymshark (Shopify-Plus backend, custom Next frontend, so the .js
-     * feed 404s) — real sizes, prices and in/out-of-stock + media images.
+     * Next.js stores embed the full product in a __NEXT_DATA__ script (the .js
+     * feed 404s on these custom frontends). Handles two shapes:
+     *  A) Gymshark: productData.product.availableSizes (per-size stock).
+     *  B) Shopify Storefront-style (Vuori/Hydrogen): a node with options[] +
+     *     variants[].selectedOptions + availableForSale — full Color/Size/Length.
      */
     private function nextDataVariants(string $html): ?array
     {
@@ -611,20 +612,31 @@ class ProductExtractController extends Controller
             return null;
         }
         $data = json_decode($m[1], true);
-        $product = $data['props']['pageProps']['productData']['product'] ?? null;
-        if (! is_array($product)) {
-            return null;
-        }
-        $sizes = $product['availableSizes'] ?? null;
-        if (! is_array($sizes) || ! $sizes) {
+        if (! is_array($data)) {
             return null;
         }
 
+        $r = $this->variantsFromAvailableSizes($data['props']['pageProps']['productData']['product'] ?? null);
+        if ($r) {
+            return $r;
+        }
+
+        $node = $this->findStorefrontProduct($data);
+
+        return $node ? $this->variantsFromStorefront($node) : null;
+    }
+
+    /** Shape A — Gymshark's productData.product.availableSizes. */
+    private function variantsFromAvailableSizes($product): ?array
+    {
+        if (! is_array($product) || ! is_array($product['availableSizes'] ?? null) || ! $product['availableSizes']) {
+            return null;
+        }
         $compare = isset($product['compareAtPrice']) ? (float) $product['compareAtPrice'] : null;
         $variants = [];
         $values = [];
         $minPrice = null;
-        foreach ($sizes as $s) {
+        foreach ($product['availableSizes'] as $s) {
             if (! is_array($s)) {
                 continue;
             }
@@ -639,19 +651,14 @@ class ProductExtractController extends Controller
             $onSale = $compare && $price && $compare > $price;
             $values[$size] = true;
             $variants[] = [
-                'id'        => $s['id'] ?? null,
-                'title'     => $size,
-                'options'   => ['Talla' => $size],
-                'price'     => $price,
-                'was'       => $onSale ? $compare : null,
-                'on_sale'   => (bool) $onSale,
+                'id' => $s['id'] ?? null, 'title' => $size, 'options' => ['Talla' => $size],
+                'price' => $price, 'was' => $onSale ? $compare : null, 'on_sale' => (bool) $onSale,
                 'available' => (bool) ($s['inStock'] ?? false),
             ];
         }
         if (! $variants) {
             return null;
         }
-
         $images = [];
         foreach (($product['media'] ?? []) as $md) {
             $src = is_array($md) ? ($md['src'] ?? null) : null;
@@ -659,19 +666,129 @@ class ProductExtractController extends Controller
                 $images[] = $src;
             }
         }
-
         $anySale = $compare && $minPrice && $compare > $minPrice;
 
         return [
-            'title'       => $product['title'] ?? null,
+            'title' => $product['title'] ?? null,
             'description' => isset($product['description']) ? trim(strip_tags((string) $product['description'])) : null,
-            'images'      => array_slice(array_values(array_unique($images)), 0, 10),
-            'price'       => $minPrice,
-            'was'         => $anySale ? $compare : null,
-            'on_sale'     => (bool) $anySale,
-            'options'     => [['name' => 'Talla', 'values' => array_keys($values)]],
-            'variants'    => $variants,
+            'images' => array_slice(array_values(array_unique($images)), 0, 10),
+            'price' => $minPrice, 'was' => $anySale ? $compare : null, 'on_sale' => (bool) $anySale,
+            'options' => [['name' => 'Talla', 'values' => array_keys($values)]],
+            'variants' => $variants,
         ];
+    }
+
+    /** Find the first node shaped like a Shopify Storefront product. */
+    private function findStorefrontProduct($node): ?array
+    {
+        if (is_array($node)) {
+            $opts = $node['options'] ?? null;
+            $vars = $node['variants'] ?? null;
+            if (is_array($opts) && $opts && is_array($vars) && $vars
+                && isset($opts[0]['name'], $vars[0]) && is_array($vars[0]) && isset($vars[0]['selectedOptions'])) {
+                return $node;
+            }
+            foreach ($node as $child) {
+                if (is_array($child) && ($found = $this->findStorefrontProduct($child))) {
+                    return $found;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /** Shape B — Shopify Storefront: options[] + variants[].selectedOptions. */
+    private function variantsFromStorefront(array $node): ?array
+    {
+        $options = [];
+        foreach (($node['options'] ?? []) as $o) {
+            $name = is_array($o) ? ($o['name'] ?? null) : null;
+            $vals = is_array($o) ? ($o['values'] ?? null) : null;
+            if ($name && is_array($vals) && $vals) {
+                $options[] = ['name' => $this->optionLabel((string) $name), 'values' => array_values($vals)];
+            }
+        }
+
+        $variants = [];
+        $minPrice = null;
+        $minCompare = null;
+        $anySale = false;
+        foreach (($node['variants'] ?? []) as $v) {
+            if (! is_array($v)) {
+                continue;
+            }
+            $opts = [];
+            foreach (($v['selectedOptions'] ?? []) as $so) {
+                $n = $so['name'] ?? null;
+                $val = $so['value'] ?? null;
+                if ($n !== null && $val !== null) {
+                    $opts[$this->optionLabel((string) $n)] = $val;
+                }
+            }
+            $price = $this->moneyField($v['price'] ?? null);
+            $compare = $this->moneyField($v['compareAtPrice'] ?? null);
+            $onSale = $compare && $price && $compare > $price;
+            if ($onSale) {
+                $anySale = true;
+                $minCompare = $minCompare === null ? $compare : min($minCompare, $compare);
+            }
+            if ($price !== null && ($minPrice === null || $price < $minPrice)) {
+                $minPrice = $price;
+            }
+            $avail = $v['availableForSale'] ?? $v['available'] ?? $v['inStock'] ?? true;
+            $variants[] = [
+                'id' => $v['id'] ?? null, 'title' => implode(' / ', array_values($opts)), 'options' => $opts,
+                'price' => $price, 'was' => $onSale ? $compare : null, 'on_sale' => (bool) $onSale,
+                'available' => (bool) $avail,
+            ];
+        }
+        if (! $variants) {
+            return null;
+        }
+
+        return [
+            'title' => $node['title'] ?? null,
+            'description' => isset($node['description']) ? trim(strip_tags((string) $node['description'])) : null,
+            'images' => $this->storefrontImages($node),
+            'price' => $minPrice, 'was' => $anySale ? $minCompare : null, 'on_sale' => $anySale,
+            'options' => $options, 'variants' => $variants,
+        ];
+    }
+
+    /** Money that may be a scalar or a {amount} object. */
+    private function moneyField($v): ?float
+    {
+        if (is_array($v)) {
+            $v = $v['amount'] ?? $v['value'] ?? null;
+        }
+        if ($v === null || $v === '') {
+            return null;
+        }
+
+        return is_numeric($v) ? (float) $v : $this->money($v);
+    }
+
+    /** Image URLs from a storefront product node (images/media, various shapes). */
+    private function storefrontImages(array $node): array
+    {
+        $out = [];
+        foreach (['images', 'media'] as $key) {
+            $arr = $node[$key] ?? null;
+            if (! is_array($arr)) {
+                continue;
+            }
+            foreach ($arr as $img) {
+                $u = is_string($img)
+                    ? $img
+                    : ($img['src'] ?? $img['url'] ?? $img['originalSrc'] ?? ($img['image']['url'] ?? null));
+                if (is_string($u) && str_starts_with($u, 'http')) {
+                    $out[] = $u;
+                }
+            }
+        }
+
+        return array_slice(array_values(array_unique($out)), 0, 10);
     }
 
     /**
@@ -846,6 +963,7 @@ class ProductExtractController extends Controller
             'Color' => 'Color', 'Colour' => 'Color', 'Size' => 'Talla', 'Sizes' => 'Talla',
             'Material Type' => 'Material', 'Style' => 'Estilo', 'Style Name' => 'Estilo',
             'Pattern' => 'Diseño', 'Pa Color' => 'Color', 'Pa Size' => 'Talla',
+            'Length' => 'Largo', 'Inseam' => 'Largo',
         ];
 
         return $map[$clean] ?? ($clean ?: 'Opción');
