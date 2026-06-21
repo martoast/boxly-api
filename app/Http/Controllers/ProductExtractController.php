@@ -223,7 +223,7 @@ class ProductExtractController extends Controller
         // window. 10 min keeps price/stock relevant (and the customer never pays
         // until Boxly confirms the quote) while saving SerpAPI + ScraperAPI calls.
         // Keyed by the product URL when present (stable per product), else token.
-        $pdpKey = 'pdp:' . md5(! empty($validated['url']) ? ('u:' . $validated['url']) : ('t:' . ($validated['token'] ?? '')));
+        $pdpKey = 'pdp:' . md5((! empty($validated['url']) ? ('u:' . $validated['url']) : ('t:' . ($validated['token'] ?? ''))) . '|z:' . config('services.scraperapi.zip'));
         $cachedPdp = Cache::get($pdpKey);
         if ($cachedPdp !== null) {
             return response()->json(['success' => true, 'data' => $cachedPdp, 'cached' => true]);
@@ -328,6 +328,7 @@ class ProductExtractController extends Controller
         try {
             $res = Http::timeout(70)->get('https://api.scraperapi.com/structured/amazon/product', [
                 'api_key' => $key, 'asin' => $m[1], 'country' => 'us',
+                'zip_code' => config('services.scraperapi.zip'), // warehouse-local price/stock
             ]);
             if (! $res->successful()) {
                 return null;
@@ -390,6 +391,7 @@ class ProductExtractController extends Controller
         try {
             $res = Http::timeout(70)->get('https://api.scraperapi.com/structured/walmart/product', [
                 'api_key' => $key, 'product_id' => $m[1],
+                'zip_code' => config('services.scraperapi.zip'), // warehouse-local price/stock
             ]);
             if (! $res->successful()) {
                 return null;
@@ -907,21 +909,27 @@ class ProductExtractController extends Controller
         // Server-side cache: identical query+page is reused across all users for a
         // short window. 30 min keeps a discovery list relevant (the shown price is
         // an estimate Boxly confirms at purchase) while cutting SerpAPI credits.
-        $cacheKey = 'serp_shop:' . md5($q) . ':' . $start;
+        $cacheKey = 'serp_shop:' . md5($q . '|' . config('services.serpapi.location')) . ':' . $start;
         $hit = Cache::get($cacheKey);
         if ($hit !== null) {
             return $hit;
         }
+        $params = [
+            'engine'  => 'google_shopping',
+            'q'       => $q,
+            'gl'      => 'us',
+            'hl'      => 'en',
+            'num'     => 40,
+            'start'   => $start,
+            'api_key' => $key,
+        ];
+        // Pin results to the warehouse city so prices/availability are precise.
+        $location = config('services.serpapi.location');
+        if (! empty($location)) {
+            $params['location'] = $location;
+        }
         try {
-            $res = Http::timeout(35)->get('https://serpapi.com/search.json', [
-                'engine'  => 'google_shopping',
-                'q'       => $q,
-                'gl'      => 'us',
-                'hl'      => 'en',
-                'num'     => 40,
-                'start'   => $start,
-                'api_key' => $key,
-            ]);
+            $res = Http::timeout(35)->get('https://serpapi.com/search.json', $params);
         } catch (\Throwable $e) {
             return null;
         }

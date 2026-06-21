@@ -18,6 +18,9 @@ return [
      */
     'scraperapi' => [
         'key' => env('SCRAPERAPI_KEY'),
+        // Delivery ZIP for retailer pricing/stock (Amazon/Walmart structured).
+        // Defaults to the San Ysidro / San Diego receiving warehouse.
+        'zip' => env('SEARCH_ZIP', '92173'),
     ],
 
     /**
@@ -26,6 +29,9 @@ return [
      */
     'serpapi' => [
         'key' => env('SERPAPI_KEY'),
+        // City-level location for Google Shopping — pinned to the San Diego
+        // warehouse area so prices/availability match where goods land.
+        'location' => env('SEARCH_LOCATION', 'San Diego, California, United States'),
     ],
 
     'resend' => [
