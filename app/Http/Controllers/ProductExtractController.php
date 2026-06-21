@@ -77,19 +77,26 @@ class ProductExtractController extends Controller
             'query'     => 'required|string|max:200',
             'store'     => 'nullable|string|max:100',
             'limit'     => 'nullable|integer|min:1|max:40',
+            'start'     => 'nullable|integer|min:0|max:400',
             'min_price' => 'nullable|numeric|min:0',
             'max_price' => 'nullable|numeric|min:0',
             'sale'      => 'nullable|boolean',
         ]);
 
-        $limit = $validated['limit'] ?? 16;
+        $limit = $validated['limit'] ?? 40;
+        $start = (int) ($validated['start'] ?? 0);
         $store = trim($validated['store'] ?? '');
         // Bias the query toward the store when one is specified.
         $q = $store !== '' ? $store . ' ' . $validated['query'] : $validated['query'];
 
-        $products = $this->shoppingViaSerpapi($q);
+        $hasMore = false;
+        $products = $this->shoppingViaSerpapi($q, $start);
         if ($products === null) {
-            $products = $this->shoppingViaScraperapi($q);
+            // ScraperAPI fallback has no pagination — only ever the first page.
+            $products = $start === 0 ? $this->shoppingViaScraperapi($q) : [];
+        } else {
+            // A near-full SerpAPI page means there's very likely another one.
+            $hasMore = count($products) >= 30;
         }
         if ($products === null) {
             return response()->json(['success' => false, 'message' => 'Search failed.'], 502);
@@ -140,7 +147,7 @@ class ProductExtractController extends Controller
 
         return response()->json([
             'success' => true,
-            'data'    => ['query' => $q, 'products' => $shown, 'price_range' => $range],
+            'data'    => ['query' => $q, 'products' => $shown, 'price_range' => $range, 'has_more' => $hasMore, 'start' => $start],
         ]);
     }
 
@@ -425,21 +432,12 @@ class ProductExtractController extends Controller
      */
     private function htmlCascade(string $url): ?array
     {
+        // Single, fast plain fetch only. A rendered (JS) fetch costs ~30–70s and
+        // rarely yields variants for arbitrary stores — it made the product page
+        // hang. We already have images/description/price from the immersive call
+        // and the search card, so a thin result just means "no extra variants".
         $html = $this->fetch($url, false);
-        $r = $html ? $this->extractFromHtml($html, $url) : null;
-
-        // Escalate to a rendered fetch if we got nothing useful (blocked or JS-only).
-        $thin = ! $r || (empty($r['variants']) && empty($r['options']) && empty($r['price']) && empty($r['title']));
-        if ($thin) {
-            if ($html2 = $this->fetch($url, true)) {
-                $r2 = $this->extractFromHtml($html2, $url);
-                if ($r2) {
-                    $r = $r ? $this->mergeDetail($r, $r2) : $r2;
-                }
-            }
-        }
-
-        return $r;
+        return $html ? $this->extractFromHtml($html, $url) : null;
     }
 
     private function extractFromHtml(string $html, string $url): ?array
@@ -772,7 +770,7 @@ class ProductExtractController extends Controller
             return null;
         }
         try {
-            $res = Http::timeout(40)->get('https://serpapi.com/search.json', [
+            $res = Http::timeout(18)->get('https://serpapi.com/search.json', [
                 'engine' => 'google_immersive_product', 'page_token' => $token, 'api_key' => $key,
             ]);
             if (! $res->successful()) {
@@ -883,7 +881,7 @@ class ProductExtractController extends Controller
     }
 
     /** Primary: SerpAPI Google Shopping (fast, reliable). Null on failure. */
-    private function shoppingViaSerpapi(string $q): ?array
+    private function shoppingViaSerpapi(string $q, int $start = 0): ?array
     {
         $key = config('services.serpapi.key');
         if (! $key) {
@@ -896,6 +894,7 @@ class ProductExtractController extends Controller
                 'gl'      => 'us',
                 'hl'      => 'en',
                 'num'     => 40,
+                'start'   => $start,
                 'api_key' => $key,
             ]);
         } catch (\Throwable $e) {
@@ -1001,7 +1000,7 @@ class ProductExtractController extends Controller
         $key = config('services.scraperapi.key');
         try {
             if ($key) {
-                $res = Http::timeout($render ? 70 : 45)->get('https://api.scraperapi.com', [
+                $res = Http::timeout($render ? 60 : 12)->get('https://api.scraperapi.com', [
                     'api_key' => $key,
                     'url' => $url,
                     'render' => $render ? 'true' : 'false',
