@@ -467,7 +467,7 @@ class ProductExtractController extends Controller
         ];
 
         // Variants — first platform that yields a matrix wins.
-        $matrix = $this->wooVariants($html) ?? $this->magentoVariants($html) ?? $this->jsonLdVariants($html);
+        $matrix = $this->wooVariants($html) ?? $this->magentoVariants($html) ?? $this->nextDataVariants($html) ?? $this->jsonLdVariants($html);
         if ($matrix) {
             $base = $this->mergeDetail($base, $matrix);
         }
@@ -596,6 +596,81 @@ class ProductExtractController extends Controller
             'title' => null, 'description' => null, 'images' => [],
             'price' => $finals ? min($finals) : null, 'was' => null, 'on_sale' => false,
             'options' => $options, 'variants' => [],
+        ];
+    }
+
+    /**
+     * Next.js stores embed the full product (with per-size stock) in a
+     * __NEXT_DATA__ script. Targets the productData.product.availableSizes shape
+     * used by Gymshark (Shopify-Plus backend, custom Next frontend, so the .js
+     * feed 404s) — real sizes, prices and in/out-of-stock + media images.
+     */
+    private function nextDataVariants(string $html): ?array
+    {
+        if (! preg_match('~<script id="__NEXT_DATA__"[^>]*>(.*?)</script>~s', $html, $m)) {
+            return null;
+        }
+        $data = json_decode($m[1], true);
+        $product = $data['props']['pageProps']['productData']['product'] ?? null;
+        if (! is_array($product)) {
+            return null;
+        }
+        $sizes = $product['availableSizes'] ?? null;
+        if (! is_array($sizes) || ! $sizes) {
+            return null;
+        }
+
+        $compare = isset($product['compareAtPrice']) ? (float) $product['compareAtPrice'] : null;
+        $variants = [];
+        $values = [];
+        $minPrice = null;
+        foreach ($sizes as $s) {
+            if (! is_array($s)) {
+                continue;
+            }
+            $size = strtoupper(trim((string) ($s['size'] ?? '')));
+            if ($size === '') {
+                continue;
+            }
+            $price = isset($s['price']) ? (float) $s['price'] : null;
+            if ($price !== null && ($minPrice === null || $price < $minPrice)) {
+                $minPrice = $price;
+            }
+            $onSale = $compare && $price && $compare > $price;
+            $values[$size] = true;
+            $variants[] = [
+                'id'        => $s['id'] ?? null,
+                'title'     => $size,
+                'options'   => ['Talla' => $size],
+                'price'     => $price,
+                'was'       => $onSale ? $compare : null,
+                'on_sale'   => (bool) $onSale,
+                'available' => (bool) ($s['inStock'] ?? false),
+            ];
+        }
+        if (! $variants) {
+            return null;
+        }
+
+        $images = [];
+        foreach (($product['media'] ?? []) as $md) {
+            $src = is_array($md) ? ($md['src'] ?? null) : null;
+            if (is_string($src) && str_starts_with($src, 'http')) {
+                $images[] = $src;
+            }
+        }
+
+        $anySale = $compare && $minPrice && $compare > $minPrice;
+
+        return [
+            'title'       => $product['title'] ?? null,
+            'description' => isset($product['description']) ? trim(strip_tags((string) $product['description'])) : null,
+            'images'      => array_slice(array_values(array_unique($images)), 0, 10),
+            'price'       => $minPrice,
+            'was'         => $anySale ? $compare : null,
+            'on_sale'     => (bool) $anySale,
+            'options'     => [['name' => 'Talla', 'values' => array_keys($values)]],
+            'variants'    => $variants,
         ];
     }
 
