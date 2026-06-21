@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 
@@ -218,6 +219,16 @@ class ProductExtractController extends Controller
             'token' => 'nullable|string|max:6000',
         ]);
 
+        // Server-side cache: reuse the scraped detail across users for a SHORT
+        // window. 10 min keeps price/stock relevant (and the customer never pays
+        // until Boxly confirms the quote) while saving SerpAPI + ScraperAPI calls.
+        // Keyed by the product URL when present (stable per product), else token.
+        $pdpKey = 'pdp:' . md5(! empty($validated['url']) ? ('u:' . $validated['url']) : ('t:' . ($validated['token'] ?? '')));
+        $cachedPdp = Cache::get($pdpKey);
+        if ($cachedPdp !== null) {
+            return response()->json(['success' => true, 'data' => $cachedPdp, 'cached' => true]);
+        }
+
         $out = [
             'title' => null, 'price' => null, 'was' => null, 'on_sale' => false,
             'store' => null, 'buy_url' => $validated['url'] ?? null,
@@ -269,6 +280,12 @@ class ProductExtractController extends Controller
         }
 
         $out['images'] = array_slice(array_values(array_unique(array_filter($out['images']))), 0, 12);
+
+        // Cache only a meaningful result (don't poison the cache with a failed/empty
+        // scrape — the next view should retry).
+        if (! empty($out['title']) || ! empty($out['images']) || $out['price'] !== null) {
+            Cache::put($pdpKey, $out, now()->addMinutes(10));
+        }
 
         return response()->json(['success' => true, 'data' => $out]);
     }
@@ -887,6 +904,14 @@ class ProductExtractController extends Controller
         if (! $key) {
             return null;
         }
+        // Server-side cache: identical query+page is reused across all users for a
+        // short window. 30 min keeps a discovery list relevant (the shown price is
+        // an estimate Boxly confirms at purchase) while cutting SerpAPI credits.
+        $cacheKey = 'serp_shop:' . md5($q) . ':' . $start;
+        $hit = Cache::get($cacheKey);
+        if ($hit !== null) {
+            return $hit;
+        }
         try {
             $res = Http::timeout(35)->get('https://serpapi.com/search.json', [
                 'engine'  => 'google_shopping',
@@ -939,6 +964,7 @@ class ProductExtractController extends Controller
                 'token'   => $r['immersive_product_page_token'] ?? null,
             ];
         }
+        Cache::put($cacheKey, $products, now()->addMinutes(30));
         return $products;
     }
 
