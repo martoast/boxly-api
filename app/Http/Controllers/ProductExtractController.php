@@ -899,7 +899,7 @@ class ProductExtractController extends Controller
         $key = config('services.scraperapi.key');
         try {
             $target = $key
-                ? 'https://api.scraperapi.com?' . http_build_query(['api_key' => $key, 'url' => $jsUrl])
+                ? 'https://api.scraperapi.com?' . http_build_query(['api_key' => $key, 'url' => $jsUrl, 'country_code' => 'us'])
                 : $jsUrl;
             $res = Http::timeout(30)->get($target);
             if (! $res->successful()) {
@@ -1137,7 +1137,7 @@ class ProductExtractController extends Controller
         $jsUrl = $m[1] . '.js';
         try {
             $target = $key
-                ? 'https://api.scraperapi.com?' . http_build_query(['api_key' => $key, 'url' => $jsUrl])
+                ? 'https://api.scraperapi.com?' . http_build_query(['api_key' => $key, 'url' => $jsUrl, 'country_code' => 'us'])
                 : $jsUrl;
             $res = Http::timeout(30)->get($target);
             if (! $res->successful()) {
