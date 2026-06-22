@@ -288,6 +288,7 @@ Route::middleware('auth:sanctum')->group(function () {
         
         // AI search usage analytics dashboard
         Route::get('/ai-search/stats', [\App\Http\Controllers\SearchEventController::class, 'stats']);
+        Route::get('/ai-search/queries', [\App\Http\Controllers\SearchEventController::class, 'queries']);
         Route::get('/ai-search/export', [\App\Http\Controllers\SearchEventController::class, 'export']);
 
         Route::get('/dashboard', [UnifiedAdminDashboardController::class, 'index']);

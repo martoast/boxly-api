@@ -112,6 +112,35 @@ class SearchEventController extends Controller
         return trim(explode(' - ', $s)[0]);
     }
 
+    /**
+     * Admin: the de-duplicated query corpus (searches + questions) for the period,
+     * with counts and type. Feeds the AI "intent map" clustering on the dashboard.
+     */
+    public function queries(Request $request)
+    {
+        $days = max(1, min((int) $request->query('days', 30), 365));
+        $since = Carbon::now()->subDays($days)->startOfDay();
+
+        try {
+            $rows = SearchEvent::where('created_at', '>=', $since)
+                ->whereIn('type', [SearchEvent::TYPE_SEARCH, SearchEvent::TYPE_QUESTION])
+                ->whereNotNull('query')->where('query', '<>', '')
+                ->select('type', 'query', DB::raw('count(*) as c'))
+                ->groupBy('type', 'query')
+                ->orderByDesc('c')
+                ->limit(250)->get()
+                ->map(fn ($r) => [
+                    'query' => $r->query,
+                    'type'  => $r->type,
+                    'c'     => (int) $r->c,
+                ]);
+
+            return response()->json(['success' => true, 'data' => ['days' => $days, 'queries' => $rows]]);
+        } catch (\Throwable $e) {
+            return response()->json(['success' => true, 'data' => ['days' => $days, 'queries' => []]]);
+        }
+    }
+
     /** Admin: aggregated AI-search usage for the last N days. */
     public function stats(Request $request)
     {
