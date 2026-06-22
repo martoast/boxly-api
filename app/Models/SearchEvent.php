@@ -7,11 +7,12 @@ use Illuminate\Database\Eloquent\Model;
 class SearchEvent extends Model
 {
     protected $fillable = [
-        'user_id', 'type', 'query', 'store', 'title', 'url', 'results',
+        'user_id', 'type', 'query', 'store', 'title', 'url', 'results', 'results_sample',
     ];
 
     protected $casts = [
         'results' => 'integer',
+        'results_sample' => 'array',
     ];
 
     public const TYPE_SEARCH = 'search';

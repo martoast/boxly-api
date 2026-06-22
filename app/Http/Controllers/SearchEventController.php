@@ -48,6 +48,12 @@ class SearchEventController extends Controller
         return response()->json(['success' => true]);
     }
 
+    /** Normalize a store name ("Walmart - SellerX" → "Walmart") for aggregation. */
+    private function normStore(string $s): string
+    {
+        return trim(explode(' - ', $s)[0]);
+    }
+
     /** Admin: aggregated AI-search usage for the last N days. */
     public function stats(Request $request)
     {
@@ -81,6 +87,33 @@ class SearchEventController extends Controller
 
             $uniqueUsers = (clone $base)->whereNotNull('user_id')->distinct('user_id')->count('user_id');
 
+            // Query → results: the most recent searches with what we served.
+            $recentSearches = (clone $searches)->whereNotNull('results')
+                ->latest()->limit(30)->get(['query', 'results', 'results_sample', 'created_at'])
+                ->map(fn ($e) => [
+                    'query'      => $e->query,
+                    'results'    => $e->results,
+                    'stores'     => collect($e->results_sample ?? [])->pluck('store')
+                        ->filter()->map(fn ($s) => $this->normStore($s))->unique()->take(6)->values(),
+                    'created_at' => $e->created_at,
+                ]);
+
+            // Stores our ALGORITHM returns most (across served results) — compare
+            // against top viewed stores to see what's surfaced vs what's clicked.
+            $resultStoreCounts = [];
+            foreach ((clone $searches)->whereNotNull('results_sample')->latest()->limit(500)->pluck('results_sample') as $sample) {
+                foreach (($sample ?? []) as $it) {
+                    $s = $it['store'] ?? null;
+                    if ($s) {
+                        $k = $this->normStore($s);
+                        $resultStoreCounts[$k] = ($resultStoreCounts[$k] ?? 0) + 1;
+                    }
+                }
+            }
+            arsort($resultStoreCounts);
+            $topResultStores = collect($resultStoreCounts)->take(20)
+                ->map(fn ($c, $s) => ['store' => $s, 'c' => $c])->values();
+
             // Conversion proxy: assisted (online) purchase requests in the same window.
             $onlinePr = PurchaseRequest::where('created_at', '>=', $since)
                 ->where(fn ($q) => $q->where('source', '<>', 'in_person')->orWhereNull('source'))
@@ -96,6 +129,8 @@ class SearchEventController extends Controller
                 'search_to_pr_rate'      => $totalSearches ? round($onlinePr / $totalSearches * 100, 1) : 0,
                 'top_queries'            => $topQueries,
                 'top_stores'             => $topStores,
+                'top_result_stores'      => $topResultStores,
+                'recent_searches'        => $recentSearches,
                 'daily'                  => $daily,
             ]]);
         } catch (\Throwable $e) {
@@ -103,7 +138,8 @@ class SearchEventController extends Controller
             return response()->json(['success' => true, 'data' => [
                 'days' => $days, 'total_searches' => 0, 'total_product_views' => 0,
                 'unique_signed_in_users' => 0, 'purchase_requests' => 0, 'view_rate' => 0,
-                'search_to_pr_rate' => 0, 'top_queries' => [], 'top_stores' => [], 'daily' => [],
+                'search_to_pr_rate' => 0, 'top_queries' => [], 'top_stores' => [],
+                'top_result_stores' => [], 'recent_searches' => [], 'daily' => [],
                 'unavailable' => true,
             ]]);
         }

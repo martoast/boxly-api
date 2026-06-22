@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\SearchEvent;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -188,6 +189,26 @@ class ProductExtractController extends Controller
         // customer "I found options between $X and $Y".
         $prices = array_values(array_filter(array_map(fn ($p) => $p['price'] ?? null, $shown), fn ($v) => $v !== null));
         $range = $prices ? ['min' => min($prices), 'max' => max($prices)] : null;
+
+        // Analytics: log the query AND the results we served (top items + stores)
+        // so search quality can be analyzed query→results. Best-effort; first page
+        // only. (Guest queries that bounce at login are captured at the landing.)
+        if ($start === 0) {
+            try {
+                SearchEvent::create([
+                    'type'           => SearchEvent::TYPE_SEARCH,
+                    'query'          => mb_substr(trim($validated['query']), 0, 255),
+                    'results'        => count($shown),
+                    'results_sample' => array_map(fn ($p) => [
+                        'store' => $p['store'] ?? null,
+                        'title' => isset($p['title']) ? mb_substr((string) $p['title'], 0, 140) : null,
+                        'price' => $p['price'] ?? null,
+                    ], array_slice($shown, 0, 12)),
+                ]);
+            } catch (\Throwable $e) {
+                // analytics must never break search
+            }
+        }
 
         return response()->json([
             'success' => true,
