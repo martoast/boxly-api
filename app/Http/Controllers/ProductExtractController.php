@@ -297,7 +297,15 @@ class ProductExtractController extends Controller
         $validated = $request->validate([
             'url'   => 'nullable|string|max:2000',
             'token' => 'nullable|string|max:6000',
+            'store' => 'nullable|string|max:120',
+            'title' => 'nullable|string|max:255',
         ]);
+
+        // Analytics: log the product view HERE (server-side) — the only caller is
+        // the browser opening a product, and logging it here is reliable, unlike a
+        // best-effort client POST that can silently fail. Fires once per open
+        // (a refresh/back hits the client-side product cache and never calls this).
+        $this->logProductView($request, $validated);
 
         // Server-side cache: reuse the scraped detail across users for a SHORT
         // window. 10 min keeps price/stock relevant (and the customer never pays
@@ -368,6 +376,32 @@ class ProductExtractController extends Controller
         }
 
         return response()->json(['success' => true, 'data' => $out]);
+    }
+
+    /**
+     * Record a product view for AI-search analytics. Best-effort — must never
+     * break the product page. Resolves the signed-in user (cookie/sanctum) so the
+     * dashboard can split guest vs account views; falls back to the URL host for
+     * the store name when the caller didn't pass the search-card store label.
+     */
+    private function logProductView(Request $request, array $v): void
+    {
+        try {
+            $url = $v['url'] ?? null;
+            $store = ! empty($v['store'])
+                ? mb_substr(trim($v['store']), 0, 120)
+                : ($url ? $this->storeFromUrl($url) : null);
+
+            SearchEvent::create([
+                'user_id' => optional(auth('sanctum')->user())->id ?? optional($request->user())->id,
+                'type'    => SearchEvent::TYPE_PRODUCT_VIEW,
+                'store'   => $store,
+                'title'   => ! empty($v['title']) ? mb_substr(trim($v['title']), 0, 255) : null,
+                'url'     => $url ? mb_substr($url, 0, 2000) : null,
+            ]);
+        } catch (\Throwable $e) {
+            // analytics must never break the product page
+        }
     }
 
     /**
