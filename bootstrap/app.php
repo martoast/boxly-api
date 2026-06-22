@@ -17,6 +17,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'webhooks/*',
             'stripe/*',
             'products/*',         // public, server-to-server (AI assistant)
+            'search-events',      // public best-effort analytics logging
         ]);
         $middleware->append(JsonResponse::class);
         $middleware->statefulApi();
