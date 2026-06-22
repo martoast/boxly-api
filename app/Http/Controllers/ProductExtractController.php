@@ -520,7 +520,17 @@ class ProductExtractController extends Controller
         // hang. We already have images/description/price from the immersive call
         // and the search card, so a thin result just means "no extra variants".
         $html = $this->fetch($url, false);
-        return $html ? $this->extractFromHtml($html, $url) : null;
+        $r = $html ? $this->extractFromHtml($html, $url) : null;
+
+        // One retry on a failed/empty fetch — ScraperAPI occasionally returns a
+        // blocked/empty page transiently, which would otherwise drop us to the
+        // manual size box even for a fully-supported store (e.g. New Balance).
+        if (! $r) {
+            $html = $this->fetch($url, false);
+            $r = $html ? $this->extractFromHtml($html, $url) : null;
+        }
+
+        return $r;
     }
 
     private function extractFromHtml(string $html, string $url): ?array
@@ -531,7 +541,8 @@ class ProductExtractController extends Controller
         ];
 
         // Variants — first platform that yields a matrix wins.
-        $matrix = $this->wooVariants($html) ?? $this->magentoVariants($html) ?? $this->nextDataVariants($html) ?? $this->jsonLdVariants($html);
+        $matrix = $this->wooVariants($html) ?? $this->magentoVariants($html) ?? $this->nextDataVariants($html)
+            ?? $this->nbVariants($html, $url) ?? $this->jsonLdVariants($html);
         if ($matrix) {
             $base = $this->mergeDetail($base, $matrix);
         }
@@ -853,6 +864,91 @@ class ProductExtractController extends Controller
         }
 
         return array_slice(array_values(array_unique($out)), 0, 10);
+    }
+
+    /**
+     * New Balance (Salesforce Commerce) embeds its full SKU matrix as
+     * [{id,style,size,width}]. Static stock isn't exposed (loaded via AJAX), so
+     * we surface the real Talla (+ Ancho when there's a choice) for the current
+     * colorway — far better than a free-text box; Boxly confirms stock at buy.
+     * Adapts to apparel too (no width → Talla only).
+     */
+    private function nbVariants(string $html, string $url): ?array
+    {
+        if (! preg_match('~\[\{"id":"[A-Za-z0-9-]+","style":"[A-Za-z0-9]+","size":"[^"]+","width":"[^"]*"\}.*?\]~s', $html, $m)) {
+            return null;
+        }
+        $arr = json_decode($m[0], true);
+        if (! is_array($arr) || ! $arr) {
+            return null;
+        }
+
+        // Current colorway = the style code in the product URL (…/WL574EVG-D-07.html).
+        $style = null;
+        if (preg_match('~/([A-Za-z]{1,4}[0-9]{2,}[A-Za-z0-9]*)-[A-Za-z0-9]+-[0-9]+\.html~', $url, $um)) {
+            $style = strtoupper($um[1]);
+        }
+        $items = $style ? array_values(array_filter($arr, fn ($v) => strtoupper((string) ($v['style'] ?? '')) === $style)) : [];
+        if (! $items) {
+            $items = $arr;
+        }
+
+        $sizes = [];
+        $widths = [];
+        foreach ($items as $v) {
+            $s = (string) ($v['size'] ?? '');
+            $w = (string) ($v['width'] ?? '');
+            if ($s !== '') {
+                $sizes[$s] = true;
+            }
+            if ($w !== '') {
+                $widths[$w] = true;
+            }
+        }
+        if (! $sizes) {
+            return null;
+        }
+
+        $sizeVals = array_keys($sizes);
+        usort($sizeVals, fn ($a, $b) => (is_numeric($a) && is_numeric($b)) ? ((float) $a <=> (float) $b) : strcmp((string) $a, (string) $b));
+        $widthVals = array_keys($widths);
+        $hasWidth = count($widthVals) > 1; // only show width when it's an actual choice
+
+        $options = [['name' => 'Talla', 'values' => $sizeVals]];
+        if ($hasWidth) {
+            $options[] = ['name' => 'Ancho', 'values' => $widthVals];
+        }
+
+        $variants = [];
+        foreach ($items as $v) {
+            $s = (string) ($v['size'] ?? '');
+            $w = (string) ($v['width'] ?? '');
+            if ($s === '') {
+                continue;
+            }
+            $opts = ['Talla' => $s];
+            if ($hasWidth && $w !== '') {
+                $opts['Ancho'] = $w;
+            }
+            $variants[] = [
+                'id'        => $v['id'] ?? null,
+                'title'     => trim($s . ($hasWidth && $w !== '' ? ' / ' . $w : '')),
+                'options'   => $opts,
+                'price'     => null, // base price comes from JSON-LD / the card
+                'was'       => null,
+                'on_sale'   => false,
+                'available' => true, // NB hides static stock; Boxly verifies at purchase
+            ];
+        }
+        if (! $variants) {
+            return null;
+        }
+
+        return [
+            'title' => null, 'description' => null, 'images' => [],
+            'price' => null, 'was' => null, 'on_sale' => false,
+            'options' => $options, 'variants' => $variants,
+        ];
     }
 
     /**
