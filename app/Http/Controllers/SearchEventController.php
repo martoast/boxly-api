@@ -114,7 +114,20 @@ class SearchEventController extends Controller
             $totalSearches = (clone $searches)->count();
             $totalViews = (clone $views)->count();
 
+            // Quality signals from the data we actually have:
+            // avg results per search, and the searches we FAILED (0 results).
+            $avgResults = (clone $searches)->whereNotNull('results')->avg('results');
+            $zeroResultSearches = (clone $searches)->where('results', 0)->count();
+            $guestSearches = (clone $searches)->whereNull('user_id')->count();
+
             $topQueries = (clone $searches)->whereNotNull('query')->where('query', '<>', '')
+                ->select('query', DB::raw('count(*) as c'))
+                ->groupBy('query')->orderByDesc('c')->limit(25)->get();
+
+            // Failing queries — searches that returned nothing. Most actionable
+            // list on the dashboard: these are the brands/terms we can't yet serve.
+            $zeroResultQueries = (clone $searches)->where('results', 0)
+                ->whereNotNull('query')->where('query', '<>', '')
                 ->select('query', DB::raw('count(*) as c'))
                 ->groupBy('query')->orderByDesc('c')->limit(25)->get();
 
@@ -170,10 +183,16 @@ class SearchEventController extends Controller
                 'total_searches'         => $totalSearches,
                 'total_product_views'    => $totalViews,
                 'unique_signed_in_users' => $uniqueUsers,
+                'guest_searches'         => $guestSearches,
+                'avg_results'            => round((float) $avgResults, 1),
+                'zero_result_searches'   => $zeroResultSearches,
+                'zero_result_rate'       => $totalSearches ? round($zeroResultSearches / $totalSearches * 100, 1) : 0,
+                'guest_rate'             => $totalSearches ? round($guestSearches / $totalSearches * 100, 1) : 0,
                 'purchase_requests'      => $onlinePr,
                 'view_rate'              => $totalSearches ? round($totalViews / $totalSearches * 100, 1) : 0,
                 'search_to_pr_rate'      => $totalSearches ? round($onlinePr / $totalSearches * 100, 1) : 0,
                 'top_queries'            => $topQueries,
+                'zero_result_queries'    => $zeroResultQueries,
                 'top_stores'             => $topStores,
                 'top_result_stores'      => $topResultStores,
                 'recent_searches'        => $recentSearches,
@@ -183,8 +202,10 @@ class SearchEventController extends Controller
             // Table not migrated yet, etc. — return an empty but valid shape.
             return response()->json(['success' => true, 'data' => [
                 'days' => $days, 'total_searches' => 0, 'total_product_views' => 0,
-                'unique_signed_in_users' => 0, 'purchase_requests' => 0, 'view_rate' => 0,
-                'search_to_pr_rate' => 0, 'top_queries' => [], 'top_stores' => [],
+                'unique_signed_in_users' => 0, 'guest_searches' => 0, 'avg_results' => 0,
+                'zero_result_searches' => 0, 'zero_result_rate' => 0, 'guest_rate' => 0,
+                'purchase_requests' => 0, 'view_rate' => 0, 'search_to_pr_rate' => 0,
+                'top_queries' => [], 'zero_result_queries' => [], 'top_stores' => [],
                 'top_result_stores' => [], 'recent_searches' => [], 'daily' => [],
                 'unavailable' => true,
             ]]);
