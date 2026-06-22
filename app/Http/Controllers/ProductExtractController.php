@@ -88,20 +88,49 @@ class ProductExtractController extends Controller
         $start = (int) ($validated['start'] ?? 0);
         $store = trim($validated['store'] ?? '');
         // Bias the query toward the store when one is specified.
-        $q = $store !== '' ? $store . ' ' . $validated['query'] : $validated['query'];
+        $baseQ = $store !== '' ? $store . ' ' . $validated['query'] : $validated['query'];
 
-        $hasMore = false;
-        $products = $this->shoppingViaSerpapi($q, $start);
-        if ($products === null) {
-            // ScraperAPI fallback has no pagination — only ever the first page.
-            $products = $start === 0 ? $this->shoppingViaScraperapi($q) : [];
-        } else {
-            // A near-full SerpAPI page means there's very likely another one.
-            $hasMore = count($products) >= 30;
+        // Customers know where the deals are (Target, Walmart, Dick's…). A plain
+        // Google Shopping search often misses those exact stores, so we also run a
+        // category-aware pass at the priority retailers and surface them first.
+        // Skipped when the user already fixed a specific store.
+        $retailers = $store !== '' ? [] : $this->priorityRetailers($validated['query']);
+
+        // One Google Shopping query per source, fetched in parallel (cached each).
+        $queries = array_merge([$baseQ], array_map(fn ($r) => $baseQ . ' ' . $r, $retailers));
+        $byQuery = $this->multiShopping($queries, $start);
+
+        $general = $byQuery[$baseQ] ?? [];
+        // ScraperAPI fallback when SerpAPI returns nothing for the base query.
+        if (empty($general) && $start === 0) {
+            $fb = $this->shoppingViaScraperapi($baseQ);
+            if (is_array($fb)) {
+                $general = $fb;
+            }
         }
-        if ($products === null) {
-            return response()->json(['success' => false, 'message' => 'Search failed.'], 502);
+
+        // Keep each retailer's ACTUAL listings (the biased query returns a mix —
+        // filter to items whose store matches) and tag them to float to the top.
+        $priority = [];
+        foreach ($retailers as $r) {
+            $needle = $this->slugify($r);
+            $kept = 0;
+            foreach (($byQuery[$baseQ . ' ' . $r] ?? []) as $p) {
+                $src = $this->slugify((string) ($p['store'] ?? ''));
+                if ($src !== '' && (str_contains($src, $needle) || str_contains($needle, $src))) {
+                    $p['_priority'] = true;
+                    $priority[] = $p;
+                    // Cap per retailer so one store can't crowd out the mix /
+                    // cross-store price comparison + general deals.
+                    if (++$kept >= 8) {
+                        break;
+                    }
+                }
+            }
         }
+
+        $products = $this->dedupeProducts(array_merge($priority, $general));
+        $hasMore = count($general) >= 30;
 
         // Budget filters are strict (price range). The `sale` flag is NOT a hard
         // filter — deals are sorted first below, but non-sale items stay so the
@@ -121,25 +150,29 @@ class ProductExtractController extends Controller
             }));
         }
 
-        // Ordering: when a store was specified, its items first; then DEALS
-        // first (Boxly is a deal finder). usort is stable in PHP 8+, so this
-        // only reorders by these keys and otherwise preserves Google's relevance
-        // order — non-sale items still appear, just after the deals.
-        $needle = $store !== '' ? mb_strtolower($store) : '';
-        usort($products, function ($a, $b) use ($needle) {
-            if ($needle !== '') {
-                $am = str_contains(mb_strtolower((string) ($a['store'] ?? '')), $needle) ? 0 : 1;
-                $bm = str_contains(mb_strtolower((string) ($b['store'] ?? '')), $needle) ? 0 : 1;
+        // Ordering (stable): explicit store match → priority retailers → DEALS
+        // first → Google's relevance order.
+        $storeNeedle = $store !== '' ? mb_strtolower($store) : '';
+        usort($products, function ($a, $b) use ($storeNeedle) {
+            if ($storeNeedle !== '') {
+                $am = str_contains(mb_strtolower((string) ($a['store'] ?? '')), $storeNeedle) ? 0 : 1;
+                $bm = str_contains(mb_strtolower((string) ($b['store'] ?? '')), $storeNeedle) ? 0 : 1;
                 if ($am !== $bm) {
                     return $am <=> $bm;
                 }
+            }
+            $ap = empty($a['_priority']) ? 1 : 0;
+            $bp = empty($b['_priority']) ? 1 : 0;
+            if ($ap !== $bp) {
+                return $ap <=> $bp;
             }
             $as = empty($a['on_sale']) ? 1 : 0;
             $bs = empty($b['on_sale']) ? 1 : 0;
             return $as <=> $bs;
         });
 
-        $shown = array_slice($products, 0, $limit);
+        // Drop the internal flag before returning.
+        $shown = array_map(function ($p) { unset($p['_priority']); return $p; }, array_slice($products, 0, $limit));
 
         // Price range across the shown results, so the assistant can tell the
         // customer "I found options between $X and $Y".
@@ -148,7 +181,7 @@ class ProductExtractController extends Controller
 
         return response()->json([
             'success' => true,
-            'data'    => ['query' => $q, 'products' => $shown, 'price_range' => $range, 'has_more' => $hasMore, 'start' => $start],
+            'data'    => ['query' => $baseQ, 'products' => $shown, 'price_range' => $range, 'has_more' => $hasMore, 'start' => $start],
         ]);
     }
 
@@ -1092,49 +1125,71 @@ class ProductExtractController extends Controller
         ];
     }
 
-    /** Primary: SerpAPI Google Shopping (fast, reliable). Null on failure. */
-    private function shoppingViaSerpapi(string $q, int $start = 0): ?array
+    /**
+     * Run several Google Shopping queries (general + priority retailers) in
+     * PARALLEL via SerpAPI, with a per-query 30-min cache. Returns a map of
+     * query => products[]. Lets us check the stores customers actually shop
+     * (Target, Walmart, Dick's…) without serializing the latency or re-billing.
+     */
+    private function multiShopping(array $queries, int $start = 0): array
     {
         $key = config('services.serpapi.key');
-        if (! $key) {
-            return null;
-        }
-        // Server-side cache: identical query+page is reused across all users for a
-        // short window. 30 min keeps a discovery list relevant (the shown price is
-        // an estimate Boxly confirms at purchase) while cutting SerpAPI credits.
-        $cacheKey = 'serp_shop:' . md5($q . '|' . config('services.serpapi.location')) . ':' . $start;
-        $hit = Cache::get($cacheKey);
-        if ($hit !== null) {
-            return $hit;
-        }
-        $params = [
-            'engine'  => 'google_shopping',
-            'q'       => $q,
-            'gl'      => 'us',
-            'hl'      => 'en',
-            'num'     => 40,
-            'start'   => $start,
-            'api_key' => $key,
-        ];
-        // Pin results to the warehouse city so prices/availability are precise.
         $location = config('services.serpapi.location');
-        if (! empty($location)) {
-            $params['location'] = $location;
-        }
-        try {
-            $res = Http::timeout(35)->get('https://serpapi.com/search.json', $params);
-        } catch (\Throwable $e) {
-            return null;
-        }
-        if (! $res->successful()) {
-            return null;
+        $out = [];
+        $toFetch = []; // query => cacheKey
+
+        foreach (array_values(array_unique($queries)) as $q) {
+            $cacheKey = 'serp_shop:' . md5($q . '|' . $location) . ':' . $start;
+            $hit = Cache::get($cacheKey);
+            if ($hit !== null) {
+                $out[$q] = $hit;
+            } else {
+                $toFetch[$q] = $cacheKey;
+            }
         }
 
-        $results = $res->json('shopping_results');
+        if ($key && $toFetch) {
+            try {
+                $responses = Http::pool(function ($pool) use ($toFetch, $key, $location, $start) {
+                    $reqs = [];
+                    foreach ($toFetch as $q => $cacheKey) {
+                        $params = [
+                            'engine' => 'google_shopping', 'q' => $q, 'gl' => 'us', 'hl' => 'en',
+                            'num' => 40, 'start' => $start, 'api_key' => $key,
+                        ];
+                        if (! empty($location)) {
+                            $params['location'] = $location;
+                        }
+                        $reqs[] = $pool->as($q)->timeout(35)->get('https://serpapi.com/search.json', $params);
+                    }
+
+                    return $reqs;
+                });
+            } catch (\Throwable $e) {
+                $responses = [];
+            }
+            foreach ($toFetch as $q => $cacheKey) {
+                $resp = $responses[$q] ?? null;
+                if ($resp instanceof \Illuminate\Http\Client\Response && $resp->successful()) {
+                    $products = $this->parseShoppingResults($resp->json());
+                    Cache::put($cacheKey, $products, now()->addMinutes(30));
+                    $out[$q] = $products;
+                } else {
+                    $out[$q] = [];
+                }
+            }
+        }
+
+        return $out;
+    }
+
+    /** Normalize a SerpAPI google_shopping response into our product shape. */
+    private function parseShoppingResults($json): array
+    {
+        $results = is_array($json) ? ($json['shopping_results'] ?? null) : null;
         if (! is_array($results)) {
-            return null;
+            return [];
         }
-
         $products = [];
         foreach ($results as $r) {
             $title = $r['title'] ?? null;
@@ -1153,20 +1208,75 @@ class ProductExtractController extends Controller
                 'was'     => $onSale ? $old : null,
                 'on_sale' => $onSale,
                 'store'   => $r['source'] ?? null,
-                // SerpAPI-hosted thumbnail is the most reliable to load.
                 'image'   => $r['serpapi_thumbnail'] ?? $r['thumbnail'] ?? null,
                 'url'     => $r['product_link'] ?? ('https://www.google.com/search?tbm=shop&q=' . urlencode($title)),
-                // Extra detail for the product modal (already in the result).
                 'snippet' => $r['snippet'] ?? null,
                 'rating'  => $r['rating'] ?? null,
                 'reviews' => $r['reviews'] ?? null,
-                // Token to lazily fetch full details (more images, description,
-                // direct seller links) when the product modal opens.
                 'token'   => $r['immersive_product_page_token'] ?? null,
             ];
         }
-        Cache::put($cacheKey, $products, now()->addMinutes(30));
+
         return $products;
+    }
+
+    /**
+     * Priority retailers to also check for a query, by category — the big-box
+     * stores customers hunt deals in for name brands. Capped to keep the search
+     * fast/cheap; skipped when the user already fixed a store.
+     */
+    private function priorityRetailers(string $query): array
+    {
+        $q = mb_strtolower($query);
+        $has = fn (array $kw) => (bool) array_filter($kw, fn ($k) => str_contains($q, $k));
+
+        $sets = [
+            [['shoe', 'sneaker', 'running', 'jordan', 'nike', 'adidas', 'cleat', 'jersey', 'gym', 'fitness', 'dumbbell', 'yoga', 'golf', 'basketball', 'soccer', 'athletic', 'workout', 'hike', 'camp'],
+                ["Dick's Sporting Goods", 'Walmart', 'Target']],
+            [['tv', 'laptop', 'headphone', 'airpods', 'console', 'playstation', 'xbox', 'nintendo', 'camera', 'tablet', 'ipad', 'monitor', 'gaming', 'speaker', 'phone', 'earbuds'],
+                ['Best Buy', 'Walmart', 'Target']],
+            [['makeup', 'skincare', 'perfume', 'cologne', 'beauty', 'lipstick', 'foundation', 'fragrance', 'serum', 'mascara'],
+                ['Ulta', 'Sephora', 'Target']],
+            [['kitchen', 'furniture', 'decor', 'bedding', 'vacuum', 'sofa', 'mattress', 'cookware', 'home'],
+                ['Target', 'Walmart', 'Wayfair']],
+            [['toy', 'lego', 'doll', 'kids', 'baby', 'stroller', 'diaper'],
+                ['Target', 'Walmart', 'Amazon']],
+            [['dress', 'shirt', 'jeans', 'jacket', 'clothing', 'hoodie', 'sweater', 'coat', 'pants', 'apparel', 'leggings', 'shorts'],
+                ['Target', "Macy's", 'Nordstrom Rack']],
+        ];
+        foreach ($sets as [$kw, $retailers]) {
+            if ($has($kw)) {
+                return array_slice($retailers, 0, 3);
+            }
+        }
+
+        // Default big-box deal stores for anything else.
+        return ['Target', 'Walmart'];
+    }
+
+    /** Dedupe products, keeping the same product at DIFFERENT stores (price compare). */
+    private function dedupeProducts(array $products): array
+    {
+        $seen = [];
+        $out = [];
+        foreach ($products as $p) {
+            $url = $p['url'] ?? '';
+            $key = ($url && ! str_contains((string) $url, 'google.com/search'))
+                ? 'u:' . $url
+                : 't:' . mb_strtolower(trim((string) ($p['title'] ?? ''))) . '|' . mb_strtolower((string) ($p['store'] ?? ''));
+            if ($key === 't:|' || isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+            $out[] = $p;
+        }
+
+        return $out;
+    }
+
+    private function slugify(string $s): string
+    {
+        return preg_replace('/[^a-z0-9]/', '', mb_strtolower($s));
     }
 
     /** Fallback: ScraperAPI structured Google Shopping. Null on failure. */
