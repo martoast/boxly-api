@@ -33,6 +33,7 @@ use App\Http\Controllers\ShoppingTripsController;
 use App\Http\Controllers\Admin\AdminShoppingTripsController;
 use App\Http\Controllers\Admin\AdminStoreController;
 use App\Http\Controllers\Admin\AdminCategoryController;
+use App\Http\Controllers\Admin\AdminKnowledgeController;
 use App\Http\Controllers\Admin\AdminPurchasedProductController;
 use App\Http\Controllers\Admin\AdminTokenController;
 
@@ -116,6 +117,11 @@ Route::post('/products/page', [\App\Http\Controllers\ProductExtractController::c
 
 // AI-search usage analytics — best-effort logging from the search UI.
 Route::post('/search-events', [\App\Http\Controllers\SearchEventController::class, 'store'])
+    ->middleware('throttle:120,1');
+
+// Knowledge wiki for the AI assistant — published articles, read-only. Consumed
+// by the Nuxt assistant server (no DB there) to answer business questions.
+Route::get('/knowledge', [\App\Http\Controllers\KnowledgeController::class, 'index'])
     ->middleware('throttle:120,1');
 
 Route::middleware(['web'])->group(function () {
@@ -463,6 +469,15 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/{category}', [AdminCategoryController::class, 'show']);
             Route::put('/{category}', [AdminCategoryController::class, 'update']);
             Route::delete('/{category}', [AdminCategoryController::class, 'destroy']);
+        });
+
+        // Knowledge wiki for the AI assistant (business Q&A)
+        Route::prefix('knowledge')->group(function () {
+            Route::get('/', [AdminKnowledgeController::class, 'index']);
+            Route::post('/', [AdminKnowledgeController::class, 'store']);
+            Route::get('/{knowledge}', [AdminKnowledgeController::class, 'show']);
+            Route::put('/{knowledge}', [AdminKnowledgeController::class, 'update']);
+            Route::delete('/{knowledge}', [AdminKnowledgeController::class, 'destroy']);
         });
 
         Route::prefix('campaigns')->group(function () {
