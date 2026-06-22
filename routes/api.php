@@ -114,6 +114,10 @@ Route::post('/products/details', [\App\Http\Controllers\ProductExtractController
 Route::post('/products/page', [\App\Http\Controllers\ProductExtractController::class, 'page'])
     ->middleware('throttle:60,1');
 
+// AI-search usage analytics — best-effort logging from the search UI.
+Route::post('/search-events', [\App\Http\Controllers\SearchEventController::class, 'store'])
+    ->middleware('throttle:120,1');
+
 Route::middleware(['web'])->group(function () {
     Route::get('/auth/{provider}/redirect', AuthSocialRedirectController::class)
         ->whereIn('provider', ['google', 'facebook']);
@@ -276,6 +280,9 @@ Route::middleware('auth:sanctum')->group(function () {
     */
     Route::middleware('admin')->prefix('admin')->group(function () {
         
+        // AI search usage analytics dashboard
+        Route::get('/ai-search/stats', [\App\Http\Controllers\SearchEventController::class, 'stats']);
+
         Route::get('/dashboard', [UnifiedAdminDashboardController::class, 'index']);
         Route::get('/dashboard/time-series', [UnifiedAdminDashboardController::class, 'timeSeries']);
         Route::get('/dashboard/v3/overview', [UnifiedAdminDashboardController::class, 'v3Overview']);
