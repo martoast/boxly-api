@@ -17,4 +17,5 @@ class SearchEvent extends Model
 
     public const TYPE_SEARCH = 'search';
     public const TYPE_PRODUCT_VIEW = 'product_view';
+    public const TYPE_QUESTION = 'question';
 }
