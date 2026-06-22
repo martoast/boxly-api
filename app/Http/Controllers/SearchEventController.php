@@ -48,6 +48,52 @@ class SearchEventController extends Controller
         return response()->json(['success' => true]);
     }
 
+    /**
+     * Admin: download ALL AI-search events as CSV (query, the results we served,
+     * stores, timestamps) so it can be handed to an AI for analysis. Streamed so
+     * it scales to large datasets. days=0 (default) = everything.
+     */
+    public function export(Request $request)
+    {
+        $days = max(0, (int) $request->query('days', 0));
+        $filename = 'boxly-ai-search-' . Carbon::now()->format('Y-m-d-Hi') . '.csv';
+
+        return response()->streamDownload(function () use ($days) {
+            $out = fopen('php://output', 'w');
+            // UTF-8 BOM so Excel renders accents correctly.
+            fwrite($out, "\xEF\xBB\xBF");
+            fputcsv($out, [
+                'id', 'created_at', 'type', 'query', 'results',
+                'result_stores', 'result_titles', 'store', 'title', 'url', 'user_id', 'results_json',
+            ]);
+
+            $q = SearchEvent::query()->orderBy('id');
+            if ($days > 0) {
+                $q->where('created_at', '>=', Carbon::now()->subDays($days)->startOfDay());
+            }
+            $q->chunk(500, function ($rows) use ($out) {
+                foreach ($rows as $e) {
+                    $sample = is_array($e->results_sample) ? $e->results_sample : [];
+                    fputcsv($out, [
+                        $e->id,
+                        optional($e->created_at)->toIso8601String(),
+                        $e->type,
+                        $e->query,
+                        $e->results,
+                        collect($sample)->pluck('store')->filter()->unique()->implode(' | '),
+                        collect($sample)->pluck('title')->filter()->implode(' | '),
+                        $e->store,
+                        $e->title,
+                        $e->url,
+                        $e->user_id,
+                        $sample ? json_encode($sample, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : '',
+                    ]);
+                }
+            });
+            fclose($out);
+        }, $filename, ['Content-Type' => 'text/csv; charset=UTF-8']);
+    }
+
     /** Normalize a store name ("Walmart - SellerX" → "Walmart") for aggregation. */
     private function normStore(string $s): string
     {
