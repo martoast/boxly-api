@@ -156,32 +156,48 @@ class ProductExtractController extends Controller
             }));
         }
 
-        // Relevance boost: when the query has multiple words (e.g. a color/
-        // attribute like "owala pink"), float items whose TITLE matches more of
-        // those words to the top. Stable (PHP 8 usort) so ties keep the
-        // relevance + priority-store order. Single-word queries are untouched.
+        // Ranking: RELEVANCE tier first (so a color/attribute like "owala pink"
+        // keeps pink items on top), then CHEAPEST first within that tier — deal
+        // hunters and resellers scan the lowest prices up front. Unpriced items
+        // sink to the bottom. For a single-word/broad query the tiers are equal,
+        // so it becomes a clean lowest→highest price sort.
         $qTerms = array_values(array_filter(
             preg_split('/\s+/', mb_strtolower(trim($validated['query']))),
             fn ($t) => mb_strlen($t) >= 2
         ));
-        if (count($qTerms) >= 2) {
-            usort($products, function ($a, $b) use ($qTerms) {
-                $ta = mb_strtolower((string) ($a['title'] ?? ''));
-                $tb = mb_strtolower((string) ($b['title'] ?? ''));
-                $sa = 0;
-                $sb = 0;
-                foreach ($qTerms as $t) {
-                    if (str_contains($ta, $t)) {
-                        $sa++;
-                    }
-                    if (str_contains($tb, $t)) {
-                        $sb++;
-                    }
+        $multiTerm = count($qTerms) >= 2;
+        $termScore = function ($p) use ($qTerms) {
+            $t = mb_strtolower((string) ($p['title'] ?? ''));
+            $n = 0;
+            foreach ($qTerms as $term) {
+                if (str_contains($t, $term)) {
+                    $n++;
                 }
+            }
+            return $n;
+        };
+        usort($products, function ($a, $b) use ($multiTerm, $termScore) {
+            if ($multiTerm) {
+                $sa = $termScore($a);
+                $sb = $termScore($b);
+                if ($sa !== $sb) {
+                    return $sb <=> $sa; // more query terms matched first
+                }
+            }
+            $pa = $a['price'] ?? null;
+            $pb = $b['price'] ?? null;
+            if ($pa === null && $pb === null) {
+                return 0;
+            }
+            if ($pa === null) {
+                return 1; // unpriced last
+            }
+            if ($pb === null) {
+                return -1;
+            }
 
-                return $sb <=> $sa;
-            });
-        }
+            return $pa <=> $pb; // cheapest first
+        });
 
         $shown = array_slice($products, 0, $limit);
 
