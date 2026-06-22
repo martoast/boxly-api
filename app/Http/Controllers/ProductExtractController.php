@@ -111,30 +111,35 @@ class ProductExtractController extends Controller
 
         // Keep each retailer's ACTUAL listings (the biased query returns a mix —
         // filter to items whose store matches) and tag them to float to the top.
-        $priority = [];
+        // Each priority retailer's listings in the store's own relevance order
+        // (Google already ranked the biased query), capped so none dominates.
+        $priorityLists = [];
         foreach ($retailers as $r) {
             $needle = $this->slugify($r);
-            $kept = 0;
+            $list = [];
             foreach (($byQuery[$baseQ . ' ' . $r] ?? []) as $p) {
                 $src = $this->slugify((string) ($p['store'] ?? ''));
                 if ($src !== '' && (str_contains($src, $needle) || str_contains($needle, $src))) {
-                    $p['_priority'] = true;
-                    $priority[] = $p;
-                    // Cap per retailer so one store can't crowd out the mix /
-                    // cross-store price comparison + general deals.
-                    if (++$kept >= 8) {
+                    $list[] = $p;
+                    if (count($list) >= 8) {
                         break;
                     }
                 }
             }
+            if ($list) {
+                $priorityLists[] = $list;
+            }
         }
 
-        $products = $this->dedupeProducts(array_merge($priority, $general));
+        // RELEVANCE FIRST: lead with the general (Google-ranked) results so the
+        // exact thing the user typed — including a color/attribute like "pink" —
+        // stays on top, while still weaving in the priority stores. We do NOT
+        // re-sort by deals here; that previously buried relevant items under
+        // off-query "deal" products from a priority store.
+        $products = $this->dedupeProducts($this->interleaveResults($general, $priorityLists));
         $hasMore = count($general) >= 30;
 
-        // Budget filters are strict (price range). The `sale` flag is NOT a hard
-        // filter — deals are sorted first below, but non-sale items stay so the
-        // result is a lively hybrid instead of a sparse deals-only list.
+        // Budget filters are strict (price range).
         $min = isset($validated['min_price']) ? (float) $validated['min_price'] : null;
         $max = isset($validated['max_price']) ? (float) $validated['max_price'] : null;
         if ($min !== null || $max !== null) {
@@ -150,29 +155,34 @@ class ProductExtractController extends Controller
             }));
         }
 
-        // Ordering (stable): explicit store match → priority retailers → DEALS
-        // first → Google's relevance order.
-        $storeNeedle = $store !== '' ? mb_strtolower($store) : '';
-        usort($products, function ($a, $b) use ($storeNeedle) {
-            if ($storeNeedle !== '') {
-                $am = str_contains(mb_strtolower((string) ($a['store'] ?? '')), $storeNeedle) ? 0 : 1;
-                $bm = str_contains(mb_strtolower((string) ($b['store'] ?? '')), $storeNeedle) ? 0 : 1;
-                if ($am !== $bm) {
-                    return $am <=> $bm;
+        // Relevance boost: when the query has multiple words (e.g. a color/
+        // attribute like "owala pink"), float items whose TITLE matches more of
+        // those words to the top. Stable (PHP 8 usort) so ties keep the
+        // relevance + priority-store order. Single-word queries are untouched.
+        $qTerms = array_values(array_filter(
+            preg_split('/\s+/', mb_strtolower(trim($validated['query']))),
+            fn ($t) => mb_strlen($t) >= 2
+        ));
+        if (count($qTerms) >= 2) {
+            usort($products, function ($a, $b) use ($qTerms) {
+                $ta = mb_strtolower((string) ($a['title'] ?? ''));
+                $tb = mb_strtolower((string) ($b['title'] ?? ''));
+                $sa = 0;
+                $sb = 0;
+                foreach ($qTerms as $t) {
+                    if (str_contains($ta, $t)) {
+                        $sa++;
+                    }
+                    if (str_contains($tb, $t)) {
+                        $sb++;
+                    }
                 }
-            }
-            $ap = empty($a['_priority']) ? 1 : 0;
-            $bp = empty($b['_priority']) ? 1 : 0;
-            if ($ap !== $bp) {
-                return $ap <=> $bp;
-            }
-            $as = empty($a['on_sale']) ? 1 : 0;
-            $bs = empty($b['on_sale']) ? 1 : 0;
-            return $as <=> $bs;
-        });
 
-        // Drop the internal flag before returning.
-        $shown = array_map(function ($p) { unset($p['_priority']); return $p; }, array_slice($products, 0, $limit));
+                return $sb <=> $sa;
+            });
+        }
+
+        $shown = array_slice($products, 0, $limit);
 
         // Price range across the shown results, so the assistant can tell the
         // customer "I found options between $X and $Y".
@@ -1252,6 +1262,36 @@ class ProductExtractController extends Controller
 
         // Default big-box deal stores for anything else.
         return ['Target', 'Walmart'];
+    }
+
+    /**
+     * Merge results keeping relevance: lead with the general (Google-ranked)
+     * list (2 per round so it stays dominant), weaving one item from each
+     * priority-store list per round.
+     */
+    private function interleaveResults(array $general, array $priorityLists): array
+    {
+        $out = [];
+        $gi = 0;
+        $idx = array_fill(0, count($priorityLists), 0);
+        $progress = true;
+        while ($progress) {
+            $progress = false;
+            for ($k = 0; $k < 2; $k++) {
+                if ($gi < count($general)) {
+                    $out[] = $general[$gi++];
+                    $progress = true;
+                }
+            }
+            foreach ($priorityLists as $i => $list) {
+                if ($idx[$i] < count($list)) {
+                    $out[] = $list[$idx[$i]++];
+                    $progress = true;
+                }
+            }
+        }
+
+        return $out;
     }
 
     /** Dedupe products, keeping the same product at DIFFERENT stores (price compare). */
