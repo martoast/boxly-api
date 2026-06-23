@@ -156,14 +156,11 @@ class ProductExtractController extends Controller
             }));
         }
 
-        // Ranking: surface the BEST, most TRUSTWORTHY results — not the cheapest.
-        //   1) RELEVANCE tier (a color/attribute like "owala pink" keeps pink on top)
-        //   2) STORE TRUST (big-box like Target/Walmart/Dick's, then major brands,
-        //      then niche resellers) — customers trust the big names
-        //   3) priced before unpriced
-        // Within a tier the original Google-Shopping order (its own relevance/
-        // quality) is preserved (PHP 8 sort is stable). We deliberately do NOT sort
-        // by lowest price — that surfaced tiny niche resellers.
+        // Base ordering only: RELEVANCE tier (a color/attribute like "owala pink"
+        // keeps pink on top), then priced-before-unpriced, otherwise keep Google
+        // Shopping's own order (PHP 8 sort is stable). The FINAL "best results
+        // first" ranking (trust/brand/quality) is done AI-first by a fast model in
+        // the assistant's search_products tool — not hard-coded here.
         $qTerms = array_values(array_filter(
             preg_split('/\s+/', mb_strtolower(trim($validated['query']))),
             fn ($t) => mb_strlen($t) >= 2
@@ -186,11 +183,6 @@ class ProductExtractController extends Controller
                 if ($sa !== $sb) {
                     return $sb <=> $sa; // more query terms matched first
                 }
-            }
-            $ta = $this->storeTrust($a['store'] ?? null);
-            $tb = $this->storeTrust($b['store'] ?? null);
-            if ($ta !== $tb) {
-                return $tb <=> $ta; // most trustworthy store first
             }
             // priced before unpriced; otherwise keep Google's order (stable sort)
             $ha = ($a['price'] ?? null) !== null ? 1 : 0;
@@ -1429,52 +1421,6 @@ class ProductExtractController extends Controller
 
         // Default big-box deal stores for anything else.
         return ['Target', 'Walmart'];
-    }
-
-    // Big-box / department / major retailers — most trustworthy, shown first.
-    private const TRUSTED_BIGBOX = [
-        'target', 'walmart', "dick's", 'dicks sporting', 'best buy', 'costco', "sam's club",
-        "macy's", 'macys', 'nordstrom', "kohl's", 'kohls', 'rei', 'amazon', 'ulta', 'sephora',
-        'home depot', "lowe's", 'lowes', 'academy', 'foot locker', 'jcpenney', 'jc penney',
-        "dillard's", 'dillards', 'belk', 'wayfair', 'bloomingdale', 'saks', 'gamestop',
-        'barnes & noble', 'walgreens', 'cvs', 'petco', 'petsmart', 'staples', 'office depot',
-        'zappos', 'qvc', 'overstock', 'newegg', 'michaels', 'apple',
-    ];
-
-    // Recognized brand stores / well-known names — trusted, just below big-box.
-    private const TRUSTED_BRANDS = [
-        'nike', 'adidas', 'new balance', 'under armour', 'lululemon', 'columbia',
-        'the north face', 'patagonia', 'gap', 'old navy', 'vans', 'converse', 'crocs',
-        'puma', 'reebok', 'skechers', 'hoka', 'asics', 'on running', 'gymshark', 'alo',
-        'abercrombie', 'hollister', 'american eagle', 'urban outfitters', 'pacsun', 'zara',
-        'h&m', 'uniqlo', 'coach', 'michael kors', 'kate spade', 'ralph lauren', 'tommy hilfiger',
-        'calvin klein', 'levi', 'stanley', 'owala', 'hydro flask', 'yeti', 'samsung', 'lego',
-        'disney', 'pokemon center', "victoria's secret", 'bath & body works', 'fanatics',
-    ];
-
-    /**
-     * Trustworthiness score for a result's store, used to rank big, recognizable
-     * sellers ahead of tiny niche resellers. 2 = big-box/department, 1 = known
-     * brand, 0 = niche/unknown. Substring match handles "Walmart - SellerX" etc.
-     */
-    private function storeTrust(?string $store): int
-    {
-        $s = mb_strtolower(trim((string) $store));
-        if ($s === '') {
-            return 0;
-        }
-        foreach (self::TRUSTED_BIGBOX as $kw) {
-            if (str_contains($s, $kw)) {
-                return 2;
-            }
-        }
-        foreach (self::TRUSTED_BRANDS as $kw) {
-            if (str_contains($s, $kw)) {
-                return 1;
-            }
-        }
-
-        return 0;
     }
 
     /**
