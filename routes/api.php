@@ -32,6 +32,7 @@ use App\Http\Controllers\EmployeeOrderController;
 use App\Http\Controllers\ShoppingTripsController;
 use App\Http\Controllers\Admin\AdminShoppingTripsController;
 use App\Http\Controllers\Admin\AdminStoreController;
+use App\Http\Controllers\Admin\AdminStarterPromptController;
 use App\Http\Controllers\Admin\AdminCategoryController;
 use App\Http\Controllers\Admin\AdminKnowledgeController;
 use App\Http\Controllers\Admin\AdminPurchasedProductController;
@@ -122,6 +123,10 @@ Route::post('/search-events', [\App\Http\Controllers\SearchEventController::clas
 // Knowledge wiki for the AI assistant — published articles, read-only. Consumed
 // by the Nuxt assistant server (no DB there) to answer business questions.
 Route::get('/knowledge', [\App\Http\Controllers\KnowledgeController::class, 'index'])
+    ->middleware('throttle:120,1');
+
+// Starter prompt cards for the shopping assistant empty state (read-only, public).
+Route::get('/starter-prompts', [\App\Http\Controllers\StarterPromptController::class, 'index'])
     ->middleware('throttle:120,1');
 
 Route::middleware(['web'])->group(function () {
@@ -479,6 +484,16 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/{knowledge}', [AdminKnowledgeController::class, 'show']);
             Route::put('/{knowledge}', [AdminKnowledgeController::class, 'update']);
             Route::delete('/{knowledge}', [AdminKnowledgeController::class, 'destroy']);
+        });
+
+        // Starter prompt cards shown on the shopping assistant empty state
+        Route::prefix('starter-prompts')->group(function () {
+            Route::get('/', [AdminStarterPromptController::class, 'index']);
+            Route::post('/', [AdminStarterPromptController::class, 'store']);
+            Route::get('/{starterPrompt}', [AdminStarterPromptController::class, 'show']);
+            Route::put('/{starterPrompt}', [AdminStarterPromptController::class, 'update']);
+            Route::delete('/{starterPrompt}', [AdminStarterPromptController::class, 'destroy']);
+            Route::post('/{starterPrompt}/image', [AdminStarterPromptController::class, 'uploadImage']);
         });
 
         Route::prefix('campaigns')->group(function () {
