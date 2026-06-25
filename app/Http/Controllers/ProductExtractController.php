@@ -1066,11 +1066,13 @@ class ProductExtractController extends Controller
         return null;
     }
 
-    /** Build a single-option matrix from a list of variant Product nodes. */
+    /** Build a variant matrix from a list of variant Product nodes. Prefers clean
+     *  schema.org attributes (color/size/additionalProperty) so the UI shows real
+     *  "Color" / "Talla" selectors; falls back to the full variant name otherwise. */
     private function variantsFromNodes(array $nodes): ?array
     {
         $variants = [];
-        $values = [];
+        $optionVals = [];  // optionName => [value => true] (insertion order preserved)
         $minP = null;
         foreach ($nodes as $n) {
             if (! is_array($n)) {
@@ -1082,17 +1084,46 @@ class ProductExtractController extends Controller
             }
             $price = isset($offer['price']) ? (float) $offer['price'] : null;
             $avail = stripos((string) ($offer['availability'] ?? ''), 'InStock') !== false || ($offer['availability'] ?? '') === '';
-            $label = $n['name'] ?? $n['sku'] ?? null;
-            if (! $label) {
-                continue;
-            }
             if ($price !== null && ($minP === null || $price < $minP)) {
                 $minP = $price;
             }
-            $values[] = (string) $label;
+
+            // Prefer clean attributes; only fall back to the full name when none exist.
+            $opts = [];
+            if ($c = $this->scalar($n['color'] ?? null)) {
+                $opts['Color'] = $c;
+            }
+            if ($s = $this->scalar($n['size'] ?? null)) {
+                $opts['Talla'] = $s;
+            }
+            foreach (($n['additionalProperty'] ?? []) as $ap) {
+                if (! is_array($ap)) {
+                    continue;
+                }
+                $pn = $this->scalar($ap['name'] ?? null);
+                $pv = $this->scalar($ap['value'] ?? null);
+                if ($pn && $pv) {
+                    $label = $this->optionLabel($pn);
+                    if (! isset($opts[$label])) {
+                        $opts[$label] = $pv;
+                    }
+                }
+            }
+            if (! $opts) {
+                $label = $this->scalar($n['name'] ?? null) ?? ($n['sku'] ?? null);
+                if (! $label) {
+                    continue;
+                }
+                $opts['Opción'] = (string) $label;
+            }
+
+            foreach ($opts as $k => $v) {
+                $optionVals[$k][$v] = true;
+            }
             $variants[] = [
-                'id' => $n['sku'] ?? null, 'title' => (string) $label,
-                'options' => ['Opción' => (string) $label],
+                'id' => $n['sku'] ?? null,
+                'title' => implode(' / ', array_values($opts)),
+                'options' => $opts,
                 'price' => $price, 'was' => null, 'on_sale' => false, 'available' => $avail,
             ];
         }
@@ -1100,12 +1131,37 @@ class ProductExtractController extends Controller
             return null;
         }
 
+        $options = [];
+        foreach ($optionVals as $name => $vals) {
+            $options[] = ['name' => $name, 'values' => array_keys($vals)];
+        }
+
         return [
             'title' => null, 'description' => null, 'images' => [],
             'price' => $minP, 'was' => null, 'on_sale' => false,
-            'options' => [['name' => 'Opción', 'values' => array_values(array_unique($values))]],
+            'options' => $options,
             'variants' => $variants,
         ];
+    }
+
+    /** Coerce a JSON-LD value (string, number, or {name|value|@value} object) to a clean string. */
+    private function scalar($v): ?string
+    {
+        if (is_string($v)) {
+            $v = trim($v);
+            return $v !== '' ? $v : null;
+        }
+        if (is_numeric($v)) {
+            return (string) $v;
+        }
+        if (is_array($v)) {
+            foreach (['name', 'value', '@value', 0] as $k) {
+                if (isset($v[$k])) {
+                    return $this->scalar($v[$k]);
+                }
+            }
+        }
+        return null;
     }
 
     /** Collect product images from og:image tags and JSON-LD image arrays. */
