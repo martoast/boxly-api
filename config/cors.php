@@ -30,6 +30,8 @@ return [
         'products/*',
         'conversations',
         'conversations/*',
+        'starter-prompts',
+        'starter-prompts/*',
         'checkout',
         'payment-methods',
         'payment-methods/*',
