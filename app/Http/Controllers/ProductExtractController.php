@@ -312,7 +312,7 @@ class ProductExtractController extends Controller
         $out = [
             'title' => null, 'price' => null, 'was' => null, 'on_sale' => false,
             'store' => null, 'buy_url' => $validated['url'] ?? null,
-            'images' => [], 'description' => null,
+            'images' => [], 'description' => null, 'available' => true,
         ];
 
         // 1) SerpAPI immersive — extra images, description, and (crucially) a real
@@ -340,11 +340,12 @@ class ProductExtractController extends Controller
         //    gave us enough, or the link is a Google view link. Shopify exposes a
         //    cheap JSON feed; every other store rides on the immersive data + the
         //    search-card image (which we already have for free).
-        // Price already comes from the search card, so only enrich when we're short
-        // on photos or a description — token search results (immersive gives both)
-        // then skip the extra .js call entirely.
-        $needInfo = count($out['images']) < 2 || empty($out['description']);
-        if ($buy && ! $this->isGoogleLink($buy) && $needInfo) {
+        // Enrich from the store when possible. Shopify exposes a cheap JSON feed
+        // with extra images, description, price AND live per-variant stock; a
+        // non-Shopify URL returns null instantly (no network). We ALWAYS check
+        // Shopify — even when immersive already gave photos — because Google's
+        // index can be days stale and we must not send the user to a sold-out page.
+        if ($buy && ! $this->isGoogleLink($buy)) {
             if ($enrich = $this->enrichLight($buy)) {
                 if (! empty($enrich['images'])) {
                     // Prefer store images (more, higher-res); keep immersive as backup.
@@ -357,6 +358,9 @@ class ProductExtractController extends Controller
                     $out['price']   = $enrich['price'];
                     $out['was']     = $enrich['was'] ?? null;
                     $out['on_sale'] = $enrich['on_sale'] ?? false;
+                }
+                if (array_key_exists('available', $enrich)) {
+                    $out['available'] = $enrich['available'];
                 }
             }
         }
@@ -1302,11 +1306,13 @@ class ProductExtractController extends Controller
             $data['images'] ?? []
         );
 
-        // Cheapest-variant price (matches what the search card shows).
+        // Cheapest-variant price (matches what the search card shows) + LIVE stock.
+        $variants = $data['variants'] ?? [];
         $minPrice = null;
         $minCompare = null;
         $anyOnSale = false;
-        foreach ($data['variants'] ?? [] as $v) {
+        $anyAvailable = empty($variants); // no variant data → don't claim out-of-stock
+        foreach ($variants as $v) {
             $price = isset($v['price']) ? round(((float) $v['price']) / 100, 2) : null;
             $compare = ! empty($v['compare_at_price']) ? round(((float) $v['compare_at_price']) / 100, 2) : null;
             if ($price !== null && ($minPrice === null || $price < $minPrice)) {
@@ -1317,6 +1323,9 @@ class ProductExtractController extends Controller
                 if ($minCompare === null || $compare < $minCompare) {
                     $minCompare = $compare;
                 }
+            }
+            if (! empty($v['available'])) {
+                $anyAvailable = true;
             }
         }
 
@@ -1330,6 +1339,7 @@ class ProductExtractController extends Controller
             'price'       => $minPrice,
             'was'         => $anyOnSale ? $minCompare : null,
             'on_sale'     => $anyOnSale,
+            'available'   => $anyAvailable,
         ];
     }
 
