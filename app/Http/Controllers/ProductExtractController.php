@@ -1916,8 +1916,10 @@ class ProductExtractController extends Controller
      */
     private function shopifyProducts(string $origin, int $limit, bool $onlySale = false): array
     {
-        // Pull a wider window when hunting for deals — sale items are sparse.
-        $fetch = $onlySale ? min($limit * 5, 150) : min($limit * 2, 50);
+        // Pull a wide window. Sale items are sparse, AND a big upcoming "drop" can
+        // fill the newest pages with future-dated (gated) items we filter out — so
+        // fetch deep enough that live products below the drop still backfill.
+        $fetch = $onlySale ? min($limit * 5, 200) : min($limit * 3, 150);
         $body = $this->fetch($origin . '/products.json?limit=' . $fetch);
         if (! $body) {
             return [];
