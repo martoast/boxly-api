@@ -1892,7 +1892,21 @@ class ProductExtractController extends Controller
 
         $out = [];
         foreach ($items as $p) {
-            $variant = $p['variants'][0] ?? null;
+            $variants = $p['variants'] ?? [];
+
+            // Skip locked / sold-out / unreleased drops. Stores like YoungLA list
+            // future "drop" products in products.json before the page is public, so
+            // the buy link shows "content is protected" — a dead end for the user.
+            // If we have variant data and NONE are available, drop the product.
+            $buyable = false;
+            foreach ($variants as $v) {
+                if (! empty($v['available'])) { $buyable = true; break; }
+            }
+            if ($variants && ! $buyable) {
+                continue;
+            }
+
+            $variant = $variants[0] ?? null;
             $price   = isset($variant['price']) ? (float) $variant['price'] : null;
             $compare = isset($variant['compare_at_price']) ? (float) $variant['compare_at_price'] : null;
             $onSale  = $compare && $price && $compare > $price;
@@ -1936,6 +1950,10 @@ class ProductExtractController extends Controller
 
         $out = [];
         foreach (array_slice($items, 0, $limit) as $p) {
+            // Skip locked / sold-out / unreleased drops (gated product page).
+            if (isset($p['available']) && ! $p['available']) {
+                continue;
+            }
             $raw = $p['price'] ?? null;
             $price = $raw !== null ? (float) preg_replace('/[^0-9.]/', '', (string) $raw) : null;
             // Predictive search sometimes returns the price in cents.
