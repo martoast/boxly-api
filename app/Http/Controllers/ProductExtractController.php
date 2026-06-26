@@ -365,6 +365,13 @@ class ProductExtractController extends Controller
             }
         }
 
+        // Final safety net: an unreleased drop (future date in the title) is gated
+        // even if its variants report available — mark it unavailable so the modal
+        // blocks the dead "go to store" link.
+        if ($this->isFutureDrop($validated['title'] ?? $out['title'] ?? null)) {
+            $out['available'] = false;
+        }
+
         $out['images'] = array_slice(array_values(array_unique(array_filter($out['images']))), 0, 12);
 
         // Cache only a meaningful result (don't poison the cache with a failed/empty
@@ -1343,6 +1350,30 @@ class ProductExtractController extends Controller
         ];
     }
 
+    /**
+     * Detect an UNRELEASED drop from a future date in the product title (e.g.
+     * "W2252 … - July 7th"). Drop brands publish the listing — and even flag
+     * variants available — days before the storefront page unlocks, so the buy
+     * link is a gated dead end until then. The title date is effectively the
+     * "available from" date: future → not buyable yet; past → live, show it.
+     */
+    private function isFutureDrop(?string $title): bool
+    {
+        if (! $title) {
+            return false;
+        }
+        if (! preg_match('/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b/i', $title, $m)) {
+            return false;
+        }
+        try {
+            $today = now()->startOfDay();
+            $date = \Illuminate\Support\Carbon::parse($m[1] . ' ' . $m[2] . ' ' . $today->year)->startOfDay();
+            return $date->gt($today);
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
     private function shopifyVariants(string $url): ?array
     {
         if (! preg_match('~^(https?://[^/]+/(?:.*/)?products/[^/?#]+)~', $url, $m)) {
@@ -1904,10 +1935,17 @@ class ProductExtractController extends Controller
         foreach ($items as $p) {
             $variants = $p['variants'] ?? [];
 
-            // Skip locked / sold-out / unreleased drops. Stores like YoungLA list
-            // future "drop" products in products.json before the page is public, so
-            // the buy link shows "content is protected" — a dead end for the user.
-            // If we have variant data and NONE are available, drop the product.
+            // Skip UNRELEASED early-access drops. Stores like YoungLA list future
+            // drops in products.json (often with variants flagged available) before
+            // the storefront page is public, so the buy link shows "content is
+            // protected" — a dead end. They put the release date in the title
+            // ("… - July 7th"), so treat a future title-date as "not yet buyable".
+            if ($this->isFutureDrop($p['title'] ?? null)) {
+                continue;
+            }
+
+            // Skip sold-out products too: if we have variant data and NONE are
+            // available, drop it (the page would show an out-of-stock dead end).
             $buyable = false;
             foreach ($variants as $v) {
                 if (! empty($v['available'])) { $buyable = true; break; }
@@ -1961,7 +1999,7 @@ class ProductExtractController extends Controller
         $out = [];
         foreach (array_slice($items, 0, $limit) as $p) {
             // Skip locked / sold-out / unreleased drops (gated product page).
-            if (isset($p['available']) && ! $p['available']) {
+            if ((isset($p['available']) && ! $p['available']) || $this->isFutureDrop($p['title'] ?? null)) {
                 continue;
             }
             $raw = $p['price'] ?? null;
