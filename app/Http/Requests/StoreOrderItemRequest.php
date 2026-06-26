@@ -24,6 +24,7 @@ class StoreOrderItemRequest extends FormRequest
     {
         return [
             'product_url' => 'nullable|url|max:1000',
+            'product_image_url' => 'nullable|url|max:1000',
             'product_name' => 'required|string|max:255',
             'merchant_order_id' => 'nullable|string|max:255',
             'quantity' => 'required|integer|min:1|max:9999',
