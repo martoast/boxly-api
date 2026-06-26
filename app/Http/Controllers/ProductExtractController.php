@@ -313,7 +313,6 @@ class ProductExtractController extends Controller
             'title' => null, 'price' => null, 'was' => null, 'on_sale' => false,
             'store' => null, 'buy_url' => $validated['url'] ?? null,
             'images' => [], 'description' => null,
-            'options' => [], 'variants' => [], 'has_variants' => false, 'available' => true,
         ];
 
         // 1) SerpAPI immersive — extra images, description, and (crucially) a real
@@ -333,29 +332,32 @@ class ProductExtractController extends Controller
             $out['store'] = $this->storeFromUrl($buy);
         }
 
-        // 2) Layered, platform-aware extraction — pull the real product as the
-        //    store would render it (variants, sizes, colors, price, stock).
-        //    Priority: structured APIs (Amazon/Walmart) → Shopify .js → HTML
-        //    cascade (JSON-LD / WooCommerce / Magento), escalating to a rendered
-        //    fetch when a plain fetch comes back thin.
-        $detail = $buy && ! $this->isGoogleLink($buy) ? $this->extractDetail($buy) : null;
-        if ($detail) {
-            $out['title']        = $detail['title'] ?: $out['title'];
-            $out['price']        = $detail['price'] ?? $out['price'];
-            $out['was']          = $detail['was'] ?? $out['was'];
-            $out['on_sale']      = $detail['on_sale'] ?? $out['on_sale'];
-            $out['options']      = $detail['options'] ?? [];
-            $out['variants']     = $detail['variants'] ?? [];
-            $out['has_variants'] = count($out['variants']) > 0;
-            if (! empty($detail['unavailable'])) {
-                $out['available'] = false;
-            }
-            if (! empty($detail['description'])) {
-                $out['description'] = $out['description'] ?: $detail['description'];
-            }
-            if (! empty($detail['images'])) {
-                // Prefer store images (more, higher-res); keep immersive as backup.
-                $out['images'] = array_merge($detail['images'], $out['images']);
+        // 2) Lightweight enrich — extra images, description and price ONLY. The
+        //    modal just needs photos + a description + the real link; the customer
+        //    picks size/color on the store's own page (or Boxly handles it on an
+        //    assisted purchase). So: NO variant scraping, NO rendered fetches, NO
+        //    Amazon/Walmart structured calls. Skip entirely when immersive already
+        //    gave us enough, or the link is a Google view link. Shopify exposes a
+        //    cheap JSON feed; every other store rides on the immersive data + the
+        //    search-card image (which we already have for free).
+        // Price already comes from the search card, so only enrich when we're short
+        // on photos or a description — token search results (immersive gives both)
+        // then skip the extra .js call entirely.
+        $needInfo = count($out['images']) < 2 || empty($out['description']);
+        if ($buy && ! $this->isGoogleLink($buy) && $needInfo) {
+            if ($enrich = $this->enrichLight($buy)) {
+                if (! empty($enrich['images'])) {
+                    // Prefer store images (more, higher-res); keep immersive as backup.
+                    $out['images'] = array_merge($enrich['images'], $out['images']);
+                }
+                if (empty($out['description']) && ! empty($enrich['description'])) {
+                    $out['description'] = $enrich['description'];
+                }
+                if ($out['price'] === null && isset($enrich['price'])) {
+                    $out['price']   = $enrich['price'];
+                    $out['was']     = $enrich['was'] ?? null;
+                    $out['on_sale'] = $enrich['on_sale'] ?? false;
+                }
             }
         }
 
@@ -1266,6 +1268,71 @@ class ProductExtractController extends Controller
      * Live Shopify variant data via <product-url>.js — every size/option with its
      * price, compare_at (sale) price and in-stock flag.
      */
+    /**
+     * Cheap product enrich for the modal: extra images + description + price from a
+     * Shopify product's <url>.js JSON (one light, non-rendered request). No
+     * variants, no structured/rendered calls. Returns null for non-Shopify URLs —
+     * those rely on the immersive data + the search-card image.
+     */
+    private function enrichLight(string $url): ?array
+    {
+        if (! preg_match('~^(https?://[^/]+/(?:.*/)?products/[^/?#]+)~', $url, $m)) {
+            return null;
+        }
+        $jsUrl = $m[1] . '.js';
+        $key = config('services.scraperapi.key');
+        try {
+            $target = $key
+                ? 'https://api.scraperapi.com?' . http_build_query(['api_key' => $key, 'url' => $jsUrl, 'country_code' => 'us'])
+                : $jsUrl;
+            $res = Http::timeout(20)->get($target);
+            if (! $res->successful()) {
+                return null;
+            }
+            $data = $res->json();
+            if (! is_array($data) || empty($data['title'])) {
+                return null;
+            }
+        } catch (\Throwable $e) {
+            return null;
+        }
+
+        $images = array_map(
+            fn ($img) => str_starts_with((string) $img, 'http') ? $img : 'https:' . $img,
+            $data['images'] ?? []
+        );
+
+        // Cheapest-variant price (matches what the search card shows).
+        $minPrice = null;
+        $minCompare = null;
+        $anyOnSale = false;
+        foreach ($data['variants'] ?? [] as $v) {
+            $price = isset($v['price']) ? round(((float) $v['price']) / 100, 2) : null;
+            $compare = ! empty($v['compare_at_price']) ? round(((float) $v['compare_at_price']) / 100, 2) : null;
+            if ($price !== null && ($minPrice === null || $price < $minPrice)) {
+                $minPrice = $price;
+            }
+            if ($compare && $price && $compare > $price) {
+                $anyOnSale = true;
+                if ($minCompare === null || $compare < $minCompare) {
+                    $minCompare = $compare;
+                }
+            }
+        }
+
+        $desc = ! empty($data['description'])
+            ? trim(mb_substr(html_entity_decode(strip_tags((string) $data['description']), ENT_QUOTES | ENT_HTML5), 0, 800))
+            : null;
+
+        return [
+            'images'      => array_slice(array_values(array_filter($images)), 0, 12),
+            'description' => $desc ?: null,
+            'price'       => $minPrice,
+            'was'         => $anyOnSale ? $minCompare : null,
+            'on_sale'     => $anyOnSale,
+        ];
+    }
+
     private function shopifyVariants(string $url): ?array
     {
         if (! preg_match('~^(https?://[^/]+/(?:.*/)?products/[^/?#]+)~', $url, $m)) {
