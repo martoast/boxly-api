@@ -324,6 +324,12 @@ class ProductExtractController extends Controller
                 if (empty($out['buy_url']) || $this->isGoogleLink($out['buy_url'])) {
                     $out['buy_url'] = $imm['link'] ?: $out['buy_url'];
                 }
+                // Best-effort price + sale (Shopify enrich below overrides if available).
+                if ($out['price'] === null && isset($imm['price'])) {
+                    $out['price']   = $imm['price'];
+                    $out['was']     = $imm['was'] ?? null;
+                    $out['on_sale'] = $imm['on_sale'] ?? false;
+                }
             }
         }
 
@@ -1268,11 +1274,52 @@ class ProductExtractController extends Controller
             fn ($v) => is_string($v) && str_starts_with($v, 'http')
         ));
         $link = null;
+        $chosen = null;
         foreach ($pr['stores'] ?? [] as $s) {
-            if (! empty($s['link'])) { $link = $s['link']; break; }
+            if (! empty($s['link'])) { $link = $s['link']; $chosen = $s; break; }
         }
 
-        return ['images' => array_slice($images, 0, 8), 'description' => $pr['about_the_product']['description'] ?? null, 'link' => $link];
+        // Best-effort pricing + SALE detection for non-Shopify stores (Coach,
+        // Nike…) that don't expose a cheap JSON feed. SerpAPI's field names vary,
+        // so scan the chosen store and the product node for a current price and
+        // any "original/old/comparable" price; if the old one is higher, it's a sale.
+        $price = $this->priceNum($chosen['extracted_price'] ?? $chosen['price'] ?? $pr['extracted_price'] ?? $pr['price'] ?? null);
+        $was = null;
+        foreach (['extracted_original_price', 'original_price', 'extracted_old_price', 'old_price', 'comparable_price', 'comparable_value'] as $k) {
+            $cand = $this->priceNum(($chosen[$k] ?? null) ?? ($pr[$k] ?? null));
+            if ($cand) { $was = $cand; break; }
+        }
+        // Fallback: a prices[] list with two distinct numbers → higher is the was.
+        if ($was === null && is_array($pr['prices'] ?? null)) {
+            $nums = array_values(array_filter(array_map(fn ($x) => $this->priceNum($x), $pr['prices'])));
+            if (count($nums) >= 2) {
+                $hi = max($nums); $lo = min($nums);
+                if ($hi > $lo) { $price = $price ?? $lo; $was = $hi; }
+            }
+        }
+        $onSale = $was && $price && $was > $price;
+
+        return [
+            'images' => array_slice($images, 0, 8),
+            'description' => $pr['about_the_product']['description'] ?? null,
+            'link' => $link,
+            'price' => $price,
+            'was' => $onSale ? $was : null,
+            'on_sale' => $onSale,
+        ];
+    }
+
+    /** Parse a price like "$250.00" / "MX$1,015" / 179 into a float, or null. */
+    private function priceNum($raw): ?float
+    {
+        if ($raw === null || $raw === '') {
+            return null;
+        }
+        if (is_numeric($raw)) {
+            return (float) $raw;
+        }
+        $clean = preg_replace('/[^0-9.]/', '', (string) $raw);
+        return ($clean !== '' && is_numeric($clean)) ? (float) $clean : null;
     }
 
     /**
