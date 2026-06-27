@@ -1965,12 +1965,20 @@ class ProductExtractController extends Controller
                 continue;
             }
 
+            // The catalog JSON already carries every product photo — keep a few
+            // (not just the first) so the gallery can cycle them on hover.
+            $imgs = array_values(array_filter(array_map(
+                fn ($im) => is_array($im) ? ($im['src'] ?? null) : (is_string($im) ? $im : null),
+                $p['images'] ?? []
+            )));
+
             $out[] = [
                 'title'   => $p['title'] ?? null,
                 'price'   => $price,
                 'was'     => $onSale ? $compare : null,
                 'on_sale' => $onSale,
-                'image'   => $p['images'][0]['src'] ?? null,
+                'image'   => $imgs[0] ?? null,
+                'images'  => array_slice($imgs, 0, 5),
                 'url'     => $origin . '/products/' . ($p['handle'] ?? ''),
             ];
 
