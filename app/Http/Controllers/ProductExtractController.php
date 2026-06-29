@@ -91,11 +91,14 @@ class ProductExtractController extends Controller
         // Bias the query toward the store when one is specified.
         $baseQ = $store !== '' ? $store . ' ' . $validated['query'] : $validated['query'];
 
-        // Customers know where the deals are (Target, Walmart, Dick's…). A plain
-        // Google Shopping search often misses those exact stores, so we also run a
-        // category-aware pass at the priority retailers and surface them first.
-        // Skipped when the user already fixed a specific store.
-        $retailers = $store !== '' ? [] : $this->priorityRetailers($validated['query']);
+        // SPEED: a single Google Shopping pass. We used to also fire category-aware
+        // passes at priority retailers (Target/Walmart) to surface them, but that
+        // tripled the SerpAPI calls (and the slow-tail risk) for a chat that needs
+        // to feel instant. The base pass already returns the big chains for normal
+        // products, and the AI curate step (server/utils/curate.ts) now ranks
+        // chains up and resale marketplaces down — so we keep coverage without the
+        // extra round-trips. (Set $retailers to re-enable priority passes.)
+        $retailers = [];
 
         // One Google Shopping query per source, fetched in parallel (cached each).
         $queries = array_merge([$baseQ], array_map(fn ($r) => $baseQ . ' ' . $r, $retailers));
