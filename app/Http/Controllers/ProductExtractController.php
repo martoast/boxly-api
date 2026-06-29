@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Jobs\PrimeShoppingCache;
 use App\Models\SearchEvent;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -105,12 +106,16 @@ class ProductExtractController extends Controller
         $byQuery = $this->multiShopping($queries, $start);
 
         $general = $byQuery[$baseQ] ?? [];
-        // ScraperAPI fallback when SerpAPI returns nothing for the base query.
-        if (empty($general) && $start === 0) {
-            $fb = $this->shoppingViaScraperapi($baseQ);
-            if (is_array($fb)) {
-                $general = $fb;
-            }
+        // SPEED: the ScraperAPI structured-shopping fallback is reliable but SLOW
+        // (ultra_premium, ~20-40s) and was the root of the 20-25s tail whenever
+        // SerpAPI returned nothing. Take it OFF the request path: serve what we
+        // have now (possibly empty) and PRIME the cache in the background so the
+        // NEXT identical search is instant. Dedupe (Cache::add) so we don't queue
+        // the same 40s scrape repeatedly inside the window. (Runs on the queue —
+        // the prod worker handles it; no-op without a ScraperAPI key, e.g. local.)
+        if (empty($general) && $start === 0 && config('services.scraperapi.key')
+            && Cache::add('scraperprime:' . md5($baseQ) . ':' . $start, 1, 300)) {
+            PrimeShoppingCache::dispatch($baseQ, $start);
         }
 
         // Keep each retailer's ACTUAL listings (the biased query returns a mix —
@@ -225,6 +230,64 @@ class ProductExtractController extends Controller
             'success' => true,
             'data'    => ['query' => $baseQ, 'products' => $shown, 'price_range' => $range, 'has_more' => $hasMore, 'start' => $start],
         ]);
+    }
+
+    /**
+     * Lightweight WEB SEARCH (Google organic via SerpAPI) for the AI assistant's
+     * web_search tool. The chat uses this only on the Gemini provider path —
+     * Claude has its own native server-side web search, but Gemini's built-in
+     * google_search can't coexist with our custom function tools, so we expose
+     * web search as a plain endpoint. Returns a few organic results (title, url,
+     * snippet) the model turns into product URLs for show_products/extract_product.
+     * Cached 30 min, same as shopping. US-pinned (gl/hl/location) like all our
+     * fetches so prices/results aren't localized to Mexico.
+     */
+    public function webSearch(Request $request)
+    {
+        $validated = $request->validate([
+            'query' => 'required|string|max:200',
+            'num'   => 'nullable|integer|min:1|max:10',
+        ]);
+        $q = trim($validated['query']);
+        $num = (int) ($validated['num'] ?? 6);
+        $key = config('services.serpapi.key');
+        $location = config('services.serpapi.location');
+
+        if ($q === '' || ! $key) {
+            return response()->json(['success' => true, 'data' => ['results' => []]]);
+        }
+
+        $cacheKey = 'serp_web:' . md5($q . '|' . $location) . ':' . $num;
+        $results = Cache::get($cacheKey);
+        if ($results === null) {
+            try {
+                $params = [
+                    'engine' => 'google', 'q' => $q, 'gl' => 'us', 'hl' => 'en',
+                    'num' => $num, 'api_key' => $key,
+                ];
+                if (! empty($location)) {
+                    $params['location'] = $location;
+                }
+                $res = Http::timeout(12)->connectTimeout(5)->get('https://serpapi.com/search.json', $params);
+                $organic = $res->successful() ? ($res->json('organic_results') ?? []) : [];
+                $results = array_values(array_filter(array_map(function ($r) {
+                    $url = $r['link'] ?? null;
+                    if (! $url) {
+                        return null;
+                    }
+                    return [
+                        'title'   => $r['title'] ?? '',
+                        'url'     => $url,
+                        'snippet' => $r['snippet'] ?? '',
+                    ];
+                }, array_slice($organic, 0, $num))));
+                Cache::put($cacheKey, $results, now()->addMinutes(30));
+            } catch (\Throwable $e) {
+                $results = [];
+            }
+        }
+
+        return response()->json(['success' => true, 'data' => ['results' => $results]]);
     }
 
     /**
@@ -1522,12 +1585,37 @@ class ProductExtractController extends Controller
         $toFetch = []; // query => cacheKey
 
         foreach (array_values(array_unique($queries)) as $q) {
-            $cacheKey = 'serp_shop:' . md5($q . '|' . $location) . ':' . $start;
+            $cacheKey = self::shopCacheKey($q, $location, $start);
             $hit = Cache::get($cacheKey);
             if ($hit !== null) {
                 $out[$q] = $hit;
             } else {
                 $toFetch[$q] = $cacheKey;
+            }
+        }
+
+        if ($key && $toFetch) {
+            // STAMPEDE CONTROL: own each miss with an atomic lock so concurrent
+            // identical misses don't all fire (expensive) SerpAPI calls. If another
+            // request is already fetching a query, wait briefly for it to fill the
+            // cache and reuse that result instead of duplicating the call.
+            $locks = []; // query => lock we hold (we must fetch, cache, then release)
+            foreach ($toFetch as $q => $cacheKey) {
+                $lock = Cache::lock($cacheKey . ':lock', 20);
+                if ($lock->get()) {
+                    $locks[$q] = $lock; // we own this fetch
+                } else {
+                    // someone else is fetching it — wait up to 10s for their result.
+                    try {
+                        $lock->block(10);
+                        $lock->release();
+                    } catch (\Throwable $e) {
+                        // lock wait timed out — fall through and use whatever's cached
+                    }
+                    $hit = Cache::get($cacheKey);
+                    $out[$q] = is_array($hit) ? $hit : [];
+                    unset($toFetch[$q]); // don't fetch it ourselves
+                }
             }
         }
 
@@ -1564,10 +1652,20 @@ class ProductExtractController extends Controller
                 } else {
                     $out[$q] = [];
                 }
+                // Release the stampede lock so any waiters can read the fresh cache.
+                if (isset($locks[$q])) {
+                    $locks[$q]->release();
+                }
             }
         }
 
         return $out;
+    }
+
+    /** Cache key for a SerpAPI google_shopping result (shared with PrimeShoppingCache). */
+    public static function shopCacheKey(string $q, ?string $location, int $start = 0): string
+    {
+        return 'serp_shop:' . md5($q . '|' . (string) $location) . ':' . $start;
     }
 
     /** Normalize a SerpAPI google_shopping response into our product shape. */
@@ -1697,7 +1795,7 @@ class ProductExtractController extends Controller
     }
 
     /** Fallback: ScraperAPI structured Google Shopping. Null on failure. */
-    private function shoppingViaScraperapi(string $q): ?array
+    public static function shoppingViaScraperapi(string $q): ?array
     {
         $key = config('services.scraperapi.key');
         if (! $key) {
