@@ -1540,7 +1540,11 @@ class ProductExtractController extends Controller
                         if (! empty($location)) {
                             $params['location'] = $location;
                         }
-                        $reqs[] = $pool->as($q)->timeout(35)->get('https://serpapi.com/search.json', $params);
+                        // 12s cap: the pool resolves only when ALL queries finish, so a single
+                        // slow/hung SerpAPI call would otherwise drag the whole search to its tail
+                        // (the 20-25s spikes). Cap it — a laggard fails fast and returns [] while
+                        // the other passes (base + priority retailers) still serve results.
+                        $reqs[] = $pool->as($q)->timeout(12)->connectTimeout(5)->get('https://serpapi.com/search.json', $params);
                     }
 
                     return $reqs;
