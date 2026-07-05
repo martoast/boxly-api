@@ -31,6 +31,10 @@ class AdminUpdateOrderStatusRequest extends FormRequest
                 'string',
                 'max:500'
             ],
+            'paid_location' => [
+                'nullable',
+                Rule::in(Order::PAID_LOCATIONS),
+            ],
         ];
 
         // Only require estimated_delivery_date for shipping orders

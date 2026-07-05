@@ -173,6 +173,7 @@ class AdminOrderManagementController extends Controller
             'currency' => 'nullable|string|in:mxn,usd',
             'notes' => 'nullable|string|max:2000',
             'paid_at' => 'nullable|date',
+            'paid_location' => 'nullable|in:' . implode(',', Order::PAID_LOCATIONS),
             'deposit_paid_at' => 'nullable|date',
             'completed_at' => 'nullable|date',
             'processing_started_at' => 'nullable|date',

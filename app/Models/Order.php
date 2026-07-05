@@ -44,6 +44,7 @@ class Order extends Model
         'quote_breakdown',
         'currency',
         'paid_at',
+        'paid_location',
         'delivery_address',
         'estimated_delivery_date',
         'planned_ship_date',
@@ -123,6 +124,9 @@ class Order extends Model
     const STATUS_AWAITING_PAYMENT = 'awaiting_payment';
     const STATUS_PAID = 'paid';
     const STATUS_CANCELLED = 'cancelled';
+
+    // Where the order was paid (set by admin at mark-paid, editable after).
+    const PAID_LOCATIONS = ['NU', 'HSBC', 'Stripe'];
 
     public $previousStatus;
     public $skipEmailNotifications = false;

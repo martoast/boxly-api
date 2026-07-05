@@ -439,6 +439,10 @@ class AdminOrderController extends Controller
      */
     public function markConsolidationPaid(Request $request, Order $order)
     {
+        $validated = $request->validate([
+            'paid_location' => 'nullable|in:' . implode(',', Order::PAID_LOCATIONS),
+        ]);
+
         if ($order->status !== Order::STATUS_AWAITING_PAYMENT) {
             return response()->json([
                 'success' => false,
@@ -455,6 +459,7 @@ class AdminOrderController extends Controller
 
         $order->update([
             'paid_at' => now(),
+            'paid_location' => $validated['paid_location'] ?? null,
             'amount_paid' => ($order->amount_paid ?? 0) + $order->box_price,
             'status' => Order::STATUS_PAID,
         ]);
@@ -506,6 +511,10 @@ class AdminOrderController extends Controller
                 // Set amount_paid to box_price if not already set
                 if (empty($order->amount_paid) && $order->box_price) {
                     $data['amount_paid'] = $order->box_price;
+                }
+                // Record where it was paid, when provided
+                if ($request->filled('paid_location')) {
+                    $data['paid_location'] = $request->paid_location;
                 }
                 break;
             case Order::STATUS_SHIPPED:
