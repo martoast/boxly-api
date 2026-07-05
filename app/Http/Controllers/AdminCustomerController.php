@@ -37,10 +37,22 @@ class AdminCustomerController extends Controller
 
         if ($request->has('search')) {
             $search = $request->search;
-            $query->where(function ($q) use ($search) {
+            // Digits-only version of the search term, so a phone typed with
+            // spaces/dashes or without the country code (e.g. "669 123 4567")
+            // still matches an E.164 number stored as "+526691234567".
+            $digits = preg_replace('/\D+/', '', $search);
+            $query->where(function ($q) use ($search, $digits) {
                 $q->where('name', 'like', "%{$search}%")
                 ->orWhere('email', 'like', "%{$search}%")
                 ->orWhere('phone', 'like', "%{$search}%");
+                if ($digits !== '') {
+                    // Strip +, spaces, dashes, parens and dots from the stored
+                    // phone before comparing, so formatting never blocks a match.
+                    $q->orWhereRaw(
+                        "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(phone,'+',''),' ',''),'-',''),'(',''),')',''),'.','') LIKE ?",
+                        ["%{$digits}%"]
+                    );
+                }
             });
         }
 
@@ -77,10 +89,22 @@ class AdminCustomerController extends Controller
 
         if ($request->has('search')) {
             $search = $request->search;
-            $query->where(function ($q) use ($search) {
+            // Digits-only version of the search term, so a phone typed with
+            // spaces/dashes or without the country code (e.g. "669 123 4567")
+            // still matches an E.164 number stored as "+526691234567".
+            $digits = preg_replace('/\D+/', '', $search);
+            $query->where(function ($q) use ($search, $digits) {
                 $q->where('name', 'like', "%{$search}%")
                 ->orWhere('email', 'like', "%{$search}%")
                 ->orWhere('phone', 'like', "%{$search}%");
+                if ($digits !== '') {
+                    // Strip +, spaces, dashes, parens and dots from the stored
+                    // phone before comparing, so formatting never blocks a match.
+                    $q->orWhereRaw(
+                        "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(phone,'+',''),' ',''),'-',''),'(',''),')',''),'.','') LIKE ?",
+                        ["%{$digits}%"]
+                    );
+                }
             });
         }
 
