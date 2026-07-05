@@ -15,13 +15,14 @@ class AdminCreateExpenseTool extends AdminTool
 
     public function description(): string
     {
-        return 'Log an expense. scope="business" (default) for company costs; categories shipping, ads, software, office, po_box, misc. scope="personal" for the owners\' own spending; categories rent, food, misc (personal has NO subcategory). Shorthand "expense for Paco/Jesus for <date> for <amount>" = business, category shipping, description = the courier name (Paco and Jesus are the Estafeta drivers). "personal rent 8000" = scope personal, category rent. Amount is MXN.';
+        return 'Log an expense from a plain sentence — parse and log, do not ask questions. scope="business" (default) for company costs; categories shipping, ads, software, office, po_box, misc. scope="personal" for the owners\' own spending; categories rent, food, misc. Infer category from the thing bought: gasoline/gas->misc (subcategory gas); Facebook/Google/TikTok ads->ads; hosting/domain/software->software; rent/utilities/internet(office)->office; PO box->po_box; courier Paco/Jesus->shipping; else misc. If a card/account is named (NU, HSBC, Stripe — "with the NU"), set payment_method so it is subtracted from that War Chest account. Example: "800 pesos of gasoline with the NU" => scope business, category misc, payment_method NU, amount 800, description "Gasolina". "expense for Paco 500" => shipping, description Paco. "personal rent 8000" => scope personal, rent. Amount is MXN.';
     }
 
     public function schema(ToolInputSchema $schema): ToolInputSchema
     {
         $schema->string('scope')->description('business (default) or personal. Business feeds company profit; personal is the owners\' own money, tracked separately.');
         $schema->string('category')->description('Business: shipping, ads, software, office, po_box, misc. Personal: rent, food, misc.')->required();
+        $schema->string('subcategory')->description('Optional detail, e.g. gas, facebook, hosting, paco.');
         $schema->number('amount')->description('Amount in MXN.')->required();
         $schema->string('expense_date')->description('YYYY-MM-DD.')->required();
         $schema->string('payment_method')->description('Optional War Chest account it was paid from: NU, HSBC, or Stripe. When set, that amount is subtracted from that account\'s balance.');
@@ -37,6 +38,7 @@ class AdminCreateExpenseTool extends AdminTool
             $this->mergeInput([
                 'scope' => $arguments['scope'] ?? null,
                 'category' => $arguments['category'] ?? null,
+                'subcategory' => $arguments['subcategory'] ?? null,
                 'amount' => $arguments['amount'] ?? null,
                 'expense_date' => $arguments['expense_date'] ?? null,
                 'payment_method' => $arguments['payment_method'] ?? null,
