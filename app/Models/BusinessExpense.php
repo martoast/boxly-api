@@ -17,12 +17,16 @@ class BusinessExpense extends Model
         'subcategory',
         'amount',
         'currency',
+        'payment_method',
         'expense_date',
         'description',
         'reference_number',
         'metadata',
         'created_by',
     ];
+
+    // Which War Chest account the expense was paid from (debits that balance).
+    const PAYMENT_METHODS = ['NU', 'HSBC', 'Stripe'];
 
     protected $casts = [
         'amount' => 'decimal:2',

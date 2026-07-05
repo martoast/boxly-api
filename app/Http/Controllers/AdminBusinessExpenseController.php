@@ -93,6 +93,7 @@ class AdminBusinessExpenseController extends Controller
             'subcategory' => 'nullable|string|max:50',
             'amount' => 'required|numeric|min:0.01|max:9999999.99',
             'currency' => 'nullable|string|size:3',
+            'payment_method' => 'nullable|in:' . implode(',', BusinessExpense::PAYMENT_METHODS),
             'expense_date' => 'required|date',
             'description' => 'nullable|string|max:1000',
             'reference_number' => 'nullable|string|max:100',
@@ -106,6 +107,9 @@ class AdminBusinessExpenseController extends Controller
                 'scope' => $validated['scope'] ?? BusinessExpense::SCOPE_BUSINESS,
                 'currency' => $validated['currency'] ?? 'mxn',
             ]);
+
+            // Money out: debit the War Chest account it was paid from.
+            \App\Models\WarChestAccount::applyDelta($expense->payment_method, -1 * (float) $expense->amount);
 
             Log::info('Business expense created', [
                 'expense_id' => $expense->id,
@@ -144,6 +148,7 @@ class AdminBusinessExpenseController extends Controller
             'subcategory' => 'nullable|string|max:50',
             'amount' => 'sometimes|required|numeric|min:0.01|max:9999999.99',
             'currency' => 'nullable|string|size:3',
+            'payment_method' => 'nullable|in:' . implode(',', BusinessExpense::PAYMENT_METHODS),
             'expense_date' => 'sometimes|required|date',
             'description' => 'nullable|string|max:1000',
             'reference_number' => 'nullable|string|max:100',
@@ -151,7 +156,15 @@ class AdminBusinessExpenseController extends Controller
         ]);
 
         try {
+            // Capture the prior debit so we can re-route it if amount/method changed.
+            $oldMethod = $expense->payment_method;
+            $oldAmount = (float) $expense->amount;
+
             $expense->update($validated);
+
+            // Reverse the old debit, apply the new one (nets to zero if unchanged).
+            \App\Models\WarChestAccount::applyDelta($oldMethod, $oldAmount);
+            \App\Models\WarChestAccount::applyDelta($expense->payment_method, -1 * (float) $expense->amount);
 
             return response()->json([
                 'success' => true,
@@ -174,6 +187,9 @@ class AdminBusinessExpenseController extends Controller
     public function destroy(BusinessExpense $expense)
     {
         try {
+            // Refund the War Chest account it was debited from.
+            \App\Models\WarChestAccount::applyDelta($expense->payment_method, (float) $expense->amount);
+
             $expense->delete();
 
             return response()->json([

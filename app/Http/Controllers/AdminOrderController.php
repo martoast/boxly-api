@@ -467,6 +467,9 @@ class AdminOrderController extends Controller
         // Refresh order to get updated values for the email
         $order->refresh();
 
+        // Money in: credit the War Chest account it was paid to.
+        \App\Models\WarChestAccount::applyDelta($order->paid_location, (float) $order->box_price);
+
         Log::info('Consolidation manually marked as paid', [
             'order_id' => $order->id,
             'amount' => $order->box_price,
@@ -549,6 +552,9 @@ class AdminOrderController extends Controller
             $order->refresh();
             Mail::to($order->user)->queue(new \App\Mail\PaymentReceived($order));
             Log::info('Payment received email queued via status update', ['order_id' => $order->id]);
+
+            // Money in: credit the War Chest account it was paid to.
+            \App\Models\WarChestAccount::applyDelta($order->paid_location, (float) $order->box_price);
 
             // Track affiliate conversion
             $this->trackAffiliateConversion($order);

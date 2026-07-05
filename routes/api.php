@@ -19,6 +19,7 @@ use App\Http\Controllers\PaymentMethodController;
 use App\Http\Controllers\TrackingController;
 use App\Http\Controllers\FunnelCaptureController;
 use App\Http\Controllers\AdminBusinessExpenseController;
+use App\Http\Controllers\AdminWarChestController;
 use App\Http\Controllers\UnifiedAdminDashboardController;
 use App\Http\Controllers\ShipmentTrackingController;
 use App\Http\Controllers\PurchaseRequestController;
@@ -436,6 +437,13 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/{expense}', [AdminBusinessExpenseController::class, 'show']);
             Route::put('/{expense}', [AdminBusinessExpenseController::class, 'update']);
             Route::delete('/{expense}', [AdminBusinessExpenseController::class, 'destroy']);
+        });
+
+        Route::prefix('war-chest')->group(function () {
+            Route::get('/', [AdminWarChestController::class, 'index']);
+            Route::post('/', [AdminWarChestController::class, 'store']);
+            Route::put('/{account}', [AdminWarChestController::class, 'update']);
+            Route::delete('/{account}', [AdminWarChestController::class, 'destroy']);
         });
 
         Route::prefix('boxes')->group(function () {

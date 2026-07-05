@@ -24,6 +24,7 @@ class AdminCreateExpenseTool extends AdminTool
         $schema->string('category')->description('Business: shipping, ads, software, office, po_box, misc. Personal: rent, food, misc.')->required();
         $schema->number('amount')->description('Amount in MXN.')->required();
         $schema->string('expense_date')->description('YYYY-MM-DD.')->required();
+        $schema->string('payment_method')->description('Optional War Chest account it was paid from: NU, HSBC, or Stripe. When set, that amount is subtracted from that account\'s balance.');
         $schema->string('description')->description('Description (for courier runs, the driver name: Paco or Jesus).');
         $schema->string('reference_number')->description('Optional reference.');
 
@@ -38,6 +39,7 @@ class AdminCreateExpenseTool extends AdminTool
                 'category' => $arguments['category'] ?? null,
                 'amount' => $arguments['amount'] ?? null,
                 'expense_date' => $arguments['expense_date'] ?? null,
+                'payment_method' => $arguments['payment_method'] ?? null,
                 'description' => $arguments['description'] ?? null,
                 'reference_number' => $arguments['reference_number'] ?? null,
             ]);
