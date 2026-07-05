@@ -86,12 +86,12 @@ class PurchaseRequestController extends Controller
             'currency' => 'nullable|in:usd,mxn',
             'items' => 'required|array|min:1',
             'items.*.product_name' => 'required|string|max:255',
-            'items.*.product_url' => 'required|string|max:2000',
+            'items.*.product_url' => 'required|string|max:16000',
             'items.*.price' => 'required|numeric|min:0',
             'items.*.quantity' => 'required|integer|min:1',
             'items.*.options' => 'nullable', // Can be array or JSON string via FormData
             'items.*.notes' => 'nullable|string|max:500',
-            'items.*.product_image_url' => 'nullable|string|max:2000', // image URL (assistant flow)
+            'items.*.product_image_url' => 'nullable|string|max:16000', // image URL (assistant flow)
             'items.*.image' => 'nullable|file|mimes:jpg,jpeg,png,webp,pdf|max:10240', // 10MB max
         ]);
 
@@ -359,8 +359,8 @@ class PurchaseRequestController extends Controller
             // without a specific list and trust Boxly to find good deals.
             'wishlist'                       => 'nullable|array',
             'wishlist.*.product_name'        => 'required_with:wishlist|string|max:255',
-            'wishlist.*.product_url'         => 'nullable|string|max:2000',
-            'wishlist.*.product_image_url'   => 'nullable|string|max:2000',
+            'wishlist.*.product_url'         => 'nullable|string|max:16000',
+            'wishlist.*.product_image_url'   => 'nullable|string|max:16000',
             'wishlist.*.notes'               => 'nullable|string|max:500',
             'wishlist.*.options'             => 'nullable',
             'wishlist.*.quantity'            => 'nullable|integer|min:1',
@@ -595,7 +595,7 @@ class PurchaseRequestController extends Controller
             'currency' => 'nullable|in:usd,mxn',
             'items' => 'required|array|min:1',
             'items.*.product_name' => 'required|string|max:255',
-            'items.*.product_url' => 'required|string|max:2000',
+            'items.*.product_url' => 'required|string|max:16000',
             'items.*.price' => 'required|numeric|min:0',
             'items.*.quantity' => 'required|integer|min:1',
             'items.*.options' => 'nullable',
