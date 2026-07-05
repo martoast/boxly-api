@@ -133,10 +133,29 @@ class AdminWarChestController extends Controller
         $in = (float) (clone $summaryBase)->where('direction', 'in')->sum('amount');
         $out = (float) (clone $summaryBase)->where('direction', 'out')->sum('amount');
 
+        // Recompute the running balance across the ENTIRE history in true
+        // chronological order (occurred_at, id). A backdated entry reorders
+        // everything after it. Invariant: the cumulative sum == current_balance.
+        $running = [];
+        $sum = 0.0;
+        $account->transactions()
+            ->orderBy('occurred_at')->orderBy('id')
+            ->get(['id', 'direction', 'amount'])
+            ->each(function ($tx) use (&$running, &$sum) {
+                $sum += $tx->direction === 'in' ? (float) $tx->amount : -1 * (float) $tx->amount;
+                $running[$tx->id] = round($sum, 2);
+            });
+
         $transactions = $query
             ->orderBy('occurred_at', 'desc')
             ->orderBy('id', 'desc')
             ->paginate($request->get('per_page', 50));
+
+        // Overlay the recomputed running balance onto the returned page.
+        $transactions->getCollection()->transform(function ($tx) use ($running) {
+            $tx->balance_after = $running[$tx->id] ?? $tx->balance_after;
+            return $tx;
+        });
 
         return response()->json([
             'success' => true,
