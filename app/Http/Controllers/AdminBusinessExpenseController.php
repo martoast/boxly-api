@@ -109,7 +109,7 @@ class AdminBusinessExpenseController extends Controller
             ]);
 
             // Money out: debit the War Chest account it was paid from.
-            \App\Models\WarChestAccount::applyDelta($expense->payment_method, -1 * (float) $expense->amount);
+            $this->addExpenseToWarChest($expense);
 
             Log::info('Business expense created', [
                 'expense_id' => $expense->id,
@@ -162,9 +162,9 @@ class AdminBusinessExpenseController extends Controller
 
             $expense->update($validated);
 
-            // Reverse the old debit, apply the new one (nets to zero if unchanged).
-            \App\Models\WarChestAccount::applyDelta($oldMethod, $oldAmount);
-            \App\Models\WarChestAccount::applyDelta($expense->payment_method, -1 * (float) $expense->amount);
+            // Undo the old ledger entry, then record the new one (clean, no reversals).
+            $this->removeExpenseFromWarChest($oldMethod, $oldAmount, $expense->id);
+            $this->addExpenseToWarChest($expense);
 
             return response()->json([
                 'success' => true,
@@ -187,8 +187,8 @@ class AdminBusinessExpenseController extends Controller
     public function destroy(BusinessExpense $expense)
     {
         try {
-            // Refund the War Chest account it was debited from.
-            \App\Models\WarChestAccount::applyDelta($expense->payment_method, (float) $expense->amount);
+            // Refund the War Chest account and remove its ledger entry.
+            $this->removeExpenseFromWarChest($expense->payment_method, (float) $expense->amount, $expense->id);
 
             $expense->delete();
 
@@ -265,5 +265,44 @@ class AdminBusinessExpenseController extends Controller
             'data' => BusinessExpense::getCategories(),          // business (backward compatible)
             'personal' => BusinessExpense::getPersonalCategories(),
         ]);
+    }
+
+    /**
+     * Debit the War Chest account for this expense's payment method and record
+     * an "expense" ledger entry. No-op when no payment method is set.
+     */
+    private function addExpenseToWarChest(BusinessExpense $expense): void
+    {
+        if (empty($expense->payment_method)) {
+            return;
+        }
+
+        \App\Models\WarChestAccount::applyDelta($expense->payment_method, -1 * (float) $expense->amount, [
+            'source_type' => 'expense',
+            'source_id' => $expense->id,
+            'description' => $expense->description ?: ucfirst((string) $expense->category),
+            'occurred_at' => $expense->expense_date ?? now(),
+            'created_by' => $expense->created_by,
+        ]);
+    }
+
+    /**
+     * Undo an expense's effect on the War Chest: credit the amount back to the
+     * account and delete its ledger entries (keeps the checkbook clean — no
+     * reversal noise).
+     */
+    private function removeExpenseFromWarChest(?string $method, float $amount, int $expenseId): void
+    {
+        if (!empty($method)) {
+            $account = \App\Models\WarChestAccount::forMethod($method);
+            if ($account) {
+                $account->current_balance = round((float) $account->current_balance + $amount, 2);
+                $account->save();
+            }
+        }
+
+        \App\Models\WarChestTransaction::where('source_type', 'expense')
+            ->where('source_id', $expenseId)
+            ->delete();
     }
 }

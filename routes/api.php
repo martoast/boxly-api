@@ -442,8 +442,12 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::prefix('war-chest')->group(function () {
             Route::get('/', [AdminWarChestController::class, 'index']);
             Route::post('/', [AdminWarChestController::class, 'store']);
+            Route::get('/{account}', [AdminWarChestController::class, 'show']);
             Route::put('/{account}', [AdminWarChestController::class, 'update']);
             Route::delete('/{account}', [AdminWarChestController::class, 'destroy']);
+            Route::get('/{account}/transactions', [AdminWarChestController::class, 'transactions']);
+            Route::post('/{account}/transactions', [AdminWarChestController::class, 'storeTransaction']);
+            Route::delete('/{account}/transactions/{transaction}', [AdminWarChestController::class, 'destroyTransaction']);
         });
 
         Route::prefix('boxes')->group(function () {

@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Facades\Log;
 
 class WarChestAccount extends Model
@@ -24,25 +25,60 @@ class WarChestAccount extends Model
         'is_active' => 'boolean',
     ];
 
-    /**
-     * Apply a signed delta to the account routed to $paymentMethod
-     * (e.g. NU / HSBC / Stripe). Positive = money in, negative = money out.
-     * No-ops safely when the method is empty or has no matching account, so
-     * order/expense flows never fail because the war chest isn't set up.
-     */
-    public static function applyDelta(?string $paymentMethod, float $delta): void
+    public function transactions(): HasMany
     {
-        if (empty($paymentMethod) || $delta == 0.0) {
-            return;
+        return $this->hasMany(WarChestTransaction::class, 'account_id');
+    }
+
+    public static function forMethod(?string $paymentMethod): ?self
+    {
+        if (empty($paymentMethod)) {
+            return null;
+        }
+        return static::where('payment_method', $paymentMethod)->first();
+    }
+
+    /**
+     * Adjust this account's balance by a signed delta and RECORD a ledger
+     * transaction. Positive = money in, negative = money out. Returns the
+     * created transaction (or null when delta is zero).
+     *
+     * $source keys: source_type, source_id, description, occurred_at, created_by.
+     */
+    public function move(float $delta, array $source = []): ?WarChestTransaction
+    {
+        if ($delta == 0.0) {
+            return null;
         }
 
-        $account = static::where('payment_method', $paymentMethod)->first();
+        $this->current_balance = round((float) $this->current_balance + $delta, 2);
+        $this->save();
+
+        return $this->transactions()->create([
+            'direction' => $delta >= 0 ? 'in' : 'out',
+            'amount' => round(abs($delta), 2),
+            'balance_after' => $this->current_balance,
+            'source_type' => $source['source_type'] ?? 'manual',
+            'source_id' => $source['source_id'] ?? null,
+            'description' => $source['description'] ?? null,
+            'occurred_at' => $source['occurred_at'] ?? now(),
+            'created_by' => $source['created_by'] ?? null,
+        ]);
+    }
+
+    /**
+     * Route a signed delta to the account for $paymentMethod, recording a
+     * ledger transaction. No-ops safely when the method is empty or has no
+     * matching account, so order/expense flows never fail if it isn't set up.
+     */
+    public static function applyDelta(?string $paymentMethod, float $delta, array $source = []): ?WarChestTransaction
+    {
+        $account = static::forMethod($paymentMethod);
         if (!$account) {
-            return;
+            return null;
         }
 
-        $account->current_balance = round((float) $account->current_balance + $delta, 2);
-        $account->save();
+        $txn = $account->move($delta, $source);
 
         Log::info('War chest balance adjusted', [
             'account_id' => $account->id,
@@ -50,5 +86,7 @@ class WarChestAccount extends Model
             'delta' => $delta,
             'new_balance' => $account->current_balance,
         ]);
+
+        return $txn;
     }
 }
