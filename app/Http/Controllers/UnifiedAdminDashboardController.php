@@ -118,8 +118,8 @@ class UnifiedAdminDashboardController extends Controller
             ->selectRaw("DATE_FORMAT(created_at, '%Y-%m') as ym, COUNT(*) as cnt")
             ->groupBy('ym')->get()->keyBy('ym');
 
-        // Expenses by expense_date month.
-        $expenses = BusinessExpense::selectRaw("DATE_FORMAT(expense_date, '%Y-%m') as ym, SUM(amount) as total")
+        // Expenses by expense_date month (business only — profit excludes personal).
+        $expenses = BusinessExpense::business()->selectRaw("DATE_FORMAT(expense_date, '%Y-%m') as ym, SUM(amount) as total")
             ->groupBy('ym')->get()->keyBy('ym');
 
         // New customers by created_at month.
@@ -285,7 +285,7 @@ class UnifiedAdminDashboardController extends Controller
         $e = $w['end'];
 
         $revenue = $this->revenueInWindow($s, $e) + $this->manualRevenueInWindow($s, $e);
-        $expenses = (float) BusinessExpense::whereBetween('expense_date', [$s, $e])->sum('amount');
+        $expenses = (float) BusinessExpense::business()->whereBetween('expense_date', [$s, $e])->sum('amount');
         $profit = $revenue - $expenses;
         $margin = $revenue > 0 ? round(($profit / $revenue) * 100, 1) : 0;
 
@@ -343,7 +343,7 @@ class UnifiedAdminDashboardController extends Controller
         foreach ($prRows as $r) {
             $fees[$r->bk] = ($fees[$r->bk] ?? 0) + ($r->currency === 'usd' ? $r->total * self::FX : $r->total);
         }
-        $exp = BusinessExpense::whereBetween('expense_date', [$s, $e])
+        $exp = BusinessExpense::business()->whereBetween('expense_date', [$s, $e])
             ->selectRaw("DATE_FORMAT(expense_date, '$fmt') as bk, SUM(amount) as total")
             ->groupBy('bk')->get()->keyBy('bk');
         // Orders placed (created_at) + new customers, per bucket.
@@ -946,7 +946,8 @@ class UnifiedAdminDashboardController extends Controller
             ->whereBetween('created_at', [$start, $end])
             ->count();
 
-        $expensesQuery = BusinessExpense::whereBetween('expense_date', [$start, $end]);
+        // Business expenses only — personal expenses never touch profit.
+        $expensesQuery = BusinessExpense::business()->whereBetween('expense_date', [$start, $end]);
         $calculatedExpensesByCategory = [
             'shipping' => round($expensesQuery->clone()->where('category', 'shipping')->sum('amount'), 2),
             'ads' => round($expensesQuery->clone()->where('category', 'ads')->sum('amount'), 2),
@@ -990,9 +991,9 @@ class UnifiedAdminDashboardController extends Controller
 
             $totalConversations = MonthlyManualMetric::sum('total_conversations');
 
-            $allExpensesQuery = BusinessExpense::query();
+            $allExpensesQuery = BusinessExpense::business();
             $allTotalExpenses = $allExpensesQuery->sum('amount');
-            $allAdSpend = BusinessExpense::where('category', 'ads')->sum('amount');
+            $allAdSpend = BusinessExpense::business()->where('category', 'ads')->sum('amount');
 
             $profit = $totalRevenue - $allTotalExpenses;
             $profitMargin = $totalRevenue > 0 ? ($profit / $totalRevenue) * 100 : 0;
@@ -1022,6 +1023,7 @@ class UnifiedAdminDashboardController extends Controller
                     'service_fee_revenue' => round($allServiceFeeMXN, 2),
                 ],
                 'expenses' => $calculatedExpensesByCategory,
+                'personal_expenses' => $this->personalExpenseBreakdown(),
                 'profit' => [
                     'amount' => round($profit, 2),
                     'margin' => round($profitMargin, 2),
@@ -1137,6 +1139,7 @@ class UnifiedAdminDashboardController extends Controller
                 ]
             ],
             'expenses' => $expensesResponse,
+            'personal_expenses' => $this->personalExpenseBreakdown($start, $end),
             'profit' => [
                 'amount' => round($profit, 2),
                 'margin' => round($profitMargin, 2),
@@ -1164,6 +1167,30 @@ class UnifiedAdminDashboardController extends Controller
                 'notes' => $manualMetric->notes,
                 'last_updated' => $manualMetric->updated_at,
             ] : null,
+        ];
+    }
+
+    /**
+     * Personal expense breakdown (rent/food/misc + total). Tracked separately
+     * from business expenses and never counted against business profit.
+     * Pass a date window for period mode; omit for all-time.
+     */
+    private function personalExpenseBreakdown($start = null, $end = null): array
+    {
+        $q = BusinessExpense::personal();
+        if ($start && $end) {
+            $q->whereBetween('expense_date', [$start, $end]);
+        }
+
+        $rent = round((clone $q)->where('category', 'rent')->sum('amount'), 2);
+        $food = round((clone $q)->where('category', 'food')->sum('amount'), 2);
+        $misc = round((clone $q)->where('category', 'misc')->sum('amount'), 2);
+
+        return [
+            'rent' => $rent,
+            'food' => $food,
+            'misc' => $misc,
+            'total' => round($rent + $food + $misc, 2),
         ];
     }
 

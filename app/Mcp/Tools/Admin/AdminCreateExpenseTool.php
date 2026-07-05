@@ -15,12 +15,13 @@ class AdminCreateExpenseTool extends AdminTool
 
     public function description(): string
     {
-        return 'Log a business expense. Shorthand "expense for Paco/Jesus for <date> for <amount>" = category shipping, description = the courier name (Paco and Jesus are the Estafeta drivers). Amount is MXN.';
+        return 'Log an expense. scope="business" (default) for company costs; categories shipping, ads, software, office, po_box, misc. scope="personal" for the owners\' own spending; categories rent, food, misc (personal has NO subcategory). Shorthand "expense for Paco/Jesus for <date> for <amount>" = business, category shipping, description = the courier name (Paco and Jesus are the Estafeta drivers). "personal rent 8000" = scope personal, category rent. Amount is MXN.';
     }
 
     public function schema(ToolInputSchema $schema): ToolInputSchema
     {
-        $schema->string('category')->description('shipping, ads, software, office, po_box, misc.')->required();
+        $schema->string('scope')->description('business (default) or personal. Business feeds company profit; personal is the owners\' own money, tracked separately.');
+        $schema->string('category')->description('Business: shipping, ads, software, office, po_box, misc. Personal: rent, food, misc.')->required();
         $schema->number('amount')->description('Amount in MXN.')->required();
         $schema->string('expense_date')->description('YYYY-MM-DD.')->required();
         $schema->string('description')->description('Description (for courier runs, the driver name: Paco or Jesus).');
@@ -33,6 +34,7 @@ class AdminCreateExpenseTool extends AdminTool
     {
         return $this->guardAdmin(function () use ($arguments) {
             $this->mergeInput([
+                'scope' => $arguments['scope'] ?? null,
                 'category' => $arguments['category'] ?? null,
                 'amount' => $arguments['amount'] ?? null,
                 'expense_date' => $arguments['expense_date'] ?? null,

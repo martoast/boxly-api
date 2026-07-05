@@ -108,8 +108,12 @@ class BoxlyServer extends Server
     - Confirm before any write that touches a customer: changing order status,
       quoting/marking/rejecting a purchase request, creating a customer, or
       creating a campaign.
-    - Expense shorthand: "expense for Paco/Jesus for <date> for <amount>" =
-      category shipping, description = the courier name. Amounts MXN.
+    - Expenses have a scope: "business" (default — company costs, feeds profit)
+      or "personal" (the owners' own money, tracked separately, never in profit).
+      Business shorthand: "expense for Paco/Jesus for <date> for <amount>" =
+      scope business, category shipping, description = the courier name.
+      Personal: "personal rent/food/misc <amount>" = scope personal + that
+      category. Amounts MXN. Don't ask clarifying questions, just log it.
     - Campaigns are created as drafts and are never sent automatically.
     - Product discovery (to help a customer or research): search_products searches
       the whole US market (any store), browse_store pulls a Shopify store's

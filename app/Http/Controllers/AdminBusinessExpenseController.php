@@ -16,6 +16,11 @@ class AdminBusinessExpenseController extends Controller
     {
         $query = BusinessExpense::with('creator');
 
+        // Filter by scope (business | personal). Omit for all.
+        if ($request->filled('scope')) {
+            $query->where('scope', $request->scope);
+        }
+
         // Filter by category
         if ($request->has('category')) {
             $query->where('category', $request->category);
@@ -83,6 +88,7 @@ class AdminBusinessExpenseController extends Controller
     public function store(Request $request)
     {
         $validated = $request->validate([
+            'scope' => 'nullable|in:business,personal',
             'category' => 'required|string|max:50',
             'subcategory' => 'nullable|string|max:50',
             'amount' => 'required|numeric|min:0.01|max:9999999.99',
@@ -97,6 +103,7 @@ class AdminBusinessExpenseController extends Controller
             $expense = BusinessExpense::create([
                 ...$validated,
                 'created_by' => $request->user()->id,
+                'scope' => $validated['scope'] ?? BusinessExpense::SCOPE_BUSINESS,
                 'currency' => $validated['currency'] ?? 'mxn',
             ]);
 
@@ -132,6 +139,7 @@ class AdminBusinessExpenseController extends Controller
     public function update(Request $request, BusinessExpense $expense)
     {
         $validated = $request->validate([
+            'scope' => 'sometimes|required|in:business,personal',
             'category' => 'sometimes|required|string|max:50',
             'subcategory' => 'nullable|string|max:50',
             'amount' => 'sometimes|required|numeric|min:0.01|max:9999999.99',
@@ -189,6 +197,7 @@ class AdminBusinessExpenseController extends Controller
     {
         $request->validate([
             'expenses' => 'required|array|min:1|max:500',
+            'expenses.*.scope' => 'nullable|in:business,personal',
             'expenses.*.category' => 'required|string|max:50',
             'expenses.*.amount' => 'required|numeric|min:0.01',
             'expenses.*.expense_date' => 'required|date',
@@ -204,6 +213,7 @@ class AdminBusinessExpenseController extends Controller
                 $expense = BusinessExpense::create([
                     ...$expenseData,
                     'created_by' => $request->user()->id,
+                    'scope' => $expenseData['scope'] ?? BusinessExpense::SCOPE_BUSINESS,
                     'currency' => $expenseData['currency'] ?? 'mxn',
                 ]);
 
@@ -236,7 +246,8 @@ class AdminBusinessExpenseController extends Controller
     {
         return response()->json([
             'success' => true,
-            'data' => BusinessExpense::getCategories()
+            'data' => BusinessExpense::getCategories(),          // business (backward compatible)
+            'personal' => BusinessExpense::getPersonalCategories(),
         ]);
     }
 }
