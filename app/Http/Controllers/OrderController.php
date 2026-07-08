@@ -5,6 +5,8 @@ namespace App\Http\Controllers;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\User;
+use App\Mail\OrderStatusChanged;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Http\Request;
 use App\Http\Requests\CompleteOrderRequest;
 use Illuminate\Support\Facades\DB;
@@ -110,8 +112,18 @@ class OrderController extends Controller
                 \App\Jobs\SendOrderPlacedWebhookJob::dispatch($user);
             }
 
-            // Note: Email is automatically sent via OrderStatusChanged event when status is set to 'collecting'
-            // The status-changed.blade.php template handles both shipping and crossing-only orders
+            // Send the "order registered" confirmation. The model's status-change
+            // watcher only fires on UPDATES (needs a previousStatus), so a brand-new
+            // order sent no email — customers who registered a package (incl. via the
+            // AI chat, same endpoint) never got a confirmation. Send it here on create,
+            // reusing the 'collecting' status template. Best-effort — never fail the order.
+            try {
+                Mail::to($order->user)->queue(new OrderStatusChanged($order, ''));
+            } catch (\Throwable $e) {
+                Log::error('Failed to send order-created confirmation email', [
+                    'order_id' => $order->id, 'error' => $e->getMessage(),
+                ]);
+            }
 
             // Notify admins about new order (optional - uncomment when ready)
             // $admins = User::where('role', 'admin')->get();
