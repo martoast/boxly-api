@@ -86,7 +86,7 @@ class PurchaseRequestController extends Controller
             'currency' => 'nullable|in:usd,mxn',
             'items' => 'required|array|min:1',
             'items.*.product_name' => 'required|string|max:255',
-            'items.*.product_url' => 'required|string|max:16000',
+            'items.*.product_url' => 'nullable|string|max:16000', // name-only assisted items allowed
             'items.*.price' => 'required|numeric|min:0',
             'items.*.quantity' => 'required|integer|min:1',
             'items.*.options' => 'nullable', // Can be array or JSON string via FormData
@@ -125,7 +125,7 @@ class PurchaseRequestController extends Controller
                 $item = PurchaseRequestItem::create([
                     'purchase_request_id' => $pr->id,
                     'product_name' => $itemData['product_name'],
-                    'product_url' => $itemData['product_url'],
+                    'product_url' => $itemData['product_url'] ?? '',
                     'product_image_url' => $itemData['product_image_url'] ?? null,
                     'price' => $itemData['price'],
                     'quantity' => $itemData['quantity'],
@@ -445,7 +445,7 @@ class PurchaseRequestController extends Controller
                 $item = PurchaseRequestItem::create([
                     'purchase_request_id' => $pr->id,
                     'product_name'        => $itemData['product_name'],
-                    'product_url'         => $itemData['product_url'] ?? null,
+                    'product_url'         => $itemData['product_url'] ?? '',
                     'product_image_url'   => $itemData['product_image_url'] ?? null,
                     // Price is unknown until the trip — admin fills it in
                     // when flipping the wish to 'available'. Persist 0 so
@@ -595,7 +595,7 @@ class PurchaseRequestController extends Controller
             'currency' => 'nullable|in:usd,mxn',
             'items' => 'required|array|min:1',
             'items.*.product_name' => 'required|string|max:255',
-            'items.*.product_url' => 'required|string|max:16000',
+            'items.*.product_url' => 'nullable|string|max:16000', // name-only assisted items allowed
             'items.*.price' => 'required|numeric|min:0',
             'items.*.quantity' => 'required|integer|min:1',
             'items.*.options' => 'nullable',
@@ -642,7 +642,7 @@ class PurchaseRequestController extends Controller
                     // Update existing
                     $item->update([
                         'product_name' => $itemData['product_name'],
-                        'product_url' => $itemData['product_url'],
+                        'product_url' => $itemData['product_url'] ?? '',
                         'price' => $itemData['price'],
                         'quantity' => $itemData['quantity'],
                         'options' => $options,
@@ -653,7 +653,7 @@ class PurchaseRequestController extends Controller
                     $item = PurchaseRequestItem::create([
                         'purchase_request_id' => $purchaseRequest->id,
                         'product_name' => $itemData['product_name'],
-                        'product_url' => $itemData['product_url'],
+                        'product_url' => $itemData['product_url'] ?? '',
                         'price' => $itemData['price'],
                         'quantity' => $itemData['quantity'],
                         'options' => $options,
