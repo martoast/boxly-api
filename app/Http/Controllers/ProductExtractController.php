@@ -212,8 +212,10 @@ class ProductExtractController extends Controller
         if ($start === 0) {
             try {
                 SearchEvent::create([
-                    'type'           => SearchEvent::TYPE_SEARCH,
-                    'query'          => mb_substr(trim($validated['query']), 0, 255),
+                    'user_id'         => optional(auth('sanctum')->user())->id ?? optional($request->user())->id,
+                    'conversation_id' => $request->integer('conversation_id') ?: null,
+                    'type'            => SearchEvent::TYPE_SEARCH,
+                    'query'           => mb_substr(trim($validated['query']), 0, 255),
                     'results'        => count($shown),
                     'results_sample' => array_map(fn ($p) => [
                         'store' => $p['store'] ?? null,

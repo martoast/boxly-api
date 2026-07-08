@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Conversation;
 use App\Models\PurchaseRequest;
 use App\Models\SearchEvent;
 use Illuminate\Http\Request;
@@ -29,6 +30,7 @@ class SearchEventController extends Controller
                 'url'     => 'nullable|string|max:2000',
                 'results' => 'nullable|integer|min:0',
                 'answer'  => 'nullable|string', // for questions: what the assistant replied
+                'conversation_id' => 'nullable|integer', // the chat thread this happened in
             ]);
 
             $userId = optional(auth('sanctum')->user())->id ?? optional($request->user())->id;
@@ -43,6 +45,7 @@ class SearchEventController extends Controller
 
             SearchEvent::create([
                 'user_id'        => $userId,
+                'conversation_id' => $data['conversation_id'] ?? null,
                 'type'           => $data['type'],
                 'query'          => isset($data['query']) ? mb_substr(trim($data['query']), 0, 1000) : null,
                 'store'          => $data['store'] ?? null,
@@ -74,10 +77,11 @@ class SearchEventController extends Controller
             fwrite($out, "\xEF\xBB\xBF");
             fputcsv($out, [
                 'id', 'created_at', 'type', 'query', 'answer', 'results',
-                'result_stores', 'result_titles', 'store', 'title', 'url', 'user_id', 'results_json',
+                'result_stores', 'result_titles', 'store', 'title', 'url',
+                'user_id', 'user_name', 'user_email', 'results_json',
             ]);
 
-            $q = SearchEvent::query()->orderBy('id');
+            $q = SearchEvent::query()->with('user:id,name,email')->orderBy('id');
             if ($days > 0) {
                 $q->where('created_at', '>=', Carbon::now()->subDays($days)->startOfDay());
             }
@@ -98,6 +102,8 @@ class SearchEventController extends Controller
                         $e->title,
                         $e->url,
                         $e->user_id,
+                        optional($e->user)->name,
+                        optional($e->user)->email,
                         $sample ? json_encode($sample, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : '',
                     ]);
                 }
@@ -187,12 +193,15 @@ class SearchEventController extends Controller
             // Recent questions WITH the assistant's answer (stored in results_sample)
             // — the Q&A pairs an admin (or an AI) can review.
             $recentQuestions = (clone $questions)->whereNotNull('query')->where('query', '<>', '')
-                ->latest()->limit(40)->get(['query', 'results_sample', 'user_id', 'created_at'])
+                ->with('user:id,name,email')
+                ->latest()->limit(40)->get(['id', 'query', 'results_sample', 'user_id', 'conversation_id', 'created_at'])
                 ->map(fn ($e) => [
-                    'query'      => $e->query,
-                    'answer'     => collect($e->results_sample ?? [])->pluck('answer')->filter()->first(),
-                    'guest'      => $e->user_id === null,
-                    'created_at' => $e->created_at,
+                    'query'           => $e->query,
+                    'answer'          => collect($e->results_sample ?? [])->pluck('answer')->filter()->first(),
+                    'guest'           => $e->user_id === null,
+                    'user'            => $e->user ? ['name' => $e->user->name, 'email' => $e->user->email] : null,
+                    'conversation_id' => $e->conversation_id,
+                    'created_at'      => $e->created_at,
                 ]);
 
             $guestQuestions = (clone $questions)->whereNull('user_id')->count();
@@ -211,13 +220,17 @@ class SearchEventController extends Controller
 
             // Query → results: the most recent searches with what we served.
             $recentSearches = (clone $searches)->whereNotNull('results')
-                ->latest()->limit(30)->get(['query', 'results', 'results_sample', 'created_at'])
+                ->with('user:id,name,email')
+                ->latest()->limit(30)->get(['id', 'query', 'results', 'results_sample', 'user_id', 'conversation_id', 'created_at'])
                 ->map(fn ($e) => [
-                    'query'      => $e->query,
-                    'results'    => $e->results,
-                    'stores'     => collect($e->results_sample ?? [])->pluck('store')
+                    'query'           => $e->query,
+                    'results'         => $e->results,
+                    'stores'          => collect($e->results_sample ?? [])->pluck('store')
                         ->filter()->map(fn ($s) => $this->normStore($s))->unique()->take(6)->values(),
-                    'created_at' => $e->created_at,
+                    'guest'           => $e->user_id === null,
+                    'user'            => $e->user ? ['name' => $e->user->name, 'email' => $e->user->email] : null,
+                    'conversation_id' => $e->conversation_id,
+                    'created_at'      => $e->created_at,
                 ]);
 
             // Stores our ALGORITHM returns most (across served results) — compare
@@ -280,5 +293,30 @@ class SearchEventController extends Controller
                 'unavailable' => true,
             ]]);
         }
+    }
+
+    /**
+     * Admin: the FULL chat thread behind a search/question — every message the
+     * user exchanged with the AI, so admins can review the whole conversation.
+     * Admin-gated by the route group; loads any conversation by id.
+     */
+    public function thread(Conversation $conversation)
+    {
+        $conversation->load('user:id,name,email');
+
+        $messages = $conversation->messages()
+            ->orderBy('id')
+            ->limit(500)
+            ->get(['id', 'role', 'content', 'created_at']);
+
+        return response()->json(['success' => true, 'data' => [
+            'id'         => $conversation->id,
+            'title'      => $conversation->title,
+            'created_at' => $conversation->created_at,
+            'user'       => $conversation->user
+                ? ['id' => $conversation->user->id, 'name' => $conversation->user->name, 'email' => $conversation->user->email]
+                : null,
+            'messages'   => $messages,
+        ]]);
     }
 }
