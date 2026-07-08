@@ -431,34 +431,79 @@ class UnifiedAdminDashboardController extends Controller
         $names = self::STATE_NAMES;
         $norm = fn ($s) => \Illuminate\Support\Str::ascii(mb_strtolower(trim((string) $s)));
 
+        // States choropleth (by estado code) and city map-points are built from the
+        // SAME normalized locations, so every order counts no matter how its address
+        // was captured: a Google Maps link (exact lat/lng), the order's structured
+        // fields, or — as a fallback — the customer's saved profile.
         $byCode = [];
-        $bump = function (&$arr, $code, $field, $val) {
+        $bumpState = function (&$arr, $code, $field, $val) {
             $arr[$code] ??= ['customers' => 0, 'orders' => 0, 'revenue' => 0];
             $arr[$code][$field] += $val;
         };
 
-        // Customers by state (acquired in window).
-        $custRows = User::where('role', 'customer')->whereBetween('created_at', [$s, $e])
-            ->whereNotNull('estado')->where('estado', '!=', '')
-            ->selectRaw('estado, COUNT(*) as c')->groupBy('estado')->get();
-        foreach ($custRows as $r) {
-            if ($code = $map[$norm($r->estado)] ?? null) {
-                $bump($byCode, $code, 'customers', (int) $r->c);
+        $byCity = [];
+        $cityBump = function (&$arr, $loc, $field, $val) use ($norm) {
+            if (! $loc) {
+                return;
             }
+            $city = trim((string) ($loc['city'] ?? ''));
+            $estado = trim((string) ($loc['estado'] ?? ''));
+            $hasGps = ($loc['lat'] ?? null) !== null && ($loc['lng'] ?? null) !== null;
+            // Prefer a city|estado key so structured + GPS orders in the same city
+            // merge into one node; fall back to a coordinate key only when we could
+            // not name the city (e.g. a Maps link with no place label).
+            $key = $city !== ''
+                ? ($norm($city) . '|' . $norm($estado))
+                : ($hasGps ? 'gps:' . round($loc['lat'], 4) . ',' . round($loc['lng'], 4) : null);
+            if (! $key) {
+                return;
+            }
+            $arr[$key] ??= [
+                'city' => $city !== '' ? $city : 'Ubicación GPS',
+                'estado' => $estado,
+                'customers' => 0, 'orders' => 0, 'revenue' => 0,
+                'lat' => null, 'lng' => null,
+            ];
+            $arr[$key][$field] += $val;
+            // First real coordinate becomes the node's exact plotting point.
+            if ($hasGps && $arr[$key]['lat'] === null) {
+                $arr[$key]['lat'] = round((float) $loc['lat'], 6);
+                $arr[$key]['lng'] = round((float) $loc['lng'], 6);
+            }
+        };
+
+        // Customers acquired in the window — located from their profile.
+        $customers = User::where('role', 'customer')->whereBetween('created_at', [$s, $e])
+            ->get(['id', 'municipio', 'estado', 'google_maps_link']);
+        foreach ($customers as $u) {
+            $loc = $this->resolveUserLocation($u);
+            if (! $loc) {
+                continue;
+            }
+            if ($code = $map[$norm($loc['estado'])] ?? null) {
+                $bumpState($byCode, $code, 'customers', 1);
+            }
+            $cityBump($byCity, $loc, 'customers', 1);
         }
 
-        // Orders + revenue by the order customer's state (orders placed in window).
-        $orderRows = Order::join('users', 'orders.user_id', '=', 'users.id')
-            ->whereNotIn('orders.status', ['cancelled'])
-            ->whereBetween('orders.created_at', [$s, $e])
-            ->whereNotNull('users.estado')->where('users.estado', '!=', '')
-            ->selectRaw("users.estado as estado, COUNT(*) as o, SUM(CASE WHEN orders.paid_at IS NOT NULL THEN COALESCE(orders.amount_paid, orders.deposit_amount, 0) ELSE 0 END) as rev")
-            ->groupBy('users.estado')->get();
-        foreach ($orderRows as $r) {
-            if ($code = $map[$norm($r->estado)] ?? null) {
-                $bump($byCode, $code, 'orders', (int) $r->o);
-                $bump($byCode, $code, 'revenue', (float) $r->rev);
+        // Orders placed in the window — located from the ORDER address first
+        // (Maps link → structured fields), then the customer's profile.
+        $orders = Order::with('user:id,municipio,estado,google_maps_link')
+            ->whereNotIn('status', ['cancelled'])
+            ->whereBetween('created_at', [$s, $e])
+            ->get(['id', 'user_id', 'delivery_address', 'amount_paid', 'deposit_amount', 'paid_at']);
+        foreach ($orders as $o) {
+            $loc = $this->resolveOrderLocation($o);
+            if (! $loc) {
+                continue;
             }
+            $rev = $o->paid_at ? (float) ($o->amount_paid ?? $o->deposit_amount ?? 0) : 0;
+            if ($code = $map[$norm($loc['estado'])] ?? null) {
+                $bumpState($byCode, $code, 'orders', 1);
+                $bumpState($byCode, $code, 'revenue', $rev);
+            }
+            $cityBump($byCity, $loc, 'orders', 1);
+            $cityBump($byCity, $loc, 'revenue', $rev);
         }
 
         $states = [];
@@ -472,35 +517,14 @@ class UnifiedAdminDashboardController extends Controller
             ];
         }
 
-        // --- Cities (municipio) for the Mapbox map points ---
-        $byCity = [];
-        $cityBump = function (&$arr, $key, $city, $estado, $field, $val) {
-            $arr[$key] ??= ['city' => $city, 'estado' => $estado, 'customers' => 0, 'orders' => 0, 'revenue' => 0];
-            $arr[$key][$field] += $val;
-        };
-        $custCity = User::where('role', 'customer')->whereBetween('created_at', [$s, $e])
-            ->whereNotNull('municipio')->where('municipio', '!=', '')
-            ->selectRaw('municipio, estado, COUNT(*) as c')->groupBy('municipio', 'estado')->get();
-        foreach ($custCity as $r) {
-            $cityBump($byCity, $norm($r->municipio) . '|' . $norm($r->estado), $r->municipio, $r->estado, 'customers', (int) $r->c);
-        }
-        $orderCity = Order::join('users', 'orders.user_id', '=', 'users.id')
-            ->whereNotIn('orders.status', ['cancelled'])
-            ->whereBetween('orders.created_at', [$s, $e])
-            ->whereNotNull('users.municipio')->where('users.municipio', '!=', '')
-            ->selectRaw("users.municipio as municipio, users.estado as estado, COUNT(*) as o, SUM(CASE WHEN orders.paid_at IS NOT NULL THEN COALESCE(orders.amount_paid, orders.deposit_amount, 0) ELSE 0 END) as rev")
-            ->groupBy('users.municipio', 'users.estado')->get();
-        foreach ($orderCity as $r) {
-            $key = $norm($r->municipio) . '|' . $norm($r->estado);
-            $cityBump($byCity, $key, $r->municipio, $r->estado, 'orders', (int) $r->o);
-            $cityBump($byCity, $key, $r->municipio, $r->estado, 'revenue', (float) $r->rev);
-        }
         $cities = array_map(fn ($v) => [
             'city' => $v['city'],
             'estado' => $v['estado'],
             'customers' => (int) $v['customers'],
             'orders' => (int) $v['orders'],
             'revenue' => round($v['revenue'], 2),
+            'lat' => $v['lat'],
+            'lng' => $v['lng'],
         ], array_values($byCity));
 
         return response()->json([
@@ -517,6 +541,105 @@ class UnifiedAdminDashboardController extends Controller
             ],
             'generated_at' => now()->toIso8601String(),
         ]);
+    }
+
+    /** Common Mexican state abbreviations (as they appear in Google Maps place labels). */
+    private const ESTADO_ABBREV = [
+        'b.c.' => 'Baja California', 'bc' => 'Baja California', 'b c' => 'Baja California',
+        'b.c.s.' => 'Baja California Sur', 'bcs' => 'Baja California Sur',
+        'cdmx' => 'Ciudad de México', 'd.f.' => 'Ciudad de México', 'df' => 'Ciudad de México',
+        'edomex' => 'Estado de México', 'edo. mex.' => 'Estado de México', 'mex.' => 'Estado de México',
+        'n.l.' => 'Nuevo León', 'nl' => 'Nuevo León',
+        'q. roo' => 'Quintana Roo', 'q.roo' => 'Quintana Roo', 'qroo' => 'Quintana Roo',
+        'slp' => 'San Luis Potosí', 's.l.p.' => 'San Luis Potosí',
+        'gto.' => 'Guanajuato', 'jal.' => 'Jalisco', 'ver.' => 'Veracruz', 'mich.' => 'Michoacán',
+        'tamps.' => 'Tamaulipas', 'chih.' => 'Chihuahua', 'coah.' => 'Coahuila', 'son.' => 'Sonora',
+        'sin.' => 'Sinaloa', 'pue.' => 'Puebla', 'oax.' => 'Oaxaca', 'gro.' => 'Guerrero',
+    ];
+
+    /** Expand a state abbreviation to its full name (leaves full names untouched). */
+    private function expandEstado(?string $s): string
+    {
+        $s = trim((string) $s);
+        if ($s === '') {
+            return '';
+        }
+        return self::ESTADO_ABBREV[mb_strtolower($s)] ?? $s;
+    }
+
+    /**
+     * Parse a Google Maps URL into [lat, lng, city, estado] (best-effort; any field
+     * may be null). Coordinates come from the place marker (!3d/!4d) or the view
+     * centre (@lat,lng); the city/estado come from the /place/<label>/ segment.
+     */
+    private function parseGoogleMapsLink(?string $url): array
+    {
+        $out = ['lat' => null, 'lng' => null, 'city' => null, 'estado' => null];
+        if (! $url) {
+            return $out;
+        }
+        if (preg_match('/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/', $url, $m)) {
+            $out['lat'] = (float) $m[1];
+            $out['lng'] = (float) $m[2];
+        } elseif (preg_match('/@(-?\d+\.\d+),(-?\d+\.\d+)/', $url, $m)) {
+            $out['lat'] = (float) $m[1];
+            $out['lng'] = (float) $m[2];
+        }
+        if (preg_match('~/maps/place/([^/@]+)~', $url, $m)) {
+            $place = rawurldecode(str_replace('+', ' ', $m[1]));
+            $parts = array_values(array_filter(array_map('trim', explode(',', $place)), fn ($p) => $p !== ''));
+            if (count($parts) >= 2) {
+                $out['estado'] = $this->expandEstado(end($parts));
+                // Second-to-last segment is usually "<postal> <City>" → strip the postal.
+                $out['city'] = trim(preg_replace('/^\d{4,5}\s*/', '', $parts[count($parts) - 2])) ?: null;
+            }
+        }
+        return $out;
+    }
+
+    /** Locate a user from their profile: Maps link (exact) → structured municipio/estado. */
+    private function resolveUserLocation($u): ?array
+    {
+        if (! empty($u->google_maps_link)) {
+            $g = $this->parseGoogleMapsLink($u->google_maps_link);
+            if ($g['lat'] !== null) {
+                return [
+                    'city' => $g['city'] ?: ($u->municipio ?: 'Ubicación GPS'),
+                    'estado' => $g['estado'] ?: ($u->estado ?: ''),
+                    'lat' => $g['lat'], 'lng' => $g['lng'],
+                ];
+            }
+        }
+        if (! empty($u->municipio) && ! empty($u->estado)) {
+            return ['city' => $u->municipio, 'estado' => $u->estado, 'lat' => null, 'lng' => null];
+        }
+        return null;
+    }
+
+    /**
+     * Locate an order: its Maps link (exact) → its structured fields → the Maps link
+     * or structured fields on the customer's profile. Returns null when nothing is
+     * placeable (e.g. only a free-text full_address we can't geocode).
+     */
+    private function resolveOrderLocation($order): ?array
+    {
+        $addr = is_array($order->delivery_address) ? $order->delivery_address : [];
+        $user = $order->user;
+
+        if (! empty($addr['google_maps_link'])) {
+            $g = $this->parseGoogleMapsLink($addr['google_maps_link']);
+            if ($g['lat'] !== null) {
+                return [
+                    'city' => $g['city'] ?: ($addr['municipio'] ?? $user?->municipio ?: 'Ubicación GPS'),
+                    'estado' => $g['estado'] ?: ($addr['estado'] ?? $user?->estado ?: ''),
+                    'lat' => $g['lat'], 'lng' => $g['lng'],
+                ];
+            }
+        }
+        if (! empty($addr['municipio']) && ! empty($addr['estado'])) {
+            return ['city' => $addr['municipio'], 'estado' => $addr['estado'], 'lat' => null, 'lng' => null];
+        }
+        return $this->resolveUserLocation($user);
     }
 
     /** Normalized (Str::ascii + lowercase) estado name => @svg-maps/mexico code. */
