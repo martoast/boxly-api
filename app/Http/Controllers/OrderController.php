@@ -46,6 +46,10 @@ class OrderController extends Controller
     {
         $isShipping = $request->order_type === 'shipping' || $request->order_type === null;
         $hasFullAddress = !empty($request->input('delivery_address.full_address'));
+        // A Google Maps link is a complete, accurate address on its own — so, like
+        // a full_address, it lifts the requirement for the individual fields.
+        $hasGmaps = !empty($request->input('delivery_address.google_maps_link'));
+        $needsFields = $isShipping && !$hasFullAddress && !$hasGmaps;
 
         $request->validate([
             'order_type' => 'nullable|string|in:shipping,crossing',
@@ -54,14 +58,15 @@ class OrderController extends Controller
             // Option 1: Simple full_address string
             'delivery_address.full_address' => 'nullable|string|max:1000',
 
-            // Option 2: Individual fields (only required if full_address not provided AND shipping)
-            'delivery_address.street' => ($isShipping && !$hasFullAddress) ? 'required|string|max:255' : 'nullable|string|max:255',
-            'delivery_address.exterior_number' => ($isShipping && !$hasFullAddress) ? 'required|string|max:20' : 'nullable|string|max:20',
+            // Option 2: Individual fields (required only if neither a full_address
+            // nor a Google Maps link was provided, and this is a shipping order)
+            'delivery_address.street' => $needsFields ? 'required|string|max:255' : 'nullable|string|max:255',
+            'delivery_address.exterior_number' => $needsFields ? 'required|string|max:20' : 'nullable|string|max:20',
             'delivery_address.interior_number' => 'nullable|string|max:20',
-            'delivery_address.colonia' => ($isShipping && !$hasFullAddress) ? 'required|string|max:100' : 'nullable|string|max:100',
-            'delivery_address.municipio' => ($isShipping && !$hasFullAddress) ? 'required|string|max:100' : 'nullable|string|max:100',
-            'delivery_address.estado' => ($isShipping && !$hasFullAddress) ? 'required|string|max:100' : 'nullable|string|max:100',
-            'delivery_address.postal_code' => ($isShipping && !$hasFullAddress) ? 'required|regex:/^\d{5}$/' : 'nullable|regex:/^\d{5}$/',
+            'delivery_address.colonia' => $needsFields ? 'required|string|max:100' : 'nullable|string|max:100',
+            'delivery_address.municipio' => $needsFields ? 'required|string|max:100' : 'nullable|string|max:100',
+            'delivery_address.estado' => $needsFields ? 'required|string|max:100' : 'nullable|string|max:100',
+            'delivery_address.postal_code' => $needsFields ? 'required|regex:/^\d{5}$/' : 'nullable|regex:/^\d{5}$/',
             'delivery_address.referencias' => 'nullable|string|max:500',
             'delivery_address.google_maps_link' => 'nullable|string|max:1000',
             'is_rural' => 'boolean',
