@@ -67,6 +67,110 @@ class ProductExtractController extends Controller
     }
 
     /**
+     * FULL product detail for a pasted URL — the assisted-purchase form's
+     * pre-fill. Routes the URL to the best extractor (Amazon/Walmart structured via
+     * ScraperAPI, Shopify variant JSON, WooCommerce/Magento/JSON-LD HTML cascade)
+     * and returns { title, price, was, on_sale, description, options[], variants[],
+     * images[] } WITH selectable variants. Falls back to the lightweight parse so a
+     * store we can't fully scrape still pre-fills title/price/image. Cached briefly.
+     */
+    public function scrape(Request $request)
+    {
+        $validated = $request->validate(['url' => 'required|url|max:2000']);
+        $url = $validated['url'];
+        $store = $this->storeFromUrl($url);
+
+        $cacheKey = 'scrape:' . md5($url . '|z:' . config('services.scraperapi.zip'));
+        if (($cached = Cache::get($cacheKey)) !== null) {
+            return response()->json(['success' => true, 'data' => $cached, 'cached' => true]);
+        }
+
+        // 1) Full detail with variants.
+        $detail = $this->extractDetail($url);
+
+        $isEmpty = fn ($d) => ! $d || (empty($d['title']) && ($d['price'] ?? null) === null && empty($d['images']));
+
+        // 2) Lightweight fallback (title/price/image only) when the full pass is thin.
+        //    Try a plain fetch first (fast); if it's still missing the title or price,
+        //    escalate to a RENDERED fetch, which clears most simple bot walls and lets
+        //    JS-rendered stores expose their JSON-LD / price.
+        if ($isEmpty($detail)) {
+            $detail = $this->lightScrape($url, false);
+            if ($isEmpty($detail) || ($detail['price'] ?? null) === null || empty($detail['title'])) {
+                $rendered = $this->lightScrape($url, true);
+                if ($rendered && ! $isEmpty($rendered)) {
+                    // Prefer whichever pass has more (rendered usually wins on hard stores).
+                    if ($isEmpty($detail)) {
+                        $detail = $rendered;
+                    } else {
+                        $detail['title']       = $detail['title'] ?: $rendered['title'];
+                        $detail['price']       = $detail['price'] ?? $rendered['price'];
+                        $detail['description'] = $detail['description'] ?: $rendered['description'];
+                        $detail['images']      = $detail['images'] ?: $rendered['images'];
+                    }
+                }
+            }
+        }
+
+        if ($isEmpty($detail)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Could not read the product page.',
+                'data'    => ['source_url' => $url, 'store' => $store],
+            ], 422);
+        }
+
+        $data = array_merge([
+            'source_url' => $url,
+            'store'      => $store,
+            'currency'   => 'USD',
+        ], $detail);
+
+        Cache::put($cacheKey, $data, now()->addMinutes(10));
+
+        return response()->json(['success' => true, 'data' => $data]);
+    }
+
+    /**
+     * Lightweight single-page extract (title/price/image/description only) used as
+     * the /scrape fallback. $render toggles a JS-rendered fetch (bypasses simple bot
+     * walls at the cost of latency). Returns the same detail shape or null.
+     */
+    private function lightScrape(string $url, bool $render): ?array
+    {
+        $product = $this->parseShopify($url); // Shopify .js — instant win when it works
+        if (! $product) {
+            $html = $this->fetch($url, $render);
+            if (! $html) {
+                return null;
+            }
+            $product = $this->parseJsonLd($html) ?? $this->parseMeta($html);
+            if ($product) {
+                if (empty($product['price'])) {
+                    $product['price'] = $this->priceFromHtml($html);
+                }
+                if (empty($product['image'])) {
+                    $product['image'] = $this->meta($html, 'og:image') ?? $this->meta($html, 'twitter:image');
+                }
+            }
+        }
+        if (! $product) {
+            return null;
+        }
+
+        return [
+            'title'       => $product['title'] ?? null,
+            'price'       => isset($product['price']) ? (float) $product['price'] : null,
+            'was'         => null,
+            'on_sale'     => false,
+            'description' => $product['description'] ?? null,
+            'options'     => [],
+            'variants'    => [],
+            'images'      => array_values(array_filter([$product['image'] ?? null])),
+        ];
+    }
+
+    /**
      * Universal product search across the ENTIRE US market via Google Shopping.
      * Works for ANY store/brand regardless of platform (Shopify, headless,
      * JS-rendered, Cloudflare-protected) because Google already crawled them.

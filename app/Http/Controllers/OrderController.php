@@ -63,6 +63,7 @@ class OrderController extends Controller
             'delivery_address.estado' => ($isShipping && !$hasFullAddress) ? 'required|string|max:100' : 'nullable|string|max:100',
             'delivery_address.postal_code' => ($isShipping && !$hasFullAddress) ? 'required|regex:/^\d{5}$/' : 'nullable|regex:/^\d{5}$/',
             'delivery_address.referencias' => 'nullable|string|max:500',
+            'delivery_address.google_maps_link' => 'nullable|string|max:1000',
             'is_rural' => 'boolean',
             'notes' => 'nullable|string|max:1000',
             'declared_value' => 'nullable|numeric|min:0|max:999999.99',
@@ -519,8 +520,8 @@ class OrderController extends Controller
     {
         return [
             'name' => $order->user->name . ' (' . $order->tracking_number . ')',
-            'street' => '482 W. San Ysidro Blvd.',
-            'suite' => 'Apt. 123',
+            'street' => '157 Virginia Ave',
+            'suite' => 'Suite 835',
             'city' => 'San Ysidro',
             'state' => 'CA',
             'zip' => '92173',

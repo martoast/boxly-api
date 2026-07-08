@@ -118,6 +118,11 @@ Route::post('/products/details', [\App\Http\Controllers\ProductExtractController
     ->middleware('throttle:60,1');
 Route::post('/products/page', [\App\Http\Controllers\ProductExtractController::class, 'page'])
     ->middleware('throttle:60,1');
+// Full product detail WITH variants (options/sizes/colors) for a pasted URL — the
+// assisted-purchase form uses this to pre-fill the item + let the customer pick a
+// variant. Heavier than /extract (may hit ScraperAPI structured endpoints).
+Route::post('/products/scrape', [\App\Http\Controllers\ProductExtractController::class, 'scrape'])
+    ->middleware('throttle:30,1');
 
 // AI-search usage analytics — best-effort logging from the search UI.
 Route::post('/search-events', [\App\Http\Controllers\SearchEventController::class, 'store'])

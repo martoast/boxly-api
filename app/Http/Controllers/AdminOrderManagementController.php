@@ -48,6 +48,7 @@ class AdminOrderManagementController extends Controller
             'delivery_address.estado' => ($requireAddress && !$hasFullAddress) ? 'required|string|max:100' : 'nullable|string|max:100',
             'delivery_address.postal_code' => ($requireAddress && !$hasFullAddress) ? 'required|regex:/^\d{5}$/' : 'nullable|regex:/^\d{5}$/',
             'delivery_address.referencias' => 'nullable|string|max:500',
+            'delivery_address.google_maps_link' => 'nullable|string|max:1000',
 
             'is_rural' => 'boolean',
             'notes' => 'nullable|string|max:2000',
@@ -160,6 +161,7 @@ class AdminOrderManagementController extends Controller
             'delivery_address.estado' => 'nullable|string|max:100',
             'delivery_address.postal_code' => 'nullable|regex:/^\d{5}$/',
             'delivery_address.referencias' => 'nullable|string|max:500',
+            'delivery_address.google_maps_link' => 'nullable|string|max:1000',
 
             'total_weight' => 'nullable|numeric|min:0|max:999.99',
             'actual_weight' => 'nullable|numeric|min:0|max:999.99',

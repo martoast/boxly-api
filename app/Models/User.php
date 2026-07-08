@@ -47,6 +47,7 @@ class User extends Authenticatable
         'estado',
         'postal_code',
         'full_address',
+        'google_maps_link',
         'provider',
         'role',
         'team',
@@ -270,6 +271,7 @@ class User extends Authenticatable
             'municipio' => $this->municipio,
             'estado' => $this->estado,
             'postal_code' => $this->postal_code,
+            'google_maps_link' => $this->google_maps_link,
         ];
     }
 

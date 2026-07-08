@@ -41,6 +41,7 @@ class UpdateOrderRequest extends FormRequest
             'delivery_address.estado' => $hasFullAddress ? 'nullable|string|max:100' : 'sometimes|required|string|max:100',
             'delivery_address.postal_code' => $hasFullAddress ? 'nullable|string|regex:/^\d{5}$/' : 'sometimes|required|string|regex:/^\d{5}$/',
             'delivery_address.referencias' => 'nullable|string|max:500',
+            'delivery_address.google_maps_link' => 'nullable|string|max:1000',
             'is_rural' => 'sometimes|boolean',
             'declared_value' => 'sometimes|nullable|numeric|min:0|max:999999.99',
             'notes' => 'nullable|string|max:1000',
