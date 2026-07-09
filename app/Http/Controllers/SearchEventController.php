@@ -193,13 +193,13 @@ class SearchEventController extends Controller
             // Recent questions WITH the assistant's answer (stored in results_sample)
             // — the Q&A pairs an admin (or an AI) can review.
             $recentQuestions = (clone $questions)->whereNotNull('query')->where('query', '<>', '')
-                ->with('user:id,name,email')
+                ->with('user:id,name,email,created_at')
                 ->latest()->limit(40)->get(['id', 'query', 'results_sample', 'user_id', 'conversation_id', 'created_at'])
                 ->map(fn ($e) => [
                     'query'           => $e->query,
                     'answer'          => collect($e->results_sample ?? [])->pluck('answer')->filter()->first(),
                     'guest'           => $e->user_id === null,
-                    'user'            => $e->user ? ['name' => $e->user->name, 'email' => $e->user->email] : null,
+                    'user'            => $e->user ? ['name' => $e->user->name, 'email' => $e->user->email, 'created_at' => $e->user->created_at] : null,
                     'conversation_id' => $e->conversation_id,
                     'created_at'      => $e->created_at,
                 ]);
@@ -220,7 +220,7 @@ class SearchEventController extends Controller
 
             // Query → results: the most recent searches with what we served.
             $recentSearches = (clone $searches)->whereNotNull('results')
-                ->with('user:id,name,email')
+                ->with('user:id,name,email,created_at')
                 ->latest()->limit(30)->get(['id', 'query', 'results', 'results_sample', 'user_id', 'conversation_id', 'created_at'])
                 ->map(fn ($e) => [
                     'query'           => $e->query,
@@ -228,7 +228,7 @@ class SearchEventController extends Controller
                     'stores'          => collect($e->results_sample ?? [])->pluck('store')
                         ->filter()->map(fn ($s) => $this->normStore($s))->unique()->take(6)->values(),
                     'guest'           => $e->user_id === null,
-                    'user'            => $e->user ? ['name' => $e->user->name, 'email' => $e->user->email] : null,
+                    'user'            => $e->user ? ['name' => $e->user->name, 'email' => $e->user->email, 'created_at' => $e->user->created_at] : null,
                     'conversation_id' => $e->conversation_id,
                     'created_at'      => $e->created_at,
                 ]);
@@ -302,7 +302,7 @@ class SearchEventController extends Controller
      */
     public function thread(Conversation $conversation)
     {
-        $conversation->load('user:id,name,email');
+        $conversation->load('user:id,name,email,created_at');
 
         $messages = $conversation->messages()
             ->orderBy('id')
@@ -314,7 +314,7 @@ class SearchEventController extends Controller
             'title'      => $conversation->title,
             'created_at' => $conversation->created_at,
             'user'       => $conversation->user
-                ? ['id' => $conversation->user->id, 'name' => $conversation->user->name, 'email' => $conversation->user->email]
+                ? ['id' => $conversation->user->id, 'name' => $conversation->user->name, 'email' => $conversation->user->email, 'created_at' => $conversation->user->created_at]
                 : null,
             'messages'   => $messages,
         ]]);
