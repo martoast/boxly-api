@@ -210,6 +210,19 @@ class ProductExtractController extends Controller
         $byQuery = $this->multiShopping($queries, $start);
 
         $general = $byQuery[$baseQ] ?? [];
+
+        // A store-biased query with a generic term (e.g. "Gymshark clothing") can come
+        // back empty from Google Shopping even though the brand clearly has a catalog.
+        // Retry ONCE with just the brand — which reliably returns the store's products —
+        // so we never dead-end a customer who searched a real store. One extra call,
+        // and only when the primary pass found nothing.
+        if (empty($general) && $store !== '' && $this->slugify($baseQ) !== $this->slugify($store)) {
+            $fallback = $this->multiShopping([$store], $start);
+            $general = $fallback[$store] ?? [];
+            if (! empty($general)) {
+                $baseQ = $store; // reflect the query we actually served (cache-prime, ranking)
+            }
+        }
         // SPEED: the ScraperAPI structured-shopping fallback is reliable but SLOW
         // (ultra_premium, ~20-40s) and was the root of the 20-25s tail whenever
         // SerpAPI returned nothing. Take it OFF the request path: serve what we
