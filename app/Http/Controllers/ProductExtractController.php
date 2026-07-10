@@ -1766,7 +1766,15 @@ class ProductExtractController extends Controller
                 $resp = $responses[$q] ?? null;
                 if ($resp instanceof \Illuminate\Http\Client\Response && $resp->successful()) {
                     $products = $this->parseShoppingResults($resp->json());
-                    Cache::put($cacheKey, $products, now()->addMinutes(30));
+                    // SerpAPI returns 0 shopping_results NON-DETERMINISTICALLY for the
+                    // exact same query (a real store like "rhode" can come back empty one
+                    // second and full the next). Never pin an empty pass for the full 30
+                    // min — that dead-ends the query for everyone who retries it in that
+                    // window (the store-search-returns-nothing bug). Cache real results
+                    // for 30 min; cache an empty for only 60s (light stampede protection)
+                    // so the very next retry re-queries SerpAPI and self-heals.
+                    $ttl = empty($products) ? now()->addSeconds(60) : now()->addMinutes(30);
+                    Cache::put($cacheKey, $products, $ttl);
                     $out[$q] = $products;
                 } else {
                     $out[$q] = [];
