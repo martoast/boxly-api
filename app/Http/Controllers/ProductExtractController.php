@@ -325,11 +325,16 @@ class ProductExtractController extends Controller
 
         // Analytics: log the query AND the results we served (top items + stores)
         // so search quality can be analyzed query→results. Best-effort; first page
-        // only. (Guest queries that bounce at login are captured at the landing.)
-        if ($start === 0) {
+        // only. The AI search is now AUTHENTICATED-ONLY, so we log ONLY when a real
+        // user is behind the call — never guests. This endpoint stays callable
+        // without auth for internal image resolution (e.g. /api/card-image starter
+        // thumbnails) and any leftover public surface, but those must NOT pollute
+        // the AI-search analytics as "Invitado" rows.
+        $userId = optional(auth('sanctum')->user())->id ?? optional($request->user())->id;
+        if ($start === 0 && $userId) {
             try {
                 SearchEvent::create([
-                    'user_id'         => optional(auth('sanctum')->user())->id ?? optional($request->user())->id,
+                    'user_id'         => $userId,
                     'conversation_id' => $request->integer('conversation_id') ?: null,
                     'type'            => SearchEvent::TYPE_SEARCH,
                     'query'           => mb_substr(trim($validated['query']), 0, 255),
