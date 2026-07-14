@@ -118,18 +118,12 @@ class OrderController extends Controller
                 \App\Jobs\SendOrderPlacedWebhookJob::dispatch($user);
             }
 
-            // Send the "order registered" confirmation. The model's status-change
-            // watcher only fires on UPDATES (needs a previousStatus), so a brand-new
-            // order sent no email — customers who registered a package (incl. via the
-            // AI chat, same endpoint) never got a confirmation. Send it here on create,
-            // reusing the 'collecting' status template. Best-effort — never fail the order.
-            try {
-                Mail::to($order->user)->queue(new OrderStatusChanged($order, ''));
-            } catch (\Throwable $e) {
-                Log::error('Failed to send order-created confirmation email', [
-                    'order_id' => $order->id, 'error' => $e->getMessage(),
-                ]);
-            }
+            // NOTE: no confirmation email is sent here. A brand-new order at this point
+            // is just an empty shell — the delivery address, no products yet — so emailing
+            // "tu orden fue creada" would be premature and confusing. The confirmation
+            // ("Esperando tus paquetes") is sent only when the customer submits the
+            // finished order via complete() → markAsComplete(), which requires items > 0
+            // and fires OrderStatusChanged through the model's status-change watcher.
 
             // Notify admins about new order (optional - uncomment when ready)
             // $admins = User::where('role', 'admin')->get();
