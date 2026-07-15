@@ -1084,8 +1084,14 @@ class UnifiedAdminDashboardController extends Controller
         $calculatedAdSpend = $calculatedExpensesByCategory['ads'];
 
         // --- ACCOUNTS RECEIVABLE ---
-        // Orders with boxes that haven't been fully paid yet (not cancelled)
-        $accountsReceivable = $this->calculateAccountsReceivable($start, $end);
+        // Orders with boxes that haven't been fully paid yet (not cancelled).
+        // Deliberately NOT scoped to the selected month: an unpaid order stays
+        // outstanding until it's actually paid, so it must ROLL OVER across months.
+        // If we filtered by created_at (as the other cards do), June's still-unpaid
+        // orders would vanish when you look at July — understating what's truly owed.
+        // AR is a running balance, not a per-month figure, so it's always cumulative
+        // (same as the all-time branch below).
+        $accountsReceivable = $this->calculateAccountsReceivable();
 
         // === ALL TIME MODE ===
         if ($period === 'all') {
