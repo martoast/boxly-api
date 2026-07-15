@@ -488,7 +488,11 @@ class UnifiedAdminDashboardController extends Controller
 
         // Orders placed in the window — located from the ORDER address first
         // (Maps link → structured fields), then the customer's profile.
-        $orders = Order::with('user:id,municipio,estado,google_maps_link')
+        // We also roll every order up BY CLIENT (user_id) so the wall can draw
+        // one dot per customer carrying their whole order history, instead of one
+        // scattered dot per order (which stacked a repeat buyer into a fake crowd).
+        $clientAgg = [];
+        $orders = Order::with('user:id,name,municipio,estado,google_maps_link')
             ->whereNotIn('status', ['cancelled'])
             ->whereBetween('created_at', [$s, $e])
             ->get(['id', 'user_id', 'delivery_address', 'amount_paid', 'deposit_amount', 'paid_at']);
@@ -504,6 +508,36 @@ class UnifiedAdminDashboardController extends Controller
             }
             $cityBump($byCity, $loc, 'orders', 1);
             $cityBump($byCity, $loc, 'revenue', $rev);
+
+            // Per-client rollup: count + spend, and remember the first order we
+            // could place (fallback location if the client's own profile is blank).
+            if ($uid = $o->user_id) {
+                $clientAgg[$uid] ??= ['user' => $o->user, 'orders' => 0, 'revenue' => 0, 'orderLoc' => null];
+                $clientAgg[$uid]['orders']++;
+                $clientAgg[$uid]['revenue'] += $rev;
+                $clientAgg[$uid]['orderLoc'] ??= $loc;
+            }
+        }
+
+        // One point per client — anchored to their HOME (profile) when known, else
+        // where they ship. Unplaceable clients drop off (counted as unlocated on
+        // the map). Each carries their order count + total spent for the tooltip.
+        $clients = [];
+        foreach ($clientAgg as $uid => $a) {
+            $loc = ($a['user'] ? $this->resolveUserLocation($a['user']) : null) ?: $a['orderLoc'];
+            if (! $loc) {
+                continue;
+            }
+            $clients[] = [
+                'id' => $uid,
+                'name' => trim((string) ($a['user']->name ?? '')) ?: 'Cliente',
+                'city' => $loc['city'] ?? '',
+                'estado' => $loc['estado'] ?? '',
+                'lat' => $loc['lat'] ?? null,
+                'lng' => $loc['lng'] ?? null,
+                'orders' => $a['orders'],
+                'revenue' => round($a['revenue'], 2),
+            ];
         }
 
         $states = [];
@@ -532,11 +566,13 @@ class UnifiedAdminDashboardController extends Controller
             'data' => [
                 'states' => $states,
                 'cities' => $cities,
+                'clients' => $clients,
                 'totals' => [
                     'customers' => array_sum(array_column($states, 'customers')),
                     'orders' => array_sum(array_column($states, 'orders')),
                     'revenue' => round(array_sum(array_column($states, 'revenue')), 2),
                     'states_active' => count($states),
+                    'clients_located' => count($clients),
                 ],
             ],
             'generated_at' => now()->toIso8601String(),
