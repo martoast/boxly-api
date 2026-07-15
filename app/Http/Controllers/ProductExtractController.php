@@ -235,6 +235,32 @@ class ProductExtractController extends Controller
             PrimeShoppingCache::dispatch($baseQ, $start);
         }
 
+        // GUARANTEE THE NAMED STORE. Google Shopping frequently returns only
+        // RESELLERS (eBay, TikTok Shop, Poshmark…) for a direct-to-consumer brand
+        // and omits the brand's OWN store entirely — so a customer who explicitly
+        // asked for e.g. "DFYNE" sees everyone BUT DFYNE. Floating/ranking can't fix
+        // that: the brand simply isn't in the result set. When a store was named and
+        // NONE of the Shopping results are actually from it, pull the brand's own
+        // catalog straight from its site and lead with it. (First page only — later
+        // pages paginate Shopping.)
+        if ($store !== '' && $start === 0) {
+            $want = $this->slugify($store);
+            $hasStore = false;
+            foreach ($general as $p) {
+                $src = $this->slugify((string) ($p['store'] ?? ''));
+                if ($src !== '' && (str_contains($src, $want) || str_contains($want, $src))) {
+                    $hasStore = true;
+                    break;
+                }
+            }
+            if (! $hasStore) {
+                $own = $this->brandOwnCatalog($store, $limit);
+                if (! empty($own)) {
+                    $general = array_merge($own, $general);
+                }
+            }
+        }
+
         // Keep each retailer's ACTUAL listings (the biased query returns a mix —
         // filter to items whose store matches) and tag them to float to the top.
         // Each priority retailer's listings in the store's own relevance order
@@ -2191,6 +2217,36 @@ class ProductExtractController extends Controller
             return null;
         }
         return $p['scheme'] . '://' . $p['host'];
+    }
+
+    /**
+     * A named brand's OWN catalog, pulled straight from its site — the fix for
+     * "I searched a specific store but you showed the resellers." Google Shopping
+     * often omits a direct-to-consumer brand's own store and returns only eBay /
+     * TikTok Shop / Poshmark listings; this guarantees the real brand shows up.
+     *
+     * Guesses the brand domain as {slug}.com (correct for the vast majority of DTC
+     * brands — dfyne.com, gymshark.com, youngla.com…) and reads its Shopify catalog
+     * (deals first). Products are tagged with the requested store name so the
+     * ranking layer floats them to the top. Best-effort: a wrong guess, a
+     * non-Shopify site (big chains like Target/Best Buy) or a blocked fetch returns
+     * [] and we simply fall back to the Google Shopping results. Only reached when
+     * the brand was NOT already in Shopping, so it adds no latency to normal search.
+     */
+    private function brandOwnCatalog(string $store, int $limit): array
+    {
+        $slug = $this->slugify($store);
+        if ($slug === '') {
+            return [];
+        }
+        $products = $this->shopifyProducts('https://' . $slug . '.com', $limit);
+        if (empty($products)) {
+            return [];
+        }
+        foreach ($products as &$p) {
+            $p['store'] = $store;
+        }
+        return $products;
     }
 
     /**
