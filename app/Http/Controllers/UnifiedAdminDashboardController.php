@@ -1651,44 +1651,49 @@ class UnifiedAdminDashboardController extends Controller
      */
     private function calculateAccountsReceivable(?string $start = null, ?string $end = null): array
     {
-        // Base query: orders not fully paid and not cancelled
+        // Mirror the admin Orders page "Pending payment" filter EXACTLY, so the
+        // dashboard's Cuentas por Cobrar reconciles with that list one-for-one.
+        // Per order (see getOrderPendingBalance in pages/app/admin/orders/index.vue):
+        //   - if paid_at is set        -> 0 (final payment was made)
+        //   - box total = sum(box.box_price) or legacy box_price; if 0 -> not outstanding
+        //   - pending = box total - amount_paid   (amount_paid already includes any deposit)
+        //   - only orders with pending > 0 count, toward both the total and the count
+        // Not scoped by month: an unpaid order stays outstanding until it's actually
+        // paid, so this is a running balance — the same all-time view the orders list
+        // shows by default. (Optional date window kept for any caller that passes one.)
         $query = Order::whereNull('paid_at')
-            ->where('status', '!=', Order::STATUS_CANCELLED);
-
-        // Apply date filter if provided (based on order creation date)
-        if ($start && $end) {
-            $query->whereBetween('created_at', [$start, $end]);
-        }
-
-        // Get orders that have boxes (either in order_boxes table or legacy box_price)
-        $ordersWithBoxes = (clone $query)
             ->where(function ($q) {
                 $q->whereHas('boxes')
                     ->orWhereNotNull('box_price');
             })
-            ->with('boxes')
-            ->get();
+            ->with('boxes');
 
-        // Calculate total receivable amount (box price minus any deposits paid)
+        if ($start && $end) {
+            $query->whereBetween('created_at', [$start, $end]);
+        }
+
         $totalAmount = 0;
-        foreach ($ordersWithBoxes as $order) {
-            $boxPrice = $order->calculateTotalBoxPrice();
+        $count = 0;
+        foreach ($query->get() as $order) {
+            // Box total — sum of box_price (NOT × quantity), matching the orders page.
+            $totalPrice = $order->boxes->isNotEmpty()
+                ? (float) $order->boxes->sum(fn ($b) => (float) $b->box_price)
+                : (float) ($order->box_price ?? 0);
 
-            // Subtract deposit if already paid
-            $depositPaid = 0;
-            if ($order->deposit_paid_at && $order->deposit_amount) {
-                $depositPaid = (float) $order->deposit_amount;
+            if ($totalPrice <= 0) {
+                continue;
             }
 
-            $outstanding = $boxPrice - $depositPaid;
-            if ($outstanding > 0) {
-                $totalAmount += $outstanding;
+            $pending = $totalPrice - (float) ($order->amount_paid ?? 0);
+            if ($pending > 0) {
+                $totalAmount += $pending;
+                $count++;
             }
         }
 
         return [
             'total' => round($totalAmount, 2),
-            'count' => $ordersWithBoxes->count(),
+            'count' => $count,
         ];
     }
 }
