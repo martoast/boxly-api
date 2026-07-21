@@ -296,6 +296,120 @@ class SearchEventController extends Controller
     }
 
     /**
+     * Admin: a filterable, paginated feed of raw AI-search events (searches,
+     * questions, product views) — the granular data behind the dashboard, exposed
+     * for the CLI so it can be sliced by customer and date. Every filter is
+     * optional and composable.
+     *
+     * GET /admin/ai-search/events
+     *   ?user_id=  exact customer id
+     *   ?search=   match the customer's name OR email (LIKE)
+     *   ?type=     search | question | product_view
+     *   ?query=    match the query text (LIKE)
+     *   ?days=     last N days | ?from=YYYY-MM-DD & ?to=YYYY-MM-DD (date range)
+     *   ?per_page= (default 50, max 500) & ?page=
+     */
+    public function events(Request $request)
+    {
+        $v = $request->validate([
+            'user_id'  => 'nullable|integer',
+            'search'   => 'nullable|string|max:120',
+            'type'     => 'nullable|in:search,question,product_view',
+            'query'    => 'nullable|string|max:200',
+            'from'     => 'nullable|date',
+            'to'       => 'nullable|date',
+            'days'     => 'nullable|integer|min:1|max:3650',
+            'per_page' => 'nullable|integer|min:1|max:500',
+            'page'     => 'nullable|integer|min:1',
+        ]);
+
+        $q = SearchEvent::query()->with('user:id,name,email,created_at');
+        $this->applyEventFilters($q, $v);
+
+        $events = $q->latest()->paginate($v['per_page'] ?? 50);
+        $events->getCollection()->transform(fn ($e) => [
+            'id'              => $e->id,
+            'type'            => $e->type,
+            'query'           => $e->query,
+            'answer'          => collect($e->results_sample ?? [])->pluck('answer')->filter()->first(),
+            'results'         => $e->results,
+            'stores'          => collect($e->results_sample ?? [])->pluck('store')
+                ->filter()->map(fn ($s) => $this->normStore($s))->unique()->take(8)->values(),
+            'store'           => $e->store,
+            'title'           => $e->title,
+            'url'             => $e->url,
+            'conversation_id' => $e->conversation_id,
+            'guest'           => $e->user_id === null,
+            'user'            => $e->user ? ['id' => $e->user->id, 'name' => $e->user->name, 'email' => $e->user->email] : null,
+            'created_at'      => $e->created_at,
+        ]);
+
+        return response()->json(['success' => true, 'data' => $events]);
+    }
+
+    /**
+     * Admin: a filterable, paginated list of AI chat threads (conversations) with
+     * a message count each — the "which customers had which chats" index for the
+     * CLI. Pair a row's id with GET /admin/ai-search/thread/{id} for the full chat.
+     *
+     * GET /admin/ai-search/conversations  (?user_id / ?search / ?days / ?from / ?to / ?per_page / ?page)
+     */
+    public function conversations(Request $request)
+    {
+        $v = $request->validate([
+            'user_id'  => 'nullable|integer',
+            'search'   => 'nullable|string|max:120',
+            'from'     => 'nullable|date',
+            'to'       => 'nullable|date',
+            'days'     => 'nullable|integer|min:1|max:3650',
+            'per_page' => 'nullable|integer|min:1|max:500',
+            'page'     => 'nullable|integer|min:1',
+        ]);
+
+        $q = Conversation::query()->with('user:id,name,email,created_at')->withCount('messages');
+        $this->applyEventFilters($q, $v); // user_id / search / date filters (no type/query)
+
+        $convos = $q->orderByDesc('last_message_at')->paginate($v['per_page'] ?? 50);
+        $convos->getCollection()->transform(fn ($c) => [
+            'id'              => $c->id,
+            'title'           => $c->title,
+            'message_count'   => $c->messages_count,
+            'user'            => $c->user ? ['id' => $c->user->id, 'name' => $c->user->name, 'email' => $c->user->email] : null,
+            'last_message_at' => $c->last_message_at,
+            'created_at'      => $c->created_at,
+        ]);
+
+        return response()->json(['success' => true, 'data' => $convos]);
+    }
+
+    /** Apply the shared customer + date-range filters to a SearchEvent OR Conversation query. */
+    private function applyEventFilters($q, array $v): void
+    {
+        if (! empty($v['user_id'])) {
+            $q->where('user_id', $v['user_id']);
+        }
+        if (! empty($v['search'])) {
+            $s = $v['search'];
+            $q->whereHas('user', fn ($u) => $u->where('name', 'like', "%{$s}%")->orWhere('email', 'like', "%{$s}%"));
+        }
+        if (! empty($v['type'])) {
+            $q->where('type', $v['type']);
+        }
+        if (! empty($v['query'])) {
+            $q->where('query', 'like', '%' . $v['query'] . '%');
+        }
+        if (! empty($v['days'])) {
+            $q->where('created_at', '>=', Carbon::now()->subDays((int) $v['days'])->startOfDay());
+        }
+        if (! empty($v['from'])) {
+            $q->where('created_at', '>=', Carbon::parse($v['from'])->startOfDay());
+        }
+        if (! empty($v['to'])) {
+            $q->where('created_at', '<=', Carbon::parse($v['to'])->endOfDay());
+        }
+    }
+
+    /**
      * Admin: the FULL chat thread behind a search/question — every message the
      * user exchanged with the AI, so admins can review the whole conversation.
      * Admin-gated by the route group; loads any conversation by id.
