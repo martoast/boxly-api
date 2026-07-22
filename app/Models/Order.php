@@ -190,6 +190,26 @@ class Order extends Model
             }
         });
 
+        // Watcher: append EVERY status transition to the order_status_events
+        // outbox (queued job → one row). External consumers (Jarvis's CRM sync)
+        // pull these past a cursor — exact events instead of diffing lists.
+        // Telemetry, not a notification: no skip flags apply, and it must
+        // never interfere with the save (the job swallows its own failures).
+        static::created(function ($order) {
+            \App\Jobs\RecordOrderStatusEventJob::dispatch(
+                $order->id, $order->user_id, null, $order->status
+            );
+        });
+
+        static::updated(function ($order) {
+            if (! $order->wasChanged('status')) {
+                return;
+            }
+            \App\Jobs\RecordOrderStatusEventJob::dispatch(
+                $order->id, $order->user_id, $order->getOriginal('status'), $order->status
+            );
+        });
+
         // Watcher: notify the customer when the ship date is *changed* — i.e. an
         // already-scheduled order is moved to a different day. Deliberately does
         // NOT fire on the initial scheduling at consolidation (null -> date, which

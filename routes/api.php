@@ -298,7 +298,11 @@ Route::middleware('auth:sanctum')->group(function () {
     |--------------------------------------------------------------------------
     */
     Route::middleware('admin')->prefix('admin')->group(function () {
-        
+
+        // Order-status outbox: cursor feed of every status transition
+        // (consumed by Jarvis's CRM sync — see OrderStatusEventController).
+        Route::get('/order-events', [\App\Http\Controllers\OrderStatusEventController::class, 'index']);
+
         // AI search usage analytics dashboard
         Route::get('/ai-search/stats', [\App\Http\Controllers\SearchEventController::class, 'stats']);
         Route::get('/ai-search/queries', [\App\Http\Controllers\SearchEventController::class, 'queries']);
