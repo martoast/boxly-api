@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Conversation;
 use App\Models\PurchaseRequest;
 use App\Models\PurchaseRequestItem;
 use App\Models\ShoppingTrip;
@@ -24,6 +25,11 @@ class PurchaseRequestController extends Controller
     {
         $requests = PurchaseRequest::with('items')
             ->where('user_id', $request->user()->id)
+            // Used by the AI assistant to recover THIS chat's still-open request
+            // after a reload, so adding another item updates it instead of
+            // opening a second request for the same shipment.
+            ->when($request->filled('conversation_id'), fn ($q) => $q->where('conversation_id', $request->input('conversation_id')))
+            ->when($request->filled('status'), fn ($q) => $q->where('status', $request->input('status')))
             ->latest()
             ->paginate(20);
 
@@ -84,6 +90,7 @@ class PurchaseRequestController extends Controller
     {
         $request->validate([
             'currency' => 'nullable|in:usd,mxn',
+            'conversation_id' => 'nullable|integer|exists:conversations,id',
             'items' => 'required|array|min:1',
             'items.*.product_name' => 'required|string|max:255',
             'items.*.product_url' => 'nullable|string|max:16000', // name-only assisted items allowed
@@ -100,9 +107,16 @@ class PurchaseRequestController extends Controller
         try {
             $user = $request->user();
 
+            // Only link a chat this customer actually owns.
+            $conversationId = $request->input('conversation_id');
+            if ($conversationId && ! Conversation::where('id', $conversationId)->where('user_id', $user->id)->exists()) {
+                $conversationId = null;
+            }
+
             // 1. Create the Request Ticket
             $pr = PurchaseRequest::create([
                 'user_id' => $user->id,
+                'conversation_id' => $conversationId,
                 'request_number' => PurchaseRequest::generateRequestNumber(),
                 'status' => PurchaseRequest::STATUS_PENDING_REVIEW,
                 'currency' => $request->input('currency', 'usd'),
@@ -600,6 +614,7 @@ class PurchaseRequestController extends Controller
             'items.*.quantity' => 'required|integer|min:1',
             'items.*.options' => 'nullable',
             'items.*.notes' => 'nullable|string|max:500',
+            'items.*.product_image_url' => 'nullable|string|max:16000', // image URL (assistant flow)
             // Optional ID for existing items
             'items.*.id' => 'nullable|integer',
             // File validation (for new uploads)
@@ -654,11 +669,20 @@ class PurchaseRequestController extends Controller
                         'purchase_request_id' => $purchaseRequest->id,
                         'product_name' => $itemData['product_name'],
                         'product_url' => $itemData['product_url'] ?? '',
+                        'product_image_url' => $itemData['product_image_url'] ?? null,
                         'price' => $itemData['price'],
                         'quantity' => $itemData['quantity'],
                         'options' => $options,
                         'notes' => $itemData['notes'] ?? null,
                     ]);
+
+                    // Same as creation: re-host the assistant's thumbnail on our
+                    // bucket (source URLs expire). Items added on a later turn of
+                    // the chat come through here, so without this they'd have no
+                    // image at all.
+                    if (! $request->hasFile("items.{$index}.image") && ! empty($itemData['product_image_url'])) {
+                        $this->rehostItemImage($item, $itemData['product_image_url'], $user, $purchaseRequest);
+                    }
                 }
 
                 $updatedItemIds[] = $item->id;

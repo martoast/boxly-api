@@ -15,6 +15,7 @@ class PurchaseRequest extends Model
 
     protected $fillable = [
         'user_id',
+        'conversation_id',
         'request_number',
         'status',
         'source',
