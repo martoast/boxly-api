@@ -447,11 +447,27 @@ class ProductExtractController extends Controller
      */
     public function details(Request $request)
     {
-        $validated = $request->validate(['token' => 'required|string|max:6000']);
+        $validated = $request->validate([
+            'token' => 'required|string|max:6000',
+            // Optional: the seller the caller is showing. Google's immersive page
+            // lists EVERY store carrying the product, and the first one is not
+            // necessarily the one whose price/condition the caller displayed —
+            // sending the shopper to a different merchant than the row they
+            // clicked is a bait-and-switch. When given, we prefer that store.
+            'store' => 'nullable|string|max:120',
+        ]);
 
         $key = config('services.serpapi.key');
         if (! $key) {
             return response()->json(['success' => false, 'message' => 'Not configured.'], 503);
+        }
+
+        // One SerpAPI call per token; cache an hour. The shopper extension
+        // resolves a merchant link on every listing click, and without this a
+        // second look at the same product would pay for it twice.
+        $cacheKey = 'immersive:' . md5($validated['token']) . ':' . $this->slugify($validated['store'] ?? '');
+        if (($cached = Cache::get($cacheKey)) !== null) {
+            return response()->json(['success' => true, 'data' => $cached, 'cached' => true]);
         }
 
         try {
@@ -474,24 +490,37 @@ class ProductExtractController extends Controller
             fn ($v) => is_string($v) && str_starts_with($v, 'http')
         ));
 
-        // First seller with a real link → a direct merchant URL (much better than
-        // the Google view link for "see it" and for placing the request).
+        // A direct merchant URL, much better than the Google view link for "see
+        // it" and for placing the request. Prefer the store the caller asked for
+        // so the shopper lands on the exact listing they clicked; otherwise take
+        // the first seller with a real link.
+        $want = $this->slugify($validated['store'] ?? '');
         $link = null;
+        $fallback = null;
         foreach ($pr['stores'] ?? [] as $s) {
-            if (! empty($s['link'])) {
+            if (empty($s['link'])) {
+                continue;
+            }
+            $fallback = $fallback ?? $s['link'];
+            $name = $this->slugify((string) ($s['name'] ?? ''));
+            if ($want !== '' && $name !== '' && (str_starts_with($name, $want) || str_starts_with($want, $name))) {
                 $link = $s['link'];
                 break;
             }
         }
+        $link = $link ?? $fallback;
 
-        return response()->json([
-            'success' => true,
-            'data'    => [
-                'images'      => array_slice($images, 0, 8),
-                'description' => $pr['about_the_product']['description'] ?? null,
-                'link'        => $link,
-            ],
-        ]);
+        $data = [
+            'images'      => array_slice($images, 0, 8),
+            'description' => $pr['about_the_product']['description'] ?? null,
+            'link'        => $link,
+        ];
+
+        if ($link || $images) {
+            Cache::put($cacheKey, $data, now()->addHour());
+        }
+
+        return response()->json(['success' => true, 'data' => $data]);
     }
 
     /**
@@ -1857,6 +1886,10 @@ class ProductExtractController extends Controller
                 'rating'  => $r['rating'] ?? null,
                 'reviews' => $r['reviews'] ?? null,
                 'token'   => $r['immersive_product_page_token'] ?? null,
+                // Google flags resale listings ("used", "refurbished"). The shopper
+                // extension surfaces this as a Condition filter; everything else
+                // treats a missing value as new.
+                'condition' => $r['second_hand_condition'] ?? null,
             ];
         }
 

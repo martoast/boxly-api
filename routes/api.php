@@ -185,6 +185,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/me/shopping-profile', [\App\Http\Controllers\ShoppingProfileController::class, 'show']);
     Route::put('/me/shopping-profile', [\App\Http\Controllers\ShoppingProfileController::class, 'update']);
 
+    // Boxly Shopper (customer Chrome extension) adoption heartbeat. The web app
+    // fires this when the extension announces itself, throttled to once a day
+    // per browser. Distinct from /me/extension-token, which serves the ADMIN
+    // Product Capturer.
+    Route::post('/me/shopper-extension', [\App\Http\Controllers\ShopperExtensionController::class, 'heartbeat']);
+
     Route::get('/user', function (Request $request) {
         $user = $request->user();
         $response = [
@@ -304,6 +310,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/order-events', [\App\Http\Controllers\OrderStatusEventController::class, 'index']);
 
         // AI search usage analytics dashboard
+        // Boxly Shopper (customer Chrome extension) adoption
+        Route::get('/shopper-extension/stats', [\App\Http\Controllers\ShopperExtensionController::class, 'stats']);
+
         Route::get('/ai-search/stats', [\App\Http\Controllers\SearchEventController::class, 'stats']);
         Route::get('/ai-search/queries', [\App\Http\Controllers\SearchEventController::class, 'queries']);
         Route::get('/ai-search/events', [\App\Http\Controllers\SearchEventController::class, 'events']);
