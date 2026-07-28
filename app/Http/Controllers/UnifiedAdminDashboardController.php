@@ -103,9 +103,9 @@ class UnifiedAdminDashboardController extends Controller
             ->selectRaw("DATE_FORMAT(deposit_paid_at, '%Y-%m') as ym, SUM(deposit_amount) as total")
             ->groupBy('ym')->get()->keyBy('ym');
 
-        // PR service fees by created_at month, split by currency.
+        // PR service fees by PAYMENT month, split by currency.
         $prFees = PurchaseRequest::whereIn('status', ['paid', 'purchased'])
-            ->selectRaw("DATE_FORMAT(created_at, '%Y-%m') as ym, currency, SUM(processing_fee) as total")
+            ->selectRaw("DATE_FORMAT(".self::PR_FEE_DATE.", '%Y-%m') as ym, currency, SUM(processing_fee) as total")
             ->groupBy('ym', 'currency')->get();
         $prFeesByMonth = [];
         foreach ($prFees as $row) {
@@ -237,17 +237,60 @@ class UnifiedAdminDashboardController extends Controller
         return compact('range', 'daily', 'start', 'end', 'prevStart', 'prevEnd');
     }
 
+    /**
+     * Y-m keys of the months whose revenue is taken from MonthlyManualMetric.
+     * Those months were hand-tracked before the system recorded orders.
+     */
+    private function manualRevenueMonths(): array
+    {
+        static $cache = null;
+        if ($cache === null) {
+            $cache = MonthlyManualMetric::where('is_manual_mode', true)->get()
+                ->map(fn ($m) => sprintf('%04d-%02d', $m->year, $m->month))
+                ->all();
+        }
+
+        return $cache;
+    }
+
+    /**
+     * Drop rows falling inside a manual month. Wherever the manual figure is
+     * ADDED to calculated revenue, any order recorded in those months would
+     * otherwise be counted twice — the hand-entered total already includes it.
+     * (9 orders / $21,670 in Sep–Oct 2025.)
+     */
+    private function excludeManualMonths($query, string $column)
+    {
+        $months = $this->manualRevenueMonths();
+        if (empty($months)) {
+            return $query;
+        }
+        $placeholders = implode(',', array_fill(0, count($months), '?'));
+
+        return $query->whereRaw("DATE_FORMAT($column, '%Y-%m') NOT IN ($placeholders)", $months);
+    }
+
+    /**
+     * Purchase-request service fees are earned when the customer PAYS, not when
+     * the request is opened. A handful of paid requests carry no paid_at, so
+     * fall back to created_at rather than dropping their fees entirely.
+     */
+    private const PR_FEE_DATE = 'COALESCE(paid_at, created_at)';
+
     /** Total revenue (MXN) within a window: paid orders + deposits + PR fees. */
     private function revenueInWindow($start, $end): float
     {
-        $shipping = (float) (Order::whereNotNull('paid_at')->whereBetween('paid_at', [$start, $end])
+        $shipping = (float) ($this->excludeManualMonths(
+            Order::whereNotNull('paid_at')->whereBetween('paid_at', [$start, $end]), 'paid_at')
             ->selectRaw('SUM(COALESCE(amount_paid, deposit_amount, 0)) as t')->value('t') ?? 0);
-        $deposits = (float) Order::whereNotNull('deposit_paid_at')->whereNull('paid_at')
-            ->whereBetween('deposit_paid_at', [$start, $end])->sum('deposit_amount');
+        $deposits = (float) $this->excludeManualMonths(
+            Order::whereNotNull('deposit_paid_at')->whereNull('paid_at')
+                ->whereBetween('deposit_paid_at', [$start, $end]), 'deposit_paid_at')->sum('deposit_amount');
+        $feeDate = self::PR_FEE_DATE;
         $usd = (float) PurchaseRequest::whereIn('status', ['paid', 'purchased'])->where('currency', 'usd')
-            ->whereBetween('created_at', [$start, $end])->sum('processing_fee');
+            ->whereRaw("$feeDate BETWEEN ? AND ?", [$start, $end])->sum('processing_fee');
         $mxn = (float) PurchaseRequest::whereIn('status', ['paid', 'purchased'])->where('currency', 'mxn')
-            ->whereBetween('created_at', [$start, $end])->sum('processing_fee');
+            ->whereRaw("$feeDate BETWEEN ? AND ?", [$start, $end])->sum('processing_fee');
         return $shipping + $deposits + ($usd * self::FX) + $mxn;
     }
 
@@ -330,14 +373,18 @@ class UnifiedAdminDashboardController extends Controller
         $fmt = $daily ? '%Y-%m-%d' : '%Y-%m';
 
         // Revenue + paid-order count by paid_at bucket.
-        $ord = Order::whereNotNull('paid_at')->whereBetween('paid_at', [$s, $e])
+        $ord = $this->excludeManualMonths(
+            Order::whereNotNull('paid_at')->whereBetween('paid_at', [$s, $e]), 'paid_at')
             ->selectRaw("DATE_FORMAT(paid_at, '$fmt') as bk, SUM(COALESCE(amount_paid, deposit_amount, 0)) as rev")
             ->groupBy('bk')->get()->keyBy('bk');
-        $deposits = Order::whereNotNull('deposit_paid_at')->whereNull('paid_at')->whereBetween('deposit_paid_at', [$s, $e])
+        $deposits = $this->excludeManualMonths(
+            Order::whereNotNull('deposit_paid_at')->whereNull('paid_at')->whereBetween('deposit_paid_at', [$s, $e]), 'deposit_paid_at')
             ->selectRaw("DATE_FORMAT(deposit_paid_at, '$fmt') as bk, SUM(deposit_amount) as rev")
             ->groupBy('bk')->get()->keyBy('bk');
-        $prRows = PurchaseRequest::whereIn('status', ['paid', 'purchased'])->whereBetween('created_at', [$s, $e])
-            ->selectRaw("DATE_FORMAT(created_at, '$fmt') as bk, currency, SUM(processing_fee) as total")
+        $feeDate = self::PR_FEE_DATE;
+        $prRows = PurchaseRequest::whereIn('status', ['paid', 'purchased'])
+            ->whereRaw("$feeDate BETWEEN ? AND ?", [$s, $e])
+            ->selectRaw("DATE_FORMAT($feeDate, '$fmt') as bk, currency, SUM(processing_fee) as total")
             ->groupBy('bk', 'currency')->get();
         $fees = [];
         foreach ($prRows as $r) {
@@ -1079,7 +1126,7 @@ class UnifiedAdminDashboardController extends Controller
         // Use created_at to stay in sync with purchase_requests_count and purchased_items_count
         // Respect currency field: USD fees get converted to MXN, MXN fees stay as-is
         $serviceFeeBaseQuery = PurchaseRequest::whereIn('status', ['paid', 'purchased'])
-            ->whereBetween('created_at', [$start, $end]);
+            ->whereRaw(self::PR_FEE_DATE.' BETWEEN ? AND ?', [$start, $end]);
         $serviceFeeUSD = (clone $serviceFeeBaseQuery)->where('currency', 'usd')->sum('processing_fee');
         $serviceFeeMXNDirect = (clone $serviceFeeBaseQuery)->where('currency', 'mxn')->sum('processing_fee');
         $serviceFeeMXN = round(($serviceFeeUSD * 18.00) + $serviceFeeMXNDirect, 2);
@@ -1113,6 +1160,9 @@ class UnifiedAdminDashboardController extends Controller
             'software' => round($expensesQuery->clone()->where('category', 'software')->sum('amount'), 2),
             'office' => round($expensesQuery->clone()->where('category', 'office')->sum('amount'), 2),
             'po_box' => round($expensesQuery->clone()->where('category', 'po_box')->sum('amount'), 2),
+            // Payment processing (Stripe). Real money taken off every card charge
+            // before it ever reaches us — previously invisible to the P&L.
+            'fees' => round($expensesQuery->clone()->where('category', 'fees')->sum('amount'), 2),
             'misc' => round($expensesQuery->clone()->where('category', 'misc')->sum('amount'), 2),
         ];
         $calculatedTotalExpenses = array_sum($calculatedExpensesByCategory);
@@ -1136,11 +1186,14 @@ class UnifiedAdminDashboardController extends Controller
 
             // Revenue from all fully paid orders + pending deposits
             // Use COALESCE to fall back to deposit_amount if amount_paid is null
-            $allPaidOrdersRevenue = Order::whereNotNull('paid_at')
+            // Manual months are EXCLUDED here: their revenue arrives via
+            // $manualRevenue below, so counting the orders too double-counts.
+            $allPaidOrdersRevenue = $this->excludeManualMonths(
+                Order::whereNotNull('paid_at'), 'paid_at')
                 ->selectRaw('SUM(COALESCE(amount_paid, deposit_amount, 0)) as total')
                 ->value('total') ?? 0;
-            $allPendingDepositRevenue = Order::whereNotNull('deposit_paid_at')
-                ->whereNull('paid_at')
+            $allPendingDepositRevenue = $this->excludeManualMonths(
+                Order::whereNotNull('deposit_paid_at')->whereNull('paid_at'), 'deposit_paid_at')
                 ->sum('deposit_amount');
             $allShippingRevenue = $allPaidOrdersRevenue + $allPendingDepositRevenue;
             $allServiceFeeUSD = PurchaseRequest::whereIn('status', ['paid', 'purchased'])->where('currency', 'usd')->sum('processing_fee');
@@ -1249,31 +1302,34 @@ class UnifiedAdminDashboardController extends Controller
             $source = 'mixed';
         }
 
-        // Period Breakdowns (always calculated from DB)
-        // Helper to get processing fees using created_at for consistency
+        // Period Breakdowns (always calculated from DB). Fees are dated by
+        // PAYMENT (COALESCE(paid_at, created_at)) — expressed as an explicit
+        // whereRaw range rather than whereDate/whereMonth on an Expression,
+        // which is not reliably wrapped by the query builder.
         // Respects currency: USD fees converted to MXN, MXN fees stay as-is
-        $getPurchaseRequestFees = function ($dateCallback) {
-            $baseQuery = PurchaseRequest::whereIn('status', ['paid', 'purchased']);
-            $dateCallback($baseQuery, 'created_at');
+        $getPurchaseRequestFees = function ($from, $to) {
+            $feeDate = self::PR_FEE_DATE;
+            $baseQuery = PurchaseRequest::whereIn('status', ['paid', 'purchased'])
+                ->whereRaw("$feeDate BETWEEN ? AND ?", [$from, $to]);
             $usdFees = (clone $baseQuery)->where('currency', 'usd')->sum('processing_fee');
             $mxnFees = (clone $baseQuery)->where('currency', 'mxn')->sum('processing_fee');
-            return ($usdFees * 18) + $mxnFees;
+            return ($usdFees * self::FX) + $mxnFees;
         };
 
         $todayShipping = Order::whereDate('paid_at', today())->sum('amount_paid');
-        $todayFees = $getPurchaseRequestFees(fn($q, $col) => $q->whereDate($col, today()));
+        $todayFees = $getPurchaseRequestFees(today()->startOfDay(), today()->endOfDay());
         $todayRevenue = $todayShipping + $todayFees;
 
         $weekStart = now()->startOfWeek();
         $weekEnd = now()->endOfWeek();
         $weekShipping = Order::whereBetween('paid_at', [$weekStart, $weekEnd])->sum('amount_paid');
-        $weekFees = $getPurchaseRequestFees(fn($q, $col) => $q->whereBetween($col, [$weekStart, $weekEnd]));
+        $weekFees = $getPurchaseRequestFees($weekStart, $weekEnd);
         $weekRevenue = $weekShipping + $weekFees;
 
         $currentMonth = now()->month;
         $currentYear = now()->year;
         $monthShipping = Order::whereMonth('paid_at', $currentMonth)->whereYear('paid_at', $currentYear)->sum('amount_paid');
-        $monthFees = $getPurchaseRequestFees(fn($q, $col) => $q->whereMonth($col, $currentMonth)->whereYear($col, $currentYear));
+        $monthFees = $getPurchaseRequestFees(now()->startOfMonth(), now()->endOfMonth());
         $monthRevenue = $monthShipping + $monthFees;
 
         $allTimeUsdFees = PurchaseRequest::whereIn('status', ['paid', 'purchased'])->where('currency', 'usd')->sum('processing_fee');
