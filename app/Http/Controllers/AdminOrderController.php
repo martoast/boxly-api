@@ -69,7 +69,9 @@ class AdminOrderController extends Controller
         }
 
         $total = $query->count();
-        $orders = $query->latest()->paginate($perPage);
+        // Tie-break on the primary key: without it, rows created in the same
+        // second (bulk imports) can repeat or vanish between pages.
+        $orders = $query->latest()->orderBy('id', 'desc')->paginate($perPage);
 
         return response()->json([
             'success' => true,

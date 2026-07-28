@@ -50,7 +50,8 @@ class AdminPurchaseRequestController extends Controller
 
         return response()->json([
             'success' => true,
-            'data' => $query->latest()->paginate(20)
+            // Tie-break on the primary key so paging is stable (see expenses).
+            'data' => $query->latest()->orderBy('id', 'desc')->paginate(20)
         ]);
     }
 

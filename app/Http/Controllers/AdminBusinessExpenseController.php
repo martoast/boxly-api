@@ -56,10 +56,14 @@ class AdminBusinessExpenseController extends Controller
             });
         }
 
-        // Sort
+        // Sort. `expense_date` is a DATE, so dozens of rows share a value — without
+        // a deterministic tie-breaker MySQL is free to return ties in any order and
+        // LIMIT/OFFSET paging silently skips and repeats rows between pages. Any
+        // full extract (and the admin list itself) then disagrees with the SQL
+        // aggregates the dashboard uses. Break ties on the primary key.
         $sortBy = $request->get('sort_by', 'expense_date');
         $sortOrder = $request->get('sort_order', 'desc');
-        $query->orderBy($sortBy, $sortOrder);
+        $query->orderBy($sortBy, $sortOrder)->orderBy('id', 'desc');
 
         $expenses = $query->paginate($request->get('per_page', 50));
 
