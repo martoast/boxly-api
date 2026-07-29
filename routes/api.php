@@ -303,6 +303,10 @@ Route::middleware('auth:sanctum')->group(function () {
         // (consumed by Jarvis's CRM sync — see OrderStatusEventController).
         Route::get('/order-events', [\App\Http\Controllers\OrderStatusEventController::class, 'index']);
 
+        // Stripe account migration: re-point users.stripe_id old→new
+        // (see StripeRelinkController; dormant unless called).
+        Route::post('/stripe/relink', [\App\Http\Controllers\StripeRelinkController::class, 'relink']);
+
         // AI search usage analytics dashboard
         Route::get('/ai-search/stats', [\App\Http\Controllers\SearchEventController::class, 'stats']);
         Route::get('/ai-search/queries', [\App\Http\Controllers\SearchEventController::class, 'queries']);
