@@ -81,6 +81,8 @@ class User extends Authenticatable
             'registration_source' => 'array', // Automatically cast JSON to array
             'form_1583_completed_at' => 'datetime',
             'shopping_profile' => 'array',
+            'shopper_extension_installed_at' => 'datetime',
+            'shopper_extension_last_seen_at' => 'datetime',
         ];
     }
 
