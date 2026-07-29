@@ -5,7 +5,6 @@ namespace App\Http\Controllers;
 use App\Models\WarChestAccount;
 use App\Models\WarChestTransaction;
 use Illuminate\Http\Request;
-use Illuminate\Validation\Rule;
 
 class AdminWarChestController extends Controller
 {
@@ -43,7 +42,6 @@ class AdminWarChestController extends Controller
 
         $account = WarChestAccount::create([
             'name' => $validated['name'],
-            'payment_method' => $validated['payment_method'] ?? null,
             'current_balance' => $validated['current_balance'] ?? 0,
             'target_amount' => $validated['target_amount'] ?? 0,
             'currency' => $validated['currency'] ?? 'mxn',
@@ -77,7 +75,7 @@ class AdminWarChestController extends Controller
      */
     public function update(Request $request, WarChestAccount $account)
     {
-        $validated = $request->validate($this->rules($account->id, true));
+        $validated = $request->validate($this->rules(true));
 
         $oldBalance = (float) $account->current_balance;
         $account->update($validated);
@@ -200,20 +198,14 @@ class AdminWarChestController extends Controller
     }
 
     /**
-     * Delete a MANUAL or ADJUSTMENT entry and reverse its balance effect.
-     * Order/expense-linked entries can't be deleted here — remove the source.
+     * Delete any ledger entry and reverse its balance effect. The checkbook is
+     * fully admin-maintained, so historical order/expense entries left over from
+     * the old automatic routing can be cleaned out here too.
      */
     public function destroyTransaction(WarChestAccount $account, WarChestTransaction $transaction)
     {
         if ($transaction->account_id !== $account->id) {
             return response()->json(['success' => false, 'message' => 'Transaction not found'], 404);
-        }
-
-        if (!in_array($transaction->source_type, ['manual', 'adjustment', 'opening'])) {
-            return response()->json([
-                'success' => false,
-                'message' => 'This entry is linked to an order or expense — edit or delete that record instead.',
-            ], 422);
         }
 
         // Reverse the balance effect (in added money, out removed it).
@@ -230,18 +222,12 @@ class AdminWarChestController extends Controller
         ]);
     }
 
-    private function rules(?int $ignoreId = null, bool $partial = false): array
+    private function rules(bool $partial = false): array
     {
         $req = $partial ? 'sometimes|required' : 'required';
 
         return [
             'name' => "$req|string|max:100",
-            'payment_method' => [
-                'nullable',
-                'string',
-                'max:20',
-                Rule::unique('war_chest_accounts', 'payment_method')->ignore($ignoreId),
-            ],
             'current_balance' => 'sometimes|numeric|min:0|max:9999999999.99',
             'target_amount' => 'sometimes|numeric|min:0|max:9999999999.99',
             'currency' => 'nullable|string|size:3',
