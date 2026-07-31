@@ -92,6 +92,18 @@ class ShopperBoxController extends Controller
             if (! $order) {
                 $order = Order::create([
                     'user_id' => $user->id,
+                    // Both are NOT NULL with no default, so omitting them made
+                    // every FIRST add fail with a 500 — the shopper's very first
+                    // click, the only one that has to work. It went unnoticed
+                    // because the live check ran against an account that already
+                    // had an open box, which skips this branch entirely.
+                    //
+                    // Every other place that creates an Order sets exactly this
+                    // pair (AdminOrderManagementController, AdminPurchaseRequest
+                    // Controller); order_type and currency are left to their DB
+                    // defaults, which are already 'shipping' and 'mxn'.
+                    'order_number' => Order::generateOrderNumber(),
+                    'tracking_number' => Order::generateTrackingNumber(),
                     'status' => Order::STATUS_COLLECTING,
                 ]);
             }
