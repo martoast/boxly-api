@@ -197,6 +197,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // The box. One order in `collecting`, one purchase request per store.
     Route::get('/me/box', [\App\Http\Controllers\ShopperBoxController::class, 'show']);
     Route::post('/me/box/items', [\App\Http\Controllers\ShopperBoxController::class, 'addItem']);
+    Route::delete('/me/box/items/{item}', [\App\Http\Controllers\ShopperBoxController::class, 'removeItem']);
 
     Route::get('/user', function (Request $request) {
         $user = $request->user();

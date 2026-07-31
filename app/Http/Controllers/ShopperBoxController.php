@@ -143,6 +143,40 @@ class ShopperBoxController extends Controller
         });
     }
 
+    /**
+     * DELETE /me/box/items/{id} — take something back out.
+     *
+     * Adding without removing is how someone ends up with a box they don't
+     * recognise. Scoped to the caller's own open requests, so an id from another
+     * customer's box is a 404 and not a deletion.
+     */
+    public function removeItem(Request $request, int $item)
+    {
+        $user = $request->user();
+
+        $row = PurchaseRequestItem::whereHas('purchaseRequest', function ($q) use ($user) {
+            $q->where('user_id', $user->id)->whereIn('status', self::OPEN_PR_STATUSES);
+        })->find($item);
+
+        if (! $row) {
+            return response()->json(['success' => false, 'message' => 'Item not found.'], 404);
+        }
+
+        $pr = $row->purchaseRequest;
+        $row->delete();
+
+        // An empty request is clutter for the buying team — drop it with its
+        // last item rather than leaving a phantom "buy nothing at Nike".
+        if ($pr && $pr->items()->count() === 0) {
+            $pr->delete();
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => $this->state($user, $this->openOrder($user)),
+        ]);
+    }
+
     /** PR-YYYY-XXXX, matching what the rest of the app produces. */
     private function nextRequestNumber(): string
     {
@@ -173,6 +207,7 @@ class ShopperBoxController extends Controller
             preg_match('/\[store:([^\]]+)\]/', (string) $pr->admin_notes, $m);
             foreach ($pr->items as $it) {
                 $items[] = [
+                    'id' => $it->id,
                     'name' => $it->product_name,
                     'image' => $it->product_image_url,
                     'price' => $it->price !== null ? (float) $it->price : null,
