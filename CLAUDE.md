@@ -14,6 +14,8 @@
 
 10. **ROUTING: `bootstrap/app.php` uses `apiPrefix: ‘/’` — all routes in `routes/api.php` are served at the ROOT with NO `/api` prefix. NEVER hardcode `/api/` in any URLs, route helpers, or generated links. Example: the route `Route::get(‘/campaign/click/{token}’)` is accessible at `https://api.boxly.mx/campaign/click/{token}`, NOT `/api/campaign/click/{token}`.**
 
+11. **`Order::create()` MUST set `order_number` AND `tracking_number`.** Both are `NOT NULL` with no default, so omitting either is a 500 at insert time — not a validation error, a crash. Use `Order::generateOrderNumber()` / `Order::generateTrackingNumber()`, as every other Order creator does; `order_type` and `currency` can be left to their DB defaults (`shipping`, `mxn`). This shipped as a real bug in `ShopperBoxController`: it broke **every customer's first** "add to box", and hid because the only account tested already had an open order, which skips the create branch. **When a code path creates-or-finds, always test the create half against a fresh customer.**
+
 ---
 
 # MCP Server (Model Context Protocol)
