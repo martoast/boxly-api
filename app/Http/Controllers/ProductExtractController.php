@@ -7,6 +7,7 @@ use App\Models\SearchEvent;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 /**
@@ -37,7 +38,7 @@ class ProductExtractController extends Controller
             ], 422);
         }
 
-        $product = $this->parseShopify($url) ?? $this->parseJsonLd($html) ?? $this->parseMeta($html);
+        $product = $this->parseShopify($url) ?? $this->parseJsonLd($html, $url) ?? $this->parseMeta($html);
 
         if (! $product) {
             return response()->json([
@@ -144,7 +145,7 @@ class ProductExtractController extends Controller
             if (! $html) {
                 return null;
             }
-            $product = $this->parseJsonLd($html) ?? $this->parseMeta($html);
+            $product = $this->parseJsonLd($html, $url) ?? $this->parseMeta($html);
             if ($product) {
                 if (empty($product['price'])) {
                     $product['price'] = $this->priceFromHtml($html);
@@ -855,7 +856,7 @@ class ProductExtractController extends Controller
 
         // Base title/price/image from structured data when still missing.
         if (! $base['title'] || $base['price'] === null) {
-            if ($p = ($this->parseJsonLd($html) ?? $this->parseMeta($html))) {
+            if ($p = ($this->parseJsonLd($html, $url) ?? $this->parseMeta($html))) {
                 $base['title'] = $base['title'] ?: ($p['title'] ?? null);
                 $base['price'] = $base['price'] ?? ($p['price'] ?? null);
                 if (! empty($p['image'])) {
@@ -2042,20 +2043,72 @@ class ProductExtractController extends Controller
     {
         $key = config('services.scraperapi.key');
         try {
-            if ($key) {
+            if (! $key) {
+                // No ScraperAPI key (e.g. local) — try a direct fetch.
+                $res = Http::timeout(20)->withHeaders([
+                    'User-Agent' => 'Mozilla/5.0 (compatible; BoxlyBot/1.0)',
+                ])->get($url);
+
+                return $res->successful() ? $res->body() : null;
+            }
+
+            // The cheap pool first — it serves most stores for 1 credit.
+            $status = null;
+            $body = '';
+            try {
                 $res = Http::timeout($render ? 60 : 12)->get('https://api.scraperapi.com', [
                     'api_key' => $key,
                     'url' => $url,
                     'render' => $render ? 'true' : 'false',
                     'country_code' => 'us',
                 ]);
-            } else {
-                // No ScraperAPI key (e.g. local) — try a direct fetch.
-                $res = Http::timeout(20)->withHeaders([
-                    'User-Agent' => 'Mozilla/5.0 (compatible; BoxlyBot/1.0)',
-                ])->get($url);
+                if ($res->successful()) {
+                    return $res->body();
+                }
+                $status = $res->status();
+                $body = strtolower($res->body());
+            } catch (\Throwable $e) {
+                // Timed out. Nordstrom keeps the standard pool busy for ~53s
+                // before failing, so we abandon it at 12s rather than wait.
             }
-            return $res->successful() ? $res->body() : null;
+
+            // The retailers that matter most refuse the standard pool, and say
+            // so in two different ways: Foot Locker answers 403 "requires the
+            // use of our Ultra Premium Proxies", Nordstrom 500s with "Protected
+            // domains". Every price verification at those stores failed here —
+            // Google's indexed price stood unconfirmed, so the panel showed
+            // "precio de referencia" and no saving, at exactly the retailers
+            // where the saving lives.
+            //
+            // Retry only where the proxy, not the page, is the problem: 5xx and
+            // timeouts mean we never got through. A 404 means the URL is wrong
+            // and a dearer proxy would fetch the same 404 — don't pay for that.
+            // Ultra premium costs ~20x the credits, so it must never become the
+            // default path; it is only ever spent on a request that already
+            // failed. Set SCRAPERAPI_ULTRA=false to turn it off entirely.
+            $worthUltra = $status === null                                  // timed out
+                || $status >= 500                                           // proxy gave up
+                || ($status === 403 && str_contains($body, 'ultra_premium'));
+            if (! $worthUltra || ! config('services.scraperapi.ultra')) {
+                return null;
+            }
+
+            // Slower as well as dearer — Nordstrom measured 23.9s on ultra —
+            // so the 12s cap above would reject every success it buys.
+            $res = Http::timeout($render ? 90 : 45)->get('https://api.scraperapi.com', [
+                'api_key' => $key,
+                'url' => $url,
+                'render' => $render ? 'true' : 'false',
+                'country_code' => 'us',
+                'ultra_premium' => 'true',
+            ]);
+            if (! $res->successful()) {
+                return null;
+            }
+
+            Log::info('[extract] ultra premium used', ['url' => $url, 'after' => $status ?? 'timeout']);
+
+            return $res->body();
         } catch (\Throwable $e) {
             return null;
         }
@@ -2095,7 +2148,7 @@ class ProductExtractController extends Controller
     }
 
     /** schema.org Product JSON-LD — works on most non-Shopify stores. */
-    private function parseJsonLd(string $html): ?array
+    private function parseJsonLd(string $html, ?string $url = null): ?array
     {
         if (! preg_match_all('#<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>#is', $html, $matches)) {
             return null;
@@ -2107,11 +2160,19 @@ class ProductExtractController extends Controller
             }
             foreach ($this->flattenJsonLd($json) as $node) {
                 $type = $node['@type'] ?? null;
-                $isProduct = $type === 'Product' || (is_array($type) && in_array('Product', $type, true));
+                $types = is_array($type) ? $type : [$type];
+                // ProductGroup counts. Foot Locker publishes one, with no
+                // top-level offers and the price on each hasVariant — so we read
+                // the page, found no Product node, and reported "could not parse"
+                // on a page that states its price 13 times.
+                $isProduct = (bool) array_intersect($types, ['Product', 'ProductGroup']);
                 if (! $isProduct) {
                     continue;
                 }
                 $offers = $node['offers'] ?? null;
+                if ($offers === null) {
+                    $offers = $this->variantOffer($node, $url);
+                }
                 if (is_array($offers) && array_is_list($offers)) {
                     $offers = $offers[0] ?? null;
                 }
@@ -2131,6 +2192,42 @@ class ProductExtractController extends Controller
             }
         }
         return null;
+    }
+
+    /**
+     * The offer for the variant this URL actually points at.
+     *
+     * A ProductGroup's variants can differ in price, so taking the first one is
+     * a coin flip. Match on the offer's own URL when we know which page we
+     * asked for; otherwise fall back to the first variant that quotes a price,
+     * which is still better than reporting the page unreadable.
+     */
+    private function variantOffer(array $node, ?string $url): ?array
+    {
+        $variants = $node['hasVariant'] ?? null;
+        if (! is_array($variants)) {
+            return null;
+        }
+
+        $path = $url ? strtolower((string) parse_url($url, PHP_URL_PATH)) : null;
+        $first = null;
+
+        foreach ($variants as $variant) {
+            $offer = is_array($variant) ? ($variant['offers'] ?? null) : null;
+            if (is_array($offer) && array_is_list($offer)) {
+                $offer = $offer[0] ?? null;
+            }
+            if (! is_array($offer) || ! isset($offer['price'])) {
+                continue;
+            }
+            $first ??= $offer;
+            if ($path && isset($offer['url'])
+                && strtolower((string) parse_url((string) $offer['url'], PHP_URL_PATH)) === $path) {
+                return $offer;
+            }
+        }
+
+        return $first;
     }
 
     /** Last resort: OpenGraph / meta tags. */

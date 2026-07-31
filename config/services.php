@@ -18,6 +18,10 @@ return [
      */
     'scraperapi' => [
         'key' => env('SCRAPERAPI_KEY'),
+        // Retry heavily-protected retailers (Foot Locker, Nordstrom…) on the
+        // ultra premium pool when the standard one 403s asking for it. ~20x the
+        // credits, but only ever spent on a request that already failed.
+        'ultra' => env('SCRAPERAPI_ULTRA', true),
         // Delivery ZIP for retailer pricing/stock (Amazon/Walmart structured).
         // Defaults to the San Ysidro / San Diego receiving warehouse.
         'zip' => env('SEARCH_ZIP', '92173'),
