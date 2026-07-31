@@ -99,4 +99,31 @@ class ShopperExtensionController extends Controller
             ],
         ]);
     }
+
+    /**
+     * Mint the shopper extension's API token.
+     *
+     * Called by boxly.mx while the customer is signed in (Sanctum cookie), and
+     * handed to the extension through the same window.postMessage handshake that
+     * already passes their name. The extension needs it to put things in their
+     * box — until now it only ever read public data and had no identity.
+     *
+     * Distinct token name from `chrome-extension` (the admin capturer) so a
+     * customer connecting the shopper panel never signs an employee out of the
+     * capturer, and vice versa. One active per user: reconnecting replaces it.
+     */
+    public function token(Request $request)
+    {
+        $user = $request->user();
+        if (! $user) {
+            return response()->json(['success' => false, 'message' => 'Unauthenticated'], 401);
+        }
+
+        $user->tokens()->where('name', 'boxly-shopper')->delete();
+
+        return response()->json([
+            'success' => true,
+            'data' => ['token' => $user->createToken('boxly-shopper')->plainTextToken],
+        ]);
+    }
 }

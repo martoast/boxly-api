@@ -190,6 +190,13 @@ Route::middleware('auth:sanctum')->group(function () {
     // per browser. Distinct from /me/extension-token, which serves the ADMIN
     // Product Capturer.
     Route::post('/me/shopper-extension', [\App\Http\Controllers\ShopperExtensionController::class, 'heartbeat']);
+    // Token for the SHOPPER extension. Distinct name from /me/extension-token
+    // (the admin capturer) so connecting one never signs the other out.
+    Route::post('/me/shopper-extension/token', [\App\Http\Controllers\ShopperExtensionController::class, 'token']);
+
+    // The box. One order in `collecting`, one purchase request per store.
+    Route::get('/me/box', [\App\Http\Controllers\ShopperBoxController::class, 'show']);
+    Route::post('/me/box/items', [\App\Http\Controllers\ShopperBoxController::class, 'addItem']);
 
     Route::get('/user', function (Request $request) {
         $user = $request->user();
