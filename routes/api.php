@@ -193,6 +193,8 @@ Route::middleware('auth:sanctum')->group(function () {
     // Token for the SHOPPER extension. Distinct name from /me/extension-token
     // (the admin capturer) so connecting one never signs the other out.
     Route::post('/me/shopper-extension/token', [\App\Http\Controllers\ShopperExtensionController::class, 'token']);
+    // One step of the extension funnel. No URL, no store — see the migration.
+    Route::post('/me/shopper-extension/event', [\App\Http\Controllers\ShopperExtensionController::class, 'event']);
 
     // The box. One order in `collecting`, one purchase request per store.
     Route::get('/me/box', [\App\Http\Controllers\ShopperBoxController::class, 'show']);

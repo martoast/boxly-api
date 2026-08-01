@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\ShopperExtensionEvent;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -51,6 +52,45 @@ class ShopperExtensionController extends Controller
     }
 
     /**
+     * One step of the extension funnel happened.
+     *
+     * COMPASS §7: "you cannot tune a funnel you cannot see." We knew installs
+     * and nothing else — so after building the converting half of the product we
+     * could not tell whether a single shopper used it.
+     *
+     * Deliberately narrow. No URL, no store, no product: the Web Store data
+     * disclosure says we do not collect browsing history and §5 treats that as a
+     * commitment, not a preference. `localized` is a boolean, never a domain.
+     *
+     * Fire-and-forget from the extension's point of view — it never blocks the
+     * panel and a failure here must never reach the shopper.
+     */
+    public function event(Request $request)
+    {
+        $validated = $request->validate([
+            'kind' => 'required|string|in:panel_open,gap_shown,box_add,listing_click,autofill',
+            'localized' => 'nullable|boolean',
+            // A percentage; anything outside 0-100 is a bug upstream, not data.
+            'gap_percent' => 'nullable|integer|min:0|max:100',
+        ]);
+
+        $user = $request->user();
+
+        ShopperExtensionEvent::create([
+            'user_id' => $user->id,
+            'kind' => $validated['kind'],
+            'localized' => (bool) ($validated['localized'] ?? false),
+            'gap_percent' => $validated['gap_percent'] ?? null,
+        ]);
+
+        // The extension pings this on real use, so it is also the freshest
+        // signal that the install is alive — cheaper than a separate heartbeat.
+        $user->forceFill(['shopper_extension_last_seen_at' => now()])->save();
+
+        return response()->json(['success' => true]);
+    }
+
+    /**
      * Adoption stats for the admin CLI / dashboard.
      *
      * "Active" means seen in the last 30 days — the extension pings on any
@@ -87,6 +127,7 @@ class ShopperExtensionController extends Controller
         return response()->json([
             'success' => true,
             'data'    => [
+                'funnel'               => $this->funnel(),
                 'installed'            => $total,
                 'installed_customers'  => $customers,
                 'total_customers'      => $totalCustomers,
@@ -98,6 +139,60 @@ class ShopperExtensionController extends Controller
                 'recent'               => $recent,
             ],
         ]);
+    }
+
+    /**
+     * The §7 instrument panel, in one query set.
+     *
+     * Every number here answers a question the compass asks by name. Where a
+     * question can't be answered honestly yet, it is absent rather than
+     * approximated.
+     */
+    private function funnel(): array
+    {
+        $since = now()->subDays(30);
+        $count = fn (string $kind, ?callable $extra = null) => ShopperExtensionEvent::where('kind', $kind)
+            ->where('created_at', '>=', $since)
+            ->when($extra, $extra)
+            ->count();
+
+        $opens = $count('panel_open');
+        $localizedOpens = $count('panel_open', fn ($q) => $q->where('localized', true));
+        $gaps = $count('gap_shown');
+        $adds = $count('box_add');
+
+        // Median, not mean: one 80% outlier should not become the number we put
+        // in marketing copy (§8).
+        $percents = ShopperExtensionEvent::where('kind', 'gap_shown')
+            ->where('created_at', '>=', $since)
+            ->whereNotNull('gap_percent')
+            ->orderBy('gap_percent')
+            ->pluck('gap_percent')
+            ->all();
+        $n = count($percents);
+        $median = $n === 0 ? null : (int) ($n % 2
+            ? $percents[intdiv($n, 2)]
+            : round(($percents[$n / 2 - 1] + $percents[$n / 2]) / 2));
+
+        return [
+            'window_days' => 30,
+            'panel_opens' => $opens,
+            'panel_opens_localized' => $localizedOpens,
+            'gaps_shown' => $gaps,
+            'box_adds' => $adds,
+            'listing_clicks' => $count('listing_click'),
+            'autofills' => $count('autofill'),
+            // "Did they ever use it, or just install it?"
+            'users_who_opened' => ShopperExtensionEvent::where('kind', 'panel_open')
+                ->where('created_at', '>=', $since)->distinct('user_id')->count('user_id'),
+            'users_who_added' => ShopperExtensionEvent::where('kind', 'box_add')
+                ->where('created_at', '>=', $since)->distinct('user_id')->count('user_id'),
+            // "How often do we actually have the news?"
+            'gap_rate' => $opens > 0 ? round(($gaps / $opens) * 100, 1) : null,
+            // "Is it building shipments or just informing?"
+            'add_rate' => $gaps > 0 ? round(($adds / $gaps) * 100, 1) : null,
+            'median_gap_percent' => $median,
+        ];
     }
 
     /**
