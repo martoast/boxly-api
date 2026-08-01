@@ -18,6 +18,63 @@
 
 ---
 
+# Deploying
+
+**Both apps deploy themselves on push to `main`.** There is no deploy command to
+run and no server to SSH into for a normal release.
+
+| What | Where | Trigger | Time |
+|---|---|---|---|
+| `api/` → `api.boxly.mx` | DigitalOcean (behind Cloudflare) | push to `main` | slow — several minutes to build |
+| `app/` → `boxly.mx` | Netlify | push to `main` | fast |
+| `cli/` | nothing — runs locally against prod | — | — |
+| `shopper-extension/` | Chrome Web Store, **manual** | `./pack.sh` → upload zip | days (review) |
+
+**Migrations run automatically** as part of the DigitalOcean build — verified on
+2026-08-01, when `shopper_extension_events` was created without anyone touching
+a console.
+
+## Verify it actually landed, don't assume
+
+The API build is slow enough that "I pushed it" and "it is live" are different
+facts. Probe the route rather than guessing:
+
+```bash
+# 401 = the route exists and wants auth. 404/405 = not deployed yet.
+curl -s -o /dev/null -w "%{http_code}\n" -X POST \
+  https://api.boxly.mx/me/shopper-extension/event -H "Accept: application/json"
+```
+
+To wait for it:
+
+```bash
+until [ "$(curl -s -m 10 -o /dev/null -w '%{http_code}' -X POST \
+  https://api.boxly.mx/<route> -H 'Accept: application/json')" = "401" ]; do sleep 20; done
+```
+
+Pick a probe that distinguishes *missing* from *unauthorised* — a 401 on a route
+that requires auth is proof of deployment; a 200 on a public route may just be
+a cache.
+
+## The gap between code and migrations
+
+Code and schema do not land at the same instant. **A read path that queries a
+brand-new table must not 500 while the migration catches up** — an admin command
+that worked yesterday should not break during a deploy window. Guard it:
+
+```php
+if (! Schema::hasTable('shopper_extension_events')) {
+    return null;   // callers already handle "not yet"
+}
+```
+
+## When a route 404s after a deploy
+
+Stale route cache. From `docs/employee-onboarding.md`: SSH in and run
+`php artisan route:clear`. Try this before assuming the deploy failed.
+
+---
+
 # MCP Server (Model Context Protocol)
 
 Boxly hosts an MCP server **inside this API** so any user — customer or admin —
