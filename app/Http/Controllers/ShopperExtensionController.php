@@ -6,6 +6,7 @@ use App\Models\ShopperExtensionEvent;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * Adoption tracking for Boxly Shopper — the customer-facing Chrome extension.
@@ -148,8 +149,16 @@ class ShopperExtensionController extends Controller
      * question can't be answered honestly yet, it is absent rather than
      * approximated.
      */
-    private function funnel(): array
+    private function funnel(): ?array
     {
+        // Code and migrations do not land at the same instant on a rolling
+        // deploy. `ext stats` worked before this feature existed and must keep
+        // working during the gap — a missing table is a not-yet, not an error
+        // worth breaking an admin command over.
+        if (! Schema::hasTable('shopper_extension_events')) {
+            return null;
+        }
+
         $since = now()->subDays(30);
         $count = fn (string $kind, ?callable $extra = null) => ShopperExtensionEvent::where('kind', $kind)
             ->where('created_at', '>=', $since)
