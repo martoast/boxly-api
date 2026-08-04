@@ -189,7 +189,7 @@ an agent).
 `create_purchase_request`, `get_order_payment_link` (returns a Stripe link only,
 never charges).
 
-**Admin (19):** `admin_dashboard`; orders `admin_list_orders`,
+**Admin (23):** `admin_dashboard`; orders `admin_list_orders`,
 `admin_get_order`, `admin_update_order_status`; customers
 `admin_list_customers`, `admin_get_customer`, `admin_create_customer`;
 `admin_list_packages`; purchase requests `admin_list_purchase_requests`,
@@ -197,7 +197,15 @@ never charges).
 `admin_mark_purchase_request_purchased`, `admin_reject_purchase_request`;
 expenses `admin_list_expenses`, `admin_create_expense`; campaigns
 `admin_list_campaigns`, `admin_create_campaign` (draft only); shopping trips
-`admin_list_shopping_trips`, `admin_create_shopping_trip`.
+`admin_list_shopping_trips`, `admin_create_shopping_trip`; drop-off receipts
+`admin_list_drop_off_receipts`, `admin_get_drop_off_receipt`,
+`admin_create_drop_off_receipt`, `admin_send_drop_off_receipt`.
+
+**Drop-off receipts, specifically:** creating one never emails anybody —
+`admin_send_drop_off_receipt` is the only thing that does, and the instructions
+tell the agent to confirm first. Photos can't be attached over MCP (no file
+transport), so a receipt with photos has to be finished in the admin panel or
+via `boxly drop-offs add-images` before it's sent.
 
 **Deliberately NOT exposed yet** (add when needed): order consolidate/ship
 (complex box payloads), campaign **start/send** (drafts only so an agent can't

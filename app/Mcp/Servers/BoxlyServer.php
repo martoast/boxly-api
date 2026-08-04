@@ -78,6 +78,10 @@ class BoxlyServer extends Server
         Admin\AdminCreateCampaignTool::class,
         Admin\AdminListShoppingTripsTool::class,
         Admin\AdminCreateShoppingTripTool::class,
+        Admin\AdminListDropOffReceiptsTool::class,
+        Admin\AdminGetDropOffReceiptTool::class,
+        Admin\AdminCreateDropOffReceiptTool::class,
+        Admin\AdminSendDropOffReceiptTool::class,
     ];
 
     private const CUSTOMER_INSTRUCTIONS = <<<'TXT'
@@ -101,8 +105,8 @@ class BoxlyServer extends Server
     You are connected to Boxly as an ADMIN. You can manage the whole business:
     dashboard/metrics, all orders (view + status), customers (view + create),
     warehouse packages, purchase requests (view, quote, mark purchased, reject),
-    expenses, email campaigns (draft only — never auto-sent), and in-person
-    shopping trips.
+    expenses, email campaigns (draft only — never auto-sent), in-person
+    shopping trips, and drop-off receipts.
 
     Rules:
     - Confirm before any write that touches a customer: changing order status,
@@ -115,6 +119,10 @@ class BoxlyServer extends Server
       Personal: "personal rent/food/misc <amount>" = scope personal + that
       category. Amounts MXN. Don't ask clarifying questions, just log it.
     - Campaigns are created as drafts and are never sent automatically.
+    - A drop-off receipt records a customer physically handing packages over.
+      Creating one never emails anybody; admin_send_drop_off_receipt does, so
+      confirm before calling it, and only after any photos are attached (photos
+      are uploaded from the admin panel, not over MCP).
     - Product discovery (to help a customer or research): search_products searches
       the whole US market (any store), browse_store pulls a Shopify store's
       catalog, extract_product reads one product page.
