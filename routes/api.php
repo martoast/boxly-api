@@ -113,6 +113,15 @@ Route::post('/products/store-feed', [\App\Http\Controllers\ProductExtractControl
     ->middleware('throttle:30,1');
 Route::post('/products/search', [\App\Http\Controllers\ProductExtractController::class, 'search'])
     ->middleware('throttle:30,1');
+
+// Product index — the resolved-product cache behind the Shopper panel.
+// Server-to-server ONLY (shared secret, checked in the controller): this one
+// WRITES what every shopper on a product then sees, unlike the read-only
+// /products/* routes above.
+Route::post('/products/index/get', [\App\Http\Controllers\ProductIndexController::class, 'show'])
+    ->middleware('throttle:300,1');
+Route::post('/products/index/put', [\App\Http\Controllers\ProductIndexController::class, 'store'])
+    ->middleware('throttle:300,1');
 Route::post('/products/web-search', [\App\Http\Controllers\ProductExtractController::class, 'webSearch'])
     ->middleware('throttle:30,1');
 Route::post('/products/details', [\App\Http\Controllers\ProductExtractController::class, 'details'])
