@@ -156,6 +156,19 @@ class WarmProductIndex extends Command
             }
 
             try {
+                // ── Warm the upstream BEFORE the panel asks for it ──────────
+                //
+                // This is the whole point of the command now. See the timings
+                // in app/tasks/resolution-inversion.md: a cold /products/search
+                // takes 18–25s, the panel allows it 20s, and Netlify kills the
+                // function at 30s — so cold products resolved to nothing, and
+                // the index could never be written, so it could never be read.
+                //
+                // Here there is no 30s ceiling. We pay the cold search in a
+                // background command, and the panel call that follows hits a
+                // warm cache and finishes in single digits.
+                $this->warmUpstream($app, $secret, $w);
+
                 $res = Http::timeout(90)
                     ->withHeaders(['X-Boxly-Index-Secret' => $secret])
                     ->post($app.'/api/shopper/panel', array_filter([
@@ -206,5 +219,67 @@ class WarmProductIndex extends Command
         }
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Fill our own SerpAPI cache for the searches the panel is about to run.
+     *
+     * Two hops, and both are deliberate:
+     *
+     *   1. ASK the app which queries it will use. `productQuery`/`broadenQuery`
+     *      live in TypeScript and are full of hard-won detail — the marketing
+     *      tail it strips, the brand it only prepends when absent, the variant
+     *      appended word-by-word. Reimplementing that here would give us two
+     *      definitions of a product's query, drifting apart silently, which is
+     *      the failure this command's docblock already warns about.
+     *
+     *   2. Run each query against our OWN /products/search, with a long
+     *      timeout. It answers from `multiShopping`, which caches per query —
+     *      so the point is entirely the side effect. The result is discarded.
+     *
+     * Best-effort throughout: a failure here just means the panel call after it
+     * races a cold search like it used to, which is the behaviour we already
+     * have. It must never abort the run.
+     */
+    private function warmUpstream(string $app, string $secret, array $w): void
+    {
+        try {
+            $q = Http::timeout(15)
+                ->withHeaders(['X-Boxly-Index-Secret' => $secret])
+                ->post($app.'/api/shopper/queries', array_filter([
+                    'title' => $w['title'],
+                    'brand' => $w['brand'],
+                    'variant' => $w['variant'],
+                ], fn ($v) => $v !== null));
+
+            $warm = $q->successful() ? (array) $q->json('warm') : [];
+        } catch (\Throwable $e) {
+            $warm = [];
+        }
+
+        if (! $warm) {
+            return;
+        }
+
+        $self = rtrim((string) config('app.url', 'https://api.boxly.mx'), '/');
+
+        foreach ($warm as $query) {
+            if (! is_string($query) || trim($query) === '') {
+                continue;
+            }
+            try {
+                // 120s: the whole point is to absorb the slow tail that the
+                // panel cannot. A cold Nike search measured 18.2s and a New
+                // Balance one 24.7s; this is where that time is allowed to go.
+                Http::timeout(120)->post($self.'/products/search', [
+                    'query' => $query,
+                    'limit' => 40,
+                ]);
+            } catch (\Throwable $e) {
+                // A query we failed to warm is a query the panel will pay for.
+                // Worth a line, not worth stopping.
+                $this->warn(sprintf('  ~ could not warm "%s" (%s)', mb_substr($query, 0, 40), $e->getMessage()));
+            }
+        }
     }
 }
