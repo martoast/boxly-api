@@ -66,6 +66,19 @@ return [
             'view_order' => 'Ver Mi Orden',
         ],
     ],
+    'drop_off' => [
+        'receipt' => [
+            'subject' => 'Recibo de entrega :receipt_number',
+            'title' => 'Recibimos tu entrega',
+            'hello' => 'Hola :name,',
+            'intro' => 'Confirmamos que recibimos lo que nos entregaste. Guarda este correo como tu comprobante.',
+            'receipt_number' => 'Número de recibo',
+            'date' => 'Fecha de entrega',
+            'contents' => 'Lo que recibimos',
+            'photos' => 'Fotos',
+            'closing' => 'Si algo no coincide con lo que entregaste, respóndenos a este correo y lo revisamos.',
+        ],
+    ],
     'footer' => [
         'copyright' => '© :year :app_name. Todos los derechos reservados.',
         'questions' => '¿Tienes preguntas? Contáctanos en',

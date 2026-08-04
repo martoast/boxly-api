@@ -38,6 +38,7 @@ use App\Http\Controllers\Admin\AdminCategoryController;
 use App\Http\Controllers\Admin\AdminKnowledgeController;
 use App\Http\Controllers\Admin\AdminPurchasedProductController;
 use App\Http\Controllers\Admin\AdminTokenController;
+use App\Http\Controllers\Admin\AdminDropOffReceiptController;
 
 /*
 |--------------------------------------------------------------------------
@@ -517,6 +518,19 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/{store}/logo', [AdminStoreController::class, 'uploadLogo']);
         });
 
+        // Drop-off receipts — proof we received something handed over in person.
+        // Mirrored under /employee below so Mau can create them at the warehouse.
+        Route::prefix('drop-off-receipts')->group(function () {
+            Route::get('/', [AdminDropOffReceiptController::class, 'index']);
+            Route::post('/', [AdminDropOffReceiptController::class, 'store']);
+            Route::get('/{dropOffReceipt}', [AdminDropOffReceiptController::class, 'show']);
+            Route::put('/{dropOffReceipt}', [AdminDropOffReceiptController::class, 'update']);
+            Route::delete('/{dropOffReceipt}', [AdminDropOffReceiptController::class, 'destroy']);
+            Route::post('/{dropOffReceipt}/images', [AdminDropOffReceiptController::class, 'uploadImages']);
+            Route::delete('/{dropOffReceipt}/images', [AdminDropOffReceiptController::class, 'deleteImage']);
+            Route::post('/{dropOffReceipt}/send-email', [AdminDropOffReceiptController::class, 'sendEmail']);
+        });
+
         // In-person shopping — category taxonomy for the store picker
         Route::prefix('categories')->group(function () {
             Route::get('/', [AdminCategoryController::class, 'index']);
@@ -571,6 +585,22 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/orders', [EmployeeOrderController::class, 'index']);
         Route::get('/orders/{order}', [EmployeeOrderController::class, 'show']);
         Route::post('/orders/{order}/arrival-images', [EmployeeOrderController::class, 'uploadArrivalImages']);
+
+        // Drop-off receipts — same controller as /admin/drop-off-receipts.
+        Route::prefix('drop-off-receipts')->group(function () {
+            Route::get('/', [AdminDropOffReceiptController::class, 'index']);
+            Route::post('/', [AdminDropOffReceiptController::class, 'store']);
+            Route::get('/{dropOffReceipt}', [AdminDropOffReceiptController::class, 'show']);
+            Route::put('/{dropOffReceipt}', [AdminDropOffReceiptController::class, 'update']);
+            Route::delete('/{dropOffReceipt}', [AdminDropOffReceiptController::class, 'destroy']);
+            Route::post('/{dropOffReceipt}/images', [AdminDropOffReceiptController::class, 'uploadImages']);
+            Route::delete('/{dropOffReceipt}/images', [AdminDropOffReceiptController::class, 'deleteImage']);
+            Route::post('/{dropOffReceipt}/send-email', [AdminDropOffReceiptController::class, 'sendEmail']);
+        });
+
+        // Customer lookup for the drop-off form. Read-only; full customer CRUD
+        // stays admin-only under /admin/customers (mirrors /shopping/customers).
+        Route::get('/customers', [AdminCustomerController::class, 'index']);
     });
 
     /*

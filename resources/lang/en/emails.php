@@ -66,6 +66,19 @@ return [
             'view_order' => 'View My Order',
         ],
     ],
+    'drop_off' => [
+        'receipt' => [
+            'subject' => 'Drop-off receipt :receipt_number',
+            'title' => 'We received your drop-off',
+            'hello' => 'Hi :name,',
+            'intro' => 'This confirms we received what you dropped off. Keep this email as your receipt.',
+            'receipt_number' => 'Receipt number',
+            'date' => 'Drop-off date',
+            'contents' => 'What we received',
+            'photos' => 'Photos',
+            'closing' => "If anything doesn't match what you handed over, just reply to this email and we'll look into it.",
+        ],
+    ],
     'footer' => [
         'copyright' => '© :year :app_name. All rights reserved.',
         'questions' => 'Questions? Contact us at',
