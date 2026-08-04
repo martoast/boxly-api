@@ -71,6 +71,7 @@ class ProductIndexController extends Controller
         return response()->json([
             'hit' => true,
             'payload' => $row->payload,
+            'source_url' => $row->source_url,
             // The caller decides what is too old. Age policy belongs with the
             // panel, which knows whether it is about to claim a saving.
             'resolved_at' => optional($row->resolved_at)->toIso8601String(),
@@ -99,6 +100,7 @@ class ProductIndexController extends Controller
             'variant' => 'nullable|string|max:120',
             'image' => 'nullable|string|max:2000',
             'store' => 'nullable|string|max:120',
+            'source_url' => 'nullable|string|max:2000',
         ]);
 
         try {
@@ -111,6 +113,7 @@ class ProductIndexController extends Controller
                     'variant' => $data['variant'] ?? null,
                     'image' => $data['image'] ?? null,
                     'store' => $data['store'] ?? null,
+                    'source_url' => $data['source_url'] ?? null,
                     'payload' => $data['payload'],
                     'resolved_at' => now(),
                 ]

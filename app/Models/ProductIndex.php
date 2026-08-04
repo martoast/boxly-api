@@ -19,6 +19,7 @@ class ProductIndex extends Model
         'variant',
         'image',
         'store',
+        'source_url',
         'payload',
         'resolved_at',
         'hits',
