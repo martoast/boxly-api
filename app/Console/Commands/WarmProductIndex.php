@@ -144,6 +144,7 @@ class WarmProductIndex extends Command
         $resolved = 0;
         $servedFromIndex = 0;
         $failed = 0;
+        $verifiedRows = 0;
 
         foreach ($work as $i => $w) {
             if (! $w['url'] || ! $w['title']) {
@@ -180,6 +181,13 @@ class WarmProductIndex extends Command
                         // Refresh must IGNORE what we remembered, or it reads
                         // back the very row it was sent to replace.
                         'refresh' => $w['why'] === 'refresh',
+                        // We verify prices ourselves, below. Measured locally,
+                        // verification is 68% of a cold panel — 43.6s of a
+                        // 64.6s resolve, for TWO listings, because each one
+                        // loads a retailer's page through an anti-bot proxy.
+                        // The panel cannot afford that inside Netlify's 30s;
+                        // here there is no such ceiling.
+                        'verify' => false,
                     ], fn ($v) => $v !== null));
 
                 if (! $res->successful()) {
@@ -194,6 +202,10 @@ class WarmProductIndex extends Command
                         $servedFromIndex++;
                     } else {
                         $resolved++;
+                        // The panel skipped verification for us. Do it here,
+                        // where a 40s retailer fetch is merely slow rather than
+                        // fatal, and fold the confirmed prices back in.
+                        $verifiedRows += $this->verifyAndStore((string) $res->json('index_key'));
                     }
                     $this->line(sprintf('  ✓ [%s] %s', $w['why'], mb_substr((string) $w['title'], 0, 60)));
                 }
@@ -209,8 +221,8 @@ class WarmProductIndex extends Command
 
         if (! $dry) {
             $summary = sprintf(
-                'index-warm: %d resolved (paid), %d already fresh (free), %d failed',
-                $resolved, $servedFromIndex, $failed
+                'index-warm: %d resolved (paid), %d already fresh (free), %d failed, %d price(s) verified',
+                $resolved, $servedFromIndex, $failed, $verifiedRows
             );
             $this->info($summary);
             // Logged as well as printed: this runs unattended on a schedule, and
@@ -219,6 +231,136 @@ class WarmProductIndex extends Command
         }
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Confirm prices at the retailer, and fold them back into the index row.
+     *
+     * This is the half of resolution that could never fit in the panel. Measured
+     * locally on a cold Hydro Flask:
+     *
+     *     search=14.8s  thumbs=3.6s  vision=2.6s  verify=43.6s(2/5)  total=64.6s
+     *
+     * 43.6 seconds for TWO listings, checked in parallel — so one of them alone
+     * took the whole time. It is not our code being slow: each check resolves the
+     * Google token to a merchant link, then loads that retailer's own page
+     * through ScraperAPI's ultra-premium pool, because the retailers worth
+     * confirming (Foot Locker, Nordstrom) refuse the cheap one. We are waiting
+     * for someone else's website.
+     *
+     * Netlify kills a function at 30s, so the panel had to either skip this or
+     * die. Here it is merely slow, which is the entire argument for moving it.
+     *
+     * Deliberately NOT a reimplementation of the panel: it does not rank, curate
+     * or query. It takes rows the panel already chose and asks the retailer what
+     * they cost. That is two HTTP calls and a comparison, so there is no second
+     * definition of resolution to drift.
+     *
+     * Returns how many prices were confirmed.
+     */
+    private function verifyAndStore(string $key): int
+    {
+        if ($key === '') {
+            return 0;
+        }
+
+        $row = ProductIndex::where('canonical_key', $key)->first();
+        if (! $row) {
+            return 0;
+        }
+
+        $payload = $row->payload;
+        if (! is_array($payload) || empty($payload['listings']) || ! is_array($payload['listings'])) {
+            return 0;
+        }
+
+        $listings = $payload['listings'];
+
+        /**
+         * Only what a shopper could act on.
+         *
+         * Same rule the panel used: a listing is worth confirming when it is
+         * CHEAPER than what the page asks, because that is the only claim the
+         * panel makes out loud. Confirming a more expensive one costs the same
+         * 40 seconds and buys nothing.
+         */
+        $anchor = isset($payload['us_price']) && $payload['us_price'] > 0 ? (float) $payload['us_price'] : null;
+
+        $candidates = [];
+        foreach ($listings as $i => $l) {
+            if (! empty($l['verified']) || empty($l['token'])) {
+                continue;
+            }
+            $price = isset($l['price']) && $l['price'] > 0 ? (float) $l['price'] : null;
+            if ($price === null) {
+                continue;
+            }
+            if ($anchor !== null && $price >= $anchor) {
+                continue;
+            }
+            $candidates[$i] = $price;
+        }
+
+        // Cheapest first — it is the row the panel will lead with, so if we only
+        // get through some of them, these are the ones worth having.
+        asort($candidates);
+        // Four, not two. The panel's limit was latency; ours is money.
+        $candidates = array_slice($candidates, 0, 4, true);
+
+        $confirmed = 0;
+        $self = rtrim((string) config('app.url', 'https://api.boxly.mx'), '/');
+
+        foreach ($candidates as $i => $_price) {
+            $l = $listings[$i];
+            try {
+                $details = Http::timeout(40)->post($self.'/products/details', array_filter([
+                    'token' => $l['token'],
+                    'store' => $l['store'] ?? null,
+                ], fn ($v) => $v !== null));
+
+                $link = $details->successful() ? $details->json('data.link') : null;
+                if (! $link) {
+                    continue;
+                }
+
+                // 60s: the panel capped this at 35 because it had to. The comment
+                // there records Nordstrom answering in 23.9s on the ultra-premium
+                // pool after the cheap one 403s instantly — a cap that clips the
+                // retry is worse than no verification, because it spends the time
+                // and keeps nothing.
+                $live = Http::timeout(60)->post($self.'/products/extract', ['url' => $link]);
+                $price = $live->successful() ? $live->json('data.price') : null;
+
+                // No price on the page — DICK'S and others hide it behind "See
+                // Price In Cart". Unknown is not confirmed, and the row keeps
+                // saying "precio de referencia", which is true.
+                if (! is_numeric($price) || $price <= 0) {
+                    $listings[$i]['url'] = $link;
+
+                    continue;
+                }
+
+                $listings[$i] = array_merge($l, [
+                    'url' => $link,
+                    'price' => (float) $price,
+                    'verified' => true,
+                    'indexed_price' => $l['price'] ?? null,
+                ]);
+                $confirmed++;
+            } catch (\Throwable $e) {
+                // One retailer refusing us is not a reason to lose the others.
+                $this->warn(sprintf('  ~ verify failed for %s (%s)', mb_substr((string) ($l['store'] ?? '?'), 0, 24), $e->getMessage()));
+            }
+        }
+
+        if ($confirmed > 0) {
+            $payload['listings'] = $listings;
+            $row->payload = $payload;
+            $row->save();
+            $this->line(sprintf('  ✓ verified %d price(s)', $confirmed));
+        }
+
+        return $confirmed;
     }
 
     /**
