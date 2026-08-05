@@ -6,7 +6,7 @@ use Laravel\Mcp\Server\Tools\ToolInputSchema;
 use Laravel\Mcp\Server\Tools\ToolResult;
 
 /**
- * Formats the Spanish delivery message for Jesus (the Estafeta courier).
+ * Formats the Spanish delivery message for Jesus (the FedEx courier).
  * Pure string formatting — mirrors cli/commands/jesus-message.js. No API call.
  */
 class AdminGenerateJesusMessageTool extends AdminTool
@@ -18,7 +18,7 @@ class AdminGenerateJesusMessageTool extends AdminTool
 
     public function description(): string
     {
-        return 'Generate the formatted Spanish hand-off message for Jesus (Estafeta courier) for a shipped/consolidated box. Provide the customer name + address and the box dimensions (LxWxH cm) and weight (kg). Use after consolidating an order.';
+        return 'Generate the formatted Spanish hand-off message for Jesus (FedEx courier) for a shipped/consolidated box. Provide the customer name + address and the box dimensions (LxWxH cm) and weight (kg). Use after consolidating an order.';
     }
 
     public function schema(ToolInputSchema $schema): ToolInputSchema
@@ -53,7 +53,7 @@ class AdminGenerateJesusMessageTool extends AdminTool
             if ($name === '') {
                 return ToolResult::error('name is required.');
             }
-            $shipping = ($arguments['shipping'] ?? 'air') === 'ground' ? 'Terrestre Estafeta' : 'Avión Estafeta';
+            $shipping = ($arguments['shipping'] ?? 'air') === 'ground' ? 'Terrestre FedEx' : 'Avión FedEx';
             $contents = $arguments['contents'] ?? '[pendiente]';
 
             $boxes = $arguments['boxes'] ?? null;
