@@ -1,7 +1,13 @@
 {{-- purchase-requests/quote-sent.blade.php --}}
 @extends('emails.layout')
 
-@section('subject', $locale === 'es' ? '💰 Tu cotización está lista' : '💰 Your quote is ready')
+{{--
+    The request number belongs in the SUBJECT. Without it every quote shares one
+    subject line, Gmail threads them as a conversation, and then collapses the
+    "repeated" tail behind a ••• — which on a phone hid the Pay button entirely.
+    A unique subject keeps each quote its own message, and is easier to search.
+--}}
+@section('subject', ($locale === 'es' ? '💰 Tu cotización está lista — ' : '💰 Your quote is ready — ') . $request->request_number)
 
 @section('content')
     @php
@@ -23,6 +29,30 @@
             We have prepared the quote for your assisted purchase request {{ $request->request_number }}.
         @endif
     </p>
+
+    {{--
+        TOTAL + CTA FIRST. The itemized breakdown below is reassurance; paying is
+        the job. Putting the button under a long product table meant a phone user
+        had to scroll past everything to find it — and when Gmail collapsed the
+        tail, the button disappeared completely. The action never goes below the
+        fold again.
+    --}}
+    @if($request->payment_method === \App\Models\PurchaseRequest::PAYMENT_METHOD_STRIPE)
+        <div style="margin: 30px 0; padding: 25px; background-color: #f7f9fc; border: 1px solid #e3e8ef; border-radius: 6px; text-align: center;">
+            <p style="margin: 0 0 4px; color: #666; font-size: 14px;">
+                {{ $locale === 'es' ? 'Total a pagar' : 'Total to pay' }}
+            </p>
+            <p style="margin: 0 0 20px; font-size: 32px; font-weight: bold; line-height: 1.1;">
+                ${{ number_format((float) $request->total_amount, 2) }} <span style="font-size: 16px; font-weight: normal; color: #666;">USD</span>
+            </p>
+            <a href="{{ $request->payment_link }}" class="button" style="display: inline-block;">
+                {{ $locale === 'es' ? 'Pagar Ahora' : 'Pay Now' }}
+            </a>
+            <p style="margin: 15px 0 0; color: #666; font-size: 13px;">
+                {{ $locale === 'es' ? 'Paga con tarjeta de crédito o débito. El detalle está abajo.' : 'Pay by credit or debit card. The breakdown is below.' }}
+            </p>
+        </div>
+    @endif
 
     {{--
         The customer used to get a bare total with no idea what it covered — and
@@ -100,20 +130,13 @@
     </p>
 
     @if($request->payment_method === \App\Models\PurchaseRequest::PAYMENT_METHOD_STRIPE)
-        {{-- STRIPE PAYMENT SECTION --}}
-        <div style="text-align: center; margin: 35px 0;">
+        {{-- Secondary CTA. The primary one is above the breakdown; this one
+             catches anyone who read all the way down before deciding. --}}
+        <div style="text-align: center; margin: 30px 0;">
             <a href="{{ $request->payment_link }}" class="button">
                 {{ $locale === 'es' ? 'Pagar Ahora' : 'Pay Now' }}
             </a>
         </div>
-
-        <p style="color: #666; text-align: center;">
-            @if($locale === 'es')
-                Haz clic en el botón anterior para pagar con tarjeta de crédito o débito.
-            @else
-                Click the button above to pay with credit or debit card.
-            @endif
-        </p>
 
     @elseif($request->payment_method === \App\Models\PurchaseRequest::PAYMENT_METHOD_MANUAL_DEPOSIT)
         {{-- MANUAL DEPOSIT SECTION --}}
