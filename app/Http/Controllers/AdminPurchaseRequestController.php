@@ -859,16 +859,66 @@ class AdminPurchaseRequestController extends Controller
                 'auto_advance' => false,
             ]);
 
-            // One Stripe line — the grand total in USD. The breakdown
-            // (items + shipping + tax + fee) lives in the description
-            // for the customer's reference but isn't itemized.
-            $stripe->invoiceItems->create([
-                'customer'    => $shoppingCustomerId,
-                'invoice'     => $stripeInvoice->id,
-                'amount'      => (int) round($totalUsd * 100),
-                'currency'    => 'usd',
-                'description' => "Boxly — {$purchaseRequest->request_number}",
-            ]);
+            // Itemized, because a single "Boxly — PR-26-XXXXX" line for the grand
+            // total tells the customer nothing about what they're paying for.
+            // One Stripe line per product they actually get, then the costs that
+            // turn those into the amount due. Unavailable items were already
+            // filtered out of $billableItems, so they never appear here — the
+            // customer is not billed for, or shown, something we can't supply.
+            //
+            // The cents are summed and reconciled against $totalUsd below: Stripe
+            // charges the sum of its lines, so a rounding drift would silently
+            // bill a different number than the PR records.
+            $lineCents = 0;
+            $addLine = function (string $description, float $amountUsd) use (
+                $stripe, $shoppingCustomerId, $stripeInvoice, &$lineCents
+            ) {
+                $cents = (int) round($amountUsd * 100);
+                if ($cents === 0) {
+                    return; // don't clutter the invoice with $0.00 rows
+                }
+                $stripe->invoiceItems->create([
+                    'customer'    => $shoppingCustomerId,
+                    'invoice'     => $stripeInvoice->id,
+                    'amount'      => $cents,
+                    'currency'    => 'usd',
+                    'description' => mb_substr($description, 0, 250),
+                ]);
+                $lineCents += $cents;
+            };
+
+            foreach ($billableItems as $item) {
+                $qty  = (int) $item->quantity;
+                $unit = (float) $item->price;
+                $label = $item->product_name;
+                if (is_array($item->options) && count($item->options) > 0) {
+                    $label .= ' (' . collect($item->options)
+                        ->map(fn ($v, $k) => "{$k}: {$v}")
+                        ->implode(', ') . ')';
+                }
+                $addLine("{$qty} × {$label}", $unit * $qty);
+            }
+
+            $addLine('Envío en tiendas de EE. UU. / US store shipping', $shippingUsd);
+            $addLine('Impuestos / Sales tax', $salesTaxUsd);
+            $addLine(sprintf('Comisión Boxly / Boxly commission (%.0f%%)', $feePercent), $feeUsd);
+
+            // Reconcile: Stripe bills the sum of its lines, so if per-line
+            // rounding drifted from the recorded total, absorb the difference
+            // rather than charging a number the PR doesn't show.
+            $driftCents = (int) round($totalUsd * 100) - $lineCents;
+            if ($driftCents !== 0) {
+                $stripe->invoiceItems->create([
+                    'customer'    => $shoppingCustomerId,
+                    'invoice'     => $stripeInvoice->id,
+                    'amount'      => $driftCents,
+                    'currency'    => 'usd',
+                    'description' => 'Ajuste de redondeo / Rounding adjustment',
+                ]);
+                Log::info('[quote] rounding adjustment applied', [
+                    'pr' => $purchaseRequest->request_number, 'cents' => $driftCents,
+                ]);
+            }
 
             $stripe->invoices->finalizeInvoice($stripeInvoice->id);
             $sentInvoice = $stripe->invoices->sendInvoice($stripeInvoice->id);

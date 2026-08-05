@@ -24,8 +24,79 @@
         @endif
     </p>
 
-    <p style="font-size: 18px; margin: 25px 0;">
-        {{ $locale === 'es' ? 'Total a Pagar:' : 'Total to Pay:' }} ${{ number_format($request->total_amount, 2) }} MXN
+    {{--
+        The customer used to get a bare total with no idea what it covered — and
+        it was labelled MXN while the invoice is issued in USD. Both fixed: the
+        exact products we're buying, then the arithmetic that turns them into the
+        amount due. `unavailable` lines are excluded from billing, so they are
+        listed separately rather than silently dropped.
+    --}}
+    @php
+        $billable = $request->items->filter(fn ($i) => $i->stock_status !== 'unavailable' && $i->stock_status !== 'wishlist');
+        $dropped  = $request->items->filter(fn ($i) => $i->stock_status === 'unavailable');
+    @endphp
+
+    <h3 style="margin: 30px 0 10px;">
+        {{ $locale === 'es' ? 'Lo que vamos a comprar' : "What we'll be buying" }}
+    </h3>
+
+    <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+        @foreach($billable as $item)
+            <tr>
+                <td style="padding: 8px 0; border-bottom: 1px solid #eee;">
+                    {{ $item->product_name }}
+                    @if($item->options)
+                        @foreach((array) $item->options as $k => $v)
+                            <br><span style="color: #888; font-size: 13px;">{{ $k }}: {{ $v }}</span>
+                        @endforeach
+                    @endif
+                </td>
+                <td style="padding: 8px 0; border-bottom: 1px solid #eee; text-align: right; white-space: nowrap;">
+                    {{ $item->quantity }} × ${{ number_format((float) $item->price, 2) }}<br>
+                    <strong>${{ number_format((float) $item->price * (int) $item->quantity, 2) }}</strong>
+                </td>
+            </tr>
+        @endforeach
+    </table>
+
+    @if($dropped->count())
+        <div style="margin: 0 0 20px; padding: 12px 15px; background-color: #fff8e1; border: 1px solid #ffe0a3;">
+            <strong>{{ $locale === 'es' ? 'No disponible — no te lo cobramos' : "Unavailable — not charged" }}</strong>
+            @foreach($dropped as $item)
+                <br><span style="color: #7a6000;">{{ $item->product_name }}</span>
+            @endforeach
+        </div>
+    @endif
+
+    <table style="width: 100%; border-collapse: collapse; margin-bottom: 25px;">
+        <tr>
+            <td style="padding: 5px 0;">{{ $locale === 'es' ? 'Productos' : 'Products' }}</td>
+            <td style="padding: 5px 0; text-align: right;">${{ number_format((float) $request->items_total, 2) }}</td>
+        </tr>
+        <tr>
+            <td style="padding: 5px 0;">{{ $locale === 'es' ? 'Envío en tiendas de EE. UU.' : 'US store shipping' }}</td>
+            <td style="padding: 5px 0; text-align: right;">${{ number_format((float) $request->shipping_cost, 2) }}</td>
+        </tr>
+        <tr>
+            <td style="padding: 5px 0;">{{ $locale === 'es' ? 'Impuestos' : 'Sales tax' }}</td>
+            <td style="padding: 5px 0; text-align: right;">${{ number_format((float) $request->sales_tax, 2) }}</td>
+        </tr>
+        <tr>
+            <td style="padding: 5px 0; border-top: 1px solid #ddd;">{{ $locale === 'es' ? 'Comisión Boxly' : 'Boxly commission' }}</td>
+            <td style="padding: 5px 0; border-top: 1px solid #ddd; text-align: right;">${{ number_format((float) $request->processing_fee, 2) }}</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 0; border-top: 2px solid #333; font-size: 18px;"><strong>{{ $locale === 'es' ? 'Total a Pagar' : 'Total to Pay' }}</strong></td>
+            <td style="padding: 10px 0; border-top: 2px solid #333; text-align: right; font-size: 18px;"><strong>${{ number_format((float) $request->total_amount, 2) }} USD</strong></td>
+        </tr>
+    </table>
+
+    <p style="color: #666; font-size: 13px; margin-top: -10px;">
+        @if($locale === 'es')
+            El envío de tu caja a México se cotiza por separado según el tamaño de la caja.
+        @else
+            Shipping your box to Mexico is quoted separately based on box size.
+        @endif
     </p>
 
     @if($request->payment_method === \App\Models\PurchaseRequest::PAYMENT_METHOD_STRIPE)
