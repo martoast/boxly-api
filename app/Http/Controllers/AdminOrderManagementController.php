@@ -6,6 +6,7 @@ use App\Models\Order;
 use App\Models\OrderBox;
 use App\Models\User;
 use App\Models\OrderItem;
+use App\Support\ProtectionProduct;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -57,6 +58,7 @@ class AdminOrderManagementController extends Controller
             'boxes' => 'nullable|array',
             'boxes.*.stripe_price_id' => 'required_with:boxes|string|max:255',
             'boxes.*.quantity' => 'nullable|integer|min:1|max:99',
+            'boxes.*.has_protection' => 'nullable|boolean',
             'boxes.*.length' => 'nullable|numeric|min:0|max:999999.99',
             'boxes.*.width' => 'nullable|numeric|min:0|max:999999.99',
             'boxes.*.height' => 'nullable|numeric|min:0|max:999999.99',
@@ -198,6 +200,7 @@ class AdminOrderManagementController extends Controller
             'boxes.*.id' => 'nullable|integer|exists:order_boxes,id',
             'boxes.*.stripe_price_id' => 'sometimes|string|max:255',
             'boxes.*.quantity' => 'nullable|integer|min:1|max:99',
+            'boxes.*.has_protection' => 'nullable|boolean',
             'boxes.*.length' => 'nullable|numeric|min:0|max:999999.99',
             'boxes.*.width' => 'nullable|numeric|min:0|max:999999.99',
             'boxes.*.height' => 'nullable|numeric|min:0|max:999999.99',
@@ -315,9 +318,19 @@ class AdminOrderManagementController extends Controller
         $stripe = Cashier::stripe();
         $boxEntries = [];
 
+        // Live Boxly Protection price, read once per call and only when some
+        // box actually wants it.
+        $wantsProtection = collect($boxes)->contains(fn ($b) => ! empty($b['has_protection']));
+        $protection = $wantsProtection ? ProtectionProduct::price() : null;
+
+        if ($wantsProtection && ! $protection) {
+            throw new \Exception('Could not read the Boxly Protection price from Stripe.');
+        }
+
         foreach ($boxes as $boxInput) {
             $stripePriceId = $boxInput['stripe_price_id'];
             $quantity = $boxInput['quantity'] ?? 1;
+            $hasProtection = ! empty($boxInput['has_protection']);
 
             try {
                 $stripePrice = $stripe->prices->retrieve($stripePriceId, [
@@ -336,6 +349,10 @@ class AdminOrderManagementController extends Controller
                 'box_price' => $stripePrice->unit_amount / 100,
                 'currency' => strtolower($stripePrice->currency),
                 'quantity' => $quantity,
+                'has_protection' => $hasProtection,
+                'protection_price' => $hasProtection ? $protection['amount'] : null,
+                'protection_price_id' => $hasProtection ? $protection['price_id'] : null,
+                'protection_product_id' => $hasProtection ? $protection['product_id'] : null,
                 'length' => $boxInput['length'] ?? null,
                 'width' => $boxInput['width'] ?? null,
                 'height' => $boxInput['height'] ?? null,
@@ -356,6 +373,7 @@ class AdminOrderManagementController extends Controller
     private function saveBoxEntries(Order $order, array $boxEntries): float
     {
         $totalBoxPrice = 0;
+        $protectionTotal = 0;
 
         foreach ($boxEntries as $entry) {
             OrderBox::create([
@@ -367,6 +385,10 @@ class AdminOrderManagementController extends Controller
                 'box_price' => $entry['box_price'],
                 'currency' => $entry['currency'],
                 'quantity' => $entry['quantity'],
+                'has_protection' => $entry['has_protection'] ?? false,
+                'protection_price' => $entry['protection_price'] ?? null,
+                'protection_price_id' => $entry['protection_price_id'] ?? null,
+                'protection_product_id' => $entry['protection_product_id'] ?? null,
                 'length' => $entry['length'] ?? null,
                 'width' => $entry['width'] ?? null,
                 'height' => $entry['height'] ?? null,
@@ -374,10 +396,14 @@ class AdminOrderManagementController extends Controller
             ]);
 
             $totalBoxPrice += $entry['box_price'] * $entry['quantity'];
+
+            if (! empty($entry['has_protection'])) {
+                $protectionTotal += ($entry['protection_price'] ?? 0) * $entry['quantity'];
+            }
         }
 
         // Update order with total and legacy fields
-        $updateData = ['box_price' => $totalBoxPrice];
+        $updateData = ['box_price' => $totalBoxPrice, 'protection_total' => $protectionTotal];
 
         if (count($boxEntries) === 1) {
             $singleBox = $boxEntries[0];
@@ -411,14 +437,24 @@ class AdminOrderManagementController extends Controller
         $userName = Str::slug($user->name);
 
         $totalBoxPrice = 0;
+        $protectionTotal = 0;
         $existingBoxIds = $order->boxes->pluck('id')->toArray();
         $updatedBoxIds = [];
+
+        // Live Boxly Protection price, read once and only if something needs it.
+        $wantsProtection = collect($boxes)->contains(fn ($b) => ! empty($b['has_protection']));
+        $protection = $wantsProtection ? ProtectionProduct::price() : null;
+
+        if ($wantsProtection && ! $protection) {
+            throw new \Exception('Could not read the Boxly Protection price from Stripe.');
+        }
 
         foreach ($boxes as $index => $boxInput) {
             $boxId = $boxInput['id'] ?? null;
             $stripePriceId = $boxInput['stripe_price_id'];
             $quantity = $boxInput['quantity'] ?? 1;
             $guiaNumber = $boxInput['guia_number'] ?? null;
+            $hasProtection = ! empty($boxInput['has_protection']);
 
             // Get the GIA file for this box if uploaded
             $giaFile = $giaFiles[$index]['gia_file'] ?? null;
@@ -439,6 +475,7 @@ class AdminOrderManagementController extends Controller
                             'box_price' => $stripePrice->unit_amount / 100,
                             'currency' => strtolower($stripePrice->currency),
                             'quantity' => $quantity,
+                            ...$this->protectionFields($box, $hasProtection, $protection),
                             'length' => $boxInput['length'] ?? $box->length,
                             'width' => $boxInput['width'] ?? $box->width,
                             'height' => $boxInput['height'] ?? $box->height,
@@ -449,7 +486,7 @@ class AdminOrderManagementController extends Controller
                     }
                 } else {
                     // Update quantity and dimensions if provided
-                    $updateData = ['quantity' => $quantity];
+                    $updateData = ['quantity' => $quantity] + $this->protectionFields($box, $hasProtection, $protection);
                     if (isset($boxInput['length'])) $updateData['length'] = $boxInput['length'];
                     if (isset($boxInput['width'])) $updateData['width'] = $boxInput['width'];
                     if (isset($boxInput['height'])) $updateData['height'] = $boxInput['height'];
@@ -484,7 +521,9 @@ class AdminOrderManagementController extends Controller
                     ]);
                 }
 
+                $box->refresh();
                 $totalBoxPrice += $box->box_price * $box->quantity;
+                $protectionTotal += $box->protection_total;
                 $updatedBoxIds[] = $boxId;
 
             } else {
@@ -504,6 +543,7 @@ class AdminOrderManagementController extends Controller
                     'box_price' => $stripePrice->unit_amount / 100,
                     'currency' => strtolower($stripePrice->currency),
                     'quantity' => $quantity,
+                    ...$this->protectionFields(null, $hasProtection, $protection),
                     'guia_number' => $guiaNumber,
                     'length' => $boxInput['length'] ?? null,
                     'width' => $boxInput['width'] ?? null,
@@ -529,6 +569,7 @@ class AdminOrderManagementController extends Controller
                 }
 
                 $totalBoxPrice += $newBox->box_price * $newBox->quantity;
+                $protectionTotal += $newBox->protection_total;
                 $updatedBoxIds[] = $newBox->id;
             }
         }
@@ -545,7 +586,40 @@ class AdminOrderManagementController extends Controller
             }
         }
 
+        $order->update(['protection_total' => $protectionTotal]);
+
         return $totalBoxPrice;
+    }
+
+    /**
+     * The protection columns to write for a box.
+     *
+     * Turning protection ON snapshots today's Stripe price. Leaving it on does
+     * NOT re-snapshot: the customer was billed the old amount, and silently
+     * repricing an existing box because Stripe moved would change what an
+     * already-invoiced order says it owes. Turning it off clears the snapshot.
+     */
+    private function protectionFields(?OrderBox $box, bool $hasProtection, ?array $protection): array
+    {
+        if (! $hasProtection) {
+            return [
+                'has_protection' => false,
+                'protection_price' => null,
+                'protection_price_id' => null,
+                'protection_product_id' => null,
+            ];
+        }
+
+        if ($box && $box->has_protection && $box->protection_price !== null) {
+            return ['has_protection' => true];   // keep the price it was sold at
+        }
+
+        return [
+            'has_protection' => true,
+            'protection_price' => $protection['amount'],
+            'protection_price_id' => $protection['price_id'],
+            'protection_product_id' => $protection['product_id'],
+        ];
     }
 
     /**

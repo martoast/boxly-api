@@ -9,6 +9,7 @@ use App\Models\User;
 use App\Models\AffiliateConversion;
 use App\Mail\OrderShipped;
 use App\Mail\OrderConsolidatedInvoice;
+use App\Support\ProtectionProduct;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -212,6 +213,8 @@ class AdminOrderController extends Controller
             // Optional manual override of the amount charged for this box.
             // Defaults to the Stripe product's list price when omitted.
             'boxes.*.price' => 'nullable|numeric|min:0',
+            // Boxly Protection — optional per-box theft/loss/damage cover.
+            'boxes.*.has_protection' => 'nullable|boolean',
             'payment_method' => 'nullable|in:stripe,manual_transfer',
             // Required ship date — scheduling the order onto the Operations Board
             // is part of consolidating it. Drives the weekly board calendar.
@@ -258,7 +261,23 @@ class AdminOrderController extends Controller
             // 1. Fetch all box details from Stripe and calculate totals
             $boxEntries = [];
             $totalBoxPrice = 0;
+            $protectionTotal = 0;
+            $protectedBoxCount = 0;
             $currency = 'mxn';
+
+            // Live Stripe price for Boxly Protection, fetched once for the whole
+            // order. Only looked up if a box actually asked for it, so an order
+            // without protection never depends on that product existing.
+            $wantsProtection = collect($request->boxes)->contains(fn ($b) => ! empty($b['has_protection']));
+            $protection = $wantsProtection ? ProtectionProduct::price() : null;
+
+            if ($wantsProtection && ! $protection) {
+                DB::rollBack();
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Could not read the Boxly Protection price from Stripe. Try again, or consolidate without protection.',
+                ], 422);
+            }
 
             foreach ($request->boxes as $boxInput) {
                 try {
@@ -283,6 +302,9 @@ class AdminOrderController extends Controller
                 $boxSize = $stripePrice->product->metadata->type ?? null;
                 $currency = strtolower($stripePrice->currency);
 
+                // Protection is per box, so an entry of "3x Medium" protects 3.
+                $hasProtection = ! empty($boxInput['has_protection']);
+
                 $boxEntries[] = [
                     'stripe_price_id' => $stripePrice->id,
                     'stripe_product_id' => $stripePrice->product->id,
@@ -291,6 +313,10 @@ class AdminOrderController extends Controller
                     'box_price' => $boxPrice,
                     'currency' => $currency,
                     'quantity' => $quantity,
+                    'has_protection' => $hasProtection,
+                    'protection_price' => $hasProtection ? $protection['amount'] : null,
+                    'protection_price_id' => $hasProtection ? $protection['price_id'] : null,
+                    'protection_product_id' => $hasProtection ? $protection['product_id'] : null,
                     'length' => $boxInput['length'] ?? null,
                     'width' => $boxInput['width'] ?? null,
                     'height' => $boxInput['height'] ?? null,
@@ -298,6 +324,11 @@ class AdminOrderController extends Controller
                 ];
 
                 $totalBoxPrice += ($boxPrice * $quantity);
+
+                if ($hasProtection) {
+                    $protectionTotal += ($protection['amount'] * $quantity);
+                    $protectedBoxCount += $quantity;
+                }
             }
 
             $boxCount = count($boxEntries);
@@ -328,6 +359,8 @@ class AdminOrderController extends Controller
                         'order_number' => $order->order_number,
                         'box_count' => (string) $boxCount,
                         'total_box_price' => (string) $totalBoxPrice,
+                        'protection_total' => (string) $protectionTotal,
+                        'protected_box_count' => (string) $protectedBoxCount,
                     ],
                     'auto_advance' => false,
                 ]);
@@ -346,6 +379,22 @@ class AdminOrderController extends Controller
                         'amount' => intval($lineAmount * 100),
                         'currency' => $currency,
                         'description' => $lineDescription,
+                    ]);
+                }
+
+                // One aggregated protection line rather than one per box entry.
+                // The price is flat per box regardless of size, so "Boxly
+                // Protection - 3 cajas" reads better on the invoice than three
+                // identical rows interleaved with the boxes.
+                if ($protectedBoxCount > 0) {
+                    $stripe->invoiceItems->create([
+                        'customer' => $user->stripe_id,
+                        'invoice' => $stripeInvoice->id,
+                        'amount' => intval(round($protectionTotal, 2) * 100),
+                        'currency' => $currency,
+                        'description' => $protectedBoxCount > 1
+                            ? "{$protection['name']} - {$protectedBoxCount} cajas @ \${$protection['amount']} c/u"
+                            : "{$protection['name']} - 1 caja",
                     ]);
                 }
 
@@ -368,6 +417,10 @@ class AdminOrderController extends Controller
                     'box_price' => $entry['box_price'],
                     'currency' => $entry['currency'],
                     'quantity' => $entry['quantity'],
+                    'has_protection' => $entry['has_protection'],
+                    'protection_price' => $entry['protection_price'],
+                    'protection_price_id' => $entry['protection_price_id'],
+                    'protection_product_id' => $entry['protection_product_id'],
                     'length' => $entry['length'],
                     'width' => $entry['width'],
                     'height' => $entry['height'],
@@ -378,6 +431,7 @@ class AdminOrderController extends Controller
             // 4. Update Order with consolidation info
             $primaryBox = $boxEntries[0];
             $order->box_price = $totalBoxPrice;
+            $order->protection_total = $protectionTotal;
             $order->currency = $currency;
             $order->box_size = count($boxEntries) === 1 ? $primaryBox['box_size'] : null;
             $order->stripe_price_id = count($boxEntries) === 1 ? $primaryBox['stripe_price_id'] : null;

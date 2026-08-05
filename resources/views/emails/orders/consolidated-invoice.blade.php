@@ -80,12 +80,30 @@
                 </td>
             </tr>
             @endforeach
+
+            @if($protectedBoxCount > 0)
+            {{-- Boxly Protection — billed per protected box --}}
+            <tr>
+                <td style="padding: 8px 0; border-top: 1px solid #e0e0e0;">
+                    🛡️ {{ $locale === 'es' ? 'Boxly Protection' : 'Boxly Protection' }}
+                    <span style="color: #666; font-size: 13px;">
+                        ({{ $protectedBoxCount }} {{ $locale === 'es'
+                            ? ($protectedBoxCount === 1 ? 'caja' : 'cajas')
+                            : ($protectedBoxCount === 1 ? 'box' : 'boxes') }})
+                    </span>
+                </td>
+                <td style="padding: 8px 0; text-align: right; border-top: 1px solid #e0e0e0;">
+                    ${{ number_format($protectionTotal, 2) }} {{ strtoupper($order->currency ?? 'mxn') }}
+                </td>
+            </tr>
+            @endif
+
             <tr style="border-top: 2px solid #2E6BB7;">
                 <td style="padding: 15px 0 5px 0; font-weight: bold; font-size: 18px; color: #2E6BB7;">
                     {{ $locale === 'es' ? 'Total a Pagar:' : 'Total to Pay:' }}
                 </td>
                 <td style="padding: 15px 0 5px 0; text-align: right; font-weight: bold; font-size: 18px; color: #2E6BB7;">
-                    ${{ number_format($totalBoxPrice, 2) }} {{ strtoupper($order->currency ?? 'mxn') }}
+                    ${{ number_format($orderTotal, 2) }} {{ strtoupper($order->currency ?? 'mxn') }}
                 </td>
             </tr>
         </table>
@@ -136,7 +154,7 @@
                         {{ $locale === 'es' ? 'Monto a Depositar:' : 'Amount to Deposit:' }}
                     </td>
                     <td style="padding: 15px 0 5px 0; text-align: right; font-weight: bold; font-size: 18px; color: #2E6BB7;">
-                        ${{ number_format($totalBoxPrice, 2) }} {{ strtoupper($order->currency ?? 'mxn') }}
+                        ${{ number_format($orderTotal, 2) }} {{ strtoupper($order->currency ?? 'mxn') }}
                     </td>
                 </tr>
             </table>

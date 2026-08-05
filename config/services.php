@@ -109,6 +109,21 @@ return [
     ],
 
     /**
+     * Boxly Protection — the optional per-box theft/loss/damage add-on.
+     *
+     * Only the PRODUCT id lives here. The amount charged is always read live
+     * from Stripe at the moment of sale (see ProtectionProduct), never
+     * hardcoded — the same rule the box prices follow.
+     *
+     * Defaulted rather than env-only on purpose: local and production share
+     * one Stripe account, so a default means production needs no manual env
+     * setup and cannot silently ship with protection misconfigured.
+     */
+    'boxly_protection' => [
+        'product_id' => env('STRIPE_PROTECTION_PRODUCT_ID', 'prod_V1AEN4i1Io6J6X'),
+    ],
+
+    /**
      * Second Stripe account — used exclusively for the Boxly Store /
      * Purchase Request payment flow. Keeps the shopping books separate
      * from the main shipping/box account (which Cashier owns).

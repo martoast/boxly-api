@@ -99,6 +99,10 @@ class ProductController extends Controller
             'max_width' => $product->metadata->max_width ?? null,
             'consolidated' => $product->metadata->consolidated ?? null,
             'shipping' => $product->metadata->shipping ?? null,
+            // Boxly Protection has no metadata of its own, so the client can't
+            // pick it out of the list by shape. Flagging it here keeps the
+            // product id in config on the server instead of hardcoded in the UI.
+            'is_protection' => $product->id === config('services.boxly_protection.product_id'),
         ];
     }
 }

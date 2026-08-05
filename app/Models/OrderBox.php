@@ -20,6 +20,12 @@ class OrderBox extends Model
         'box_price',
         'currency',
         'quantity',
+        // Boxly Protection — optional per-box theft/loss/damage cover.
+        // Price is snapshotted at sale time, like box_price.
+        'has_protection',
+        'protection_price',
+        'protection_price_id',
+        'protection_product_id',
         // Dimensions and weight
         'length',
         'width',
@@ -37,6 +43,8 @@ class OrderBox extends Model
     protected $casts = [
         'box_price' => 'decimal:2',
         'quantity' => 'integer',
+        'has_protection' => 'boolean',
+        'protection_price' => 'decimal:2',
         'length' => 'decimal:2',
         'width' => 'decimal:2',
         'height' => 'decimal:2',
@@ -46,6 +54,7 @@ class OrderBox extends Model
 
     protected $appends = [
         'gia_full_url',
+        'protection_total',
     ];
 
     /**
@@ -62,6 +71,21 @@ class OrderBox extends Model
     public function getTotalPriceAttribute(): float
     {
         return (float) $this->box_price * $this->quantity;
+    }
+
+    /**
+     * What protection costs for this entry.
+     *
+     * Protection is priced per BOX, and one entry can represent several boxes
+     * ("3x Medium"), so it multiplies by quantity just like the box price does.
+     */
+    public function getProtectionTotalAttribute(): float
+    {
+        if (! $this->has_protection) {
+            return 0.0;
+        }
+
+        return (float) $this->protection_price * $this->quantity;
     }
 
     /**

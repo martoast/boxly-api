@@ -24,6 +24,7 @@ class Order extends Model
         'order_type',
         'box_size',
         'box_price',
+        'protection_total',
         'declared_value',
         'iva_amount',
         'is_rural',
@@ -82,6 +83,7 @@ class Order extends Model
         'quote_breakdown' => 'array',
         'is_rural' => 'boolean',
         'box_price' => 'decimal:2',
+        'protection_total' => 'decimal:2',
         'rural_surcharge' => 'decimal:2',
         'total_weight' => 'decimal:2',
         'actual_weight' => 'decimal:2',
@@ -478,6 +480,34 @@ class Order extends Model
 
         // Fallback to legacy single box_price field for backwards compatibility
         return (float) ($this->box_price ?? 0);
+    }
+
+    /**
+     * Total Boxly Protection charged across this order's boxes.
+     *
+     * Read from the boxes rather than the stored column so it stays right even
+     * if a box is edited without the order being re-saved; the column is the
+     * cached copy for listings that don't load the relation.
+     */
+    public function calculateProtectionTotal(): float
+    {
+        if ($this->boxes()->exists()) {
+            return (float) $this->boxes->sum(fn ($box) => $box->protection_total);
+        }
+
+        return (float) ($this->protection_total ?? 0);
+    }
+
+    /**
+     * What the customer actually owes: boxes plus protection.
+     *
+     * box_price stays boxes-only on purpose — it is labelled "total de cajas"
+     * in the UI and the emails — so anything showing an amount DUE must use
+     * this, not calculateTotalBoxPrice().
+     */
+    public function calculateOrderTotal(): float
+    {
+        return round($this->calculateTotalBoxPrice() + $this->calculateProtectionTotal(), 2);
     }
 
     /**

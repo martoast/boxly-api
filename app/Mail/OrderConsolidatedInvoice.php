@@ -39,6 +39,11 @@ class OrderConsolidatedInvoice extends Mailable implements ShouldQueue
         $boxes = $this->order->boxes;
         $boxSummary = $this->order->box_summary;
         $totalBoxPrice = $this->order->calculateTotalBoxPrice();
+        // What's actually owed = boxes + Boxly Protection. totalBoxPrice stays
+        // boxes-only because it labels the box lines above the total.
+        $protectionTotal = $this->order->calculateProtectionTotal();
+        $orderTotal = $this->order->calculateOrderTotal();
+        $protectedBoxCount = (int) $boxes->where('has_protection', true)->sum('quantity');
         $isCrossing = $this->order->isCrossingOnly();
 
         // Bank details for manual transfer (NU Bank). Nu uses the CLABE as the
@@ -60,6 +65,9 @@ class OrderConsolidatedInvoice extends Mailable implements ShouldQueue
                 'boxes' => $boxes,
                 'boxSummary' => $boxSummary,
                 'totalBoxPrice' => $totalBoxPrice,
+                'protectionTotal' => $protectionTotal,
+                'protectedBoxCount' => $protectedBoxCount,
+                'orderTotal' => $orderTotal,
                 'isCrossingOnly' => $isCrossing,
                 'paymentMethod' => $this->paymentMethod,
                 'bankDetails' => $bankDetails,
