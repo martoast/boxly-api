@@ -88,6 +88,8 @@ class PaymentReceived extends Mailable implements ShouldQueue
                 'stripeInvoiceId' => $this->order->stripe_invoice_id,
                 'deliveryAddress' => $this->formatDeliveryAddress(),
                 'itemCount' => $this->order->items()->count(),
+                'protectionTotal' => $this->order->calculateProtectionTotal(),
+                'protectedBoxCount' => (int) $this->order->boxes->where('has_protection', true)->sum('quantity'),
                 'totalWeight' => $this->order->actual_weight ?? $this->order->total_weight,
                 'estimatedDelivery' => $this->getEstimatedDelivery(),
                 'frontendUrl' => config('app.frontend_url'),

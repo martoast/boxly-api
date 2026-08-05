@@ -65,6 +65,22 @@
                 </td>
             </tr>
             @endif
+            @if($protectedBoxCount > 0)
+            {{-- They paid for cover; say so, or the line item is invisible after checkout --}}
+            <tr>
+                <td style="padding: 5px 0; color: #666;">
+                    🛡️ {{ $locale === 'es' ? 'Boxly Protection' : 'Boxly Protection' }}
+                    <span style="color: #999; font-size: 13px;">
+                        ({{ $protectedBoxCount }} {{ $locale === 'es'
+                            ? ($protectedBoxCount === 1 ? 'caja' : 'cajas')
+                            : ($protectedBoxCount === 1 ? 'box' : 'boxes') }})
+                    </span>
+                </td>
+                <td style="padding: 5px 0; text-align: right;">
+                    ${{ number_format($protectionTotal, 2) }} {{ $currency }}
+                </td>
+            </tr>
+            @endif
             <tr style="border-top: 1px solid #ddd;">
                 <td style="padding: 10px 0 5px 0; font-weight: bold; color: #2E6BB7;">
                     {{ $locale === 'es' ? 'Total Pagado:' : 'Total Paid:' }}

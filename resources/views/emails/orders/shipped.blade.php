@@ -39,6 +39,12 @@
                 <span style="font-family: monospace; background: #fff; padding: 4px 10px; border-radius: 4px; font-size: 16px;">{{ $box->guia_number }}</span>
             </p>
             @endif
+            @if($box->has_protection)
+            {{-- In transit is exactly when the customer wants to know it is covered --}}
+            <p style="margin: 8px 0 0 0; font-size: 14px; color: #0d6a3f;">
+                🛡️ <strong>{{ $locale === 'es' ? 'Protegida con Boxly Protection' : 'Covered by Boxly Protection' }}</strong>
+            </p>
+            @endif
         </div>
         @endforeach
     </div>

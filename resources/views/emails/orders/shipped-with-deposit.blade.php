@@ -71,6 +71,21 @@
                     </td>
                 </tr>
                 @endforeach
+                @if($protectedBoxCount > 0)
+                <tr>
+                    <td style="padding: 5px 0;">
+                        🛡️ Boxly Protection
+                        <span style="color: #999; font-size: 13px;">
+                            ({{ $protectedBoxCount }} {{ $locale === 'es'
+                                ? ($protectedBoxCount === 1 ? 'caja' : 'cajas')
+                                : ($protectedBoxCount === 1 ? 'box' : 'boxes') }})
+                        </span>
+                    </td>
+                    <td style="padding: 5px 0; text-align: right;">
+                        ${{ number_format($protectionTotal, 2) }} {{ strtoupper($order->currency ?? 'mxn') }}
+                    </td>
+                </tr>
+                @endif
                 <tr style="border-top: 1px solid #ddd;">
                     <td style="padding: 10px 0 5px 0; font-weight: bold; color: #2E6BB7;">
                         {{ $locale === 'es' ? 'Total a Pagar:' : 'Total to Pay:' }}
@@ -205,12 +220,27 @@
                     </td>
                 </tr>
                 @endforeach
+                @if($protectedBoxCount > 0)
+                <tr>
+                    <td style="padding: 5px 0;">
+                        🛡️ Boxly Protection
+                        <span style="color: #999; font-size: 13px;">
+                            ({{ $protectedBoxCount }} {{ $locale === 'es'
+                                ? ($protectedBoxCount === 1 ? 'caja' : 'cajas')
+                                : ($protectedBoxCount === 1 ? 'box' : 'boxes') }})
+                        </span>
+                    </td>
+                    <td style="padding: 5px 0; text-align: right;">
+                        ${{ number_format($protectionTotal, 2) }} {{ strtoupper($order->currency ?? 'mxn') }}
+                    </td>
+                </tr>
+                @endif
                 <tr style="border-top: 1px solid #ddd;">
                     <td style="padding: 10px 0 5px 0; font-weight: bold;">
                         {{ $locale === 'es' ? 'Total:' : 'Total:' }}
                     </td>
                     <td style="padding: 10px 0 5px 0; text-align: right; font-weight: bold;">
-                        ${{ number_format($totalBoxPrice, 2) }} {{ strtoupper($order->currency ?? 'mxn') }}
+                        ${{ number_format($orderTotal, 2) }} {{ strtoupper($order->currency ?? 'mxn') }}
                     </td>
                 </tr>
                 <tr>

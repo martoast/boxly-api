@@ -50,6 +50,9 @@ class OrderShippedWithDeposit extends Mailable implements ShouldQueue
         $hasMultipleBoxes = $this->order->hasMultipleBoxes();
         $boxSummary = $this->order->box_summary;
         $totalBoxPrice = $this->order->calculateTotalBoxPrice();
+        $protectionTotal = $this->order->calculateProtectionTotal();
+        $orderTotal = $this->order->calculateOrderTotal();
+        $protectedBoxCount = (int) $this->order->boxes->where('has_protection', true)->sum('quantity');
 
         // Crossing order pickup location
         $isCrossing = $this->order->isCrossingOnly();
@@ -67,6 +70,9 @@ class OrderShippedWithDeposit extends Mailable implements ShouldQueue
                 'order' => $this->order,
                 'user' => $this->order->user,
                 'locale' => $this->order->user->preferred_language ?? 'es',
+                'protectionTotal' => $protectionTotal,
+                'protectedBoxCount' => $protectedBoxCount,
+                'orderTotal' => $orderTotal,
                 'trackingLink' => $trackingLink,
                 'depositLink' => $this->order->deposit_payment_link,
                 // We still pass the URL as a backup in case they can't open the attachment
