@@ -40,16 +40,32 @@ class ProtectionProduct
                 $stripe = Cashier::stripe();
                 $product = $stripe->products->retrieve($productId);
 
-                // Prefer the product's default price; fall back to its first
-                // active one so a cleared default doesn't take the feature down.
-                $price = $product->default_price
-                    ? $stripe->prices->retrieve($product->default_price)
-                    : ($stripe->prices->all(['product' => $productId, 'active' => true, 'limit' => 1])->data[0] ?? null);
+                // The product can carry prices in several currencies (it
+                // currently has both MXN and USD). Boxes are billed in the
+                // Cashier currency, and a line in another currency cannot go on
+                // that invoice — so only prices in the billing currency count.
+                // Picking by default_price alone would put USD on an MXN
+                // invoice the moment someone changes the default in Stripe.
+                $currency = strtolower(config('cashier.currency', 'mxn'));
 
-                if (! $price || ! $price->active) {
-                    Log::warning('Boxly Protection has no active Stripe price', ['product' => $productId]);
+                $candidates = collect($stripe->prices->all([
+                    'product' => $productId,
+                    'active'  => true,
+                    'limit'   => 100,
+                ])->data)->filter(fn ($p) => strtolower($p->currency) === $currency);
+
+                if ($candidates->isEmpty()) {
+                    Log::warning('Boxly Protection has no active Stripe price in the billing currency', [
+                        'product'  => $productId,
+                        'currency' => $currency,
+                    ]);
                     return null;
                 }
+
+                // Prefer the product's default price when it is in the right
+                // currency; otherwise the highest, which is the list price.
+                $price = $candidates->firstWhere('id', $product->default_price)
+                    ?? $candidates->sortByDesc('unit_amount')->first();
 
                 return [
                     'price_id'   => $price->id,
