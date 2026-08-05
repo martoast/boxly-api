@@ -48,7 +48,7 @@ class ShoppingTripsController extends Controller
             'data'    => [
                 'stores'             => $stores,
                 'per_store_fee_usd'  => (float) config('services.in_person.per_store_fee_usd', 10),
-                'service_fee_percent'=> (float) config('services.commission.default_percent', 8),
+                'service_fee_percent'=> (float) config('services.commission.default_percent', 15),
             ],
         ]);
     }

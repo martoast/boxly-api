@@ -82,7 +82,7 @@ return [
      * for premium / discounted items.
      */
     'commission' => [
-        'default_percent' => env('BOXLY_COMMISSION_PERCENT', 10),
+        'default_percent' => env('BOXLY_COMMISSION_PERCENT', 15),
     ],
 
     /**

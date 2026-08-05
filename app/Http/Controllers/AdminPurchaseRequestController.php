@@ -97,7 +97,7 @@ class AdminPurchaseRequestController extends Controller
      *
      * After verifying availability at the source store, she enters the
      * actual taxes + shipping the store charged her at checkout, plus a
-     * Boxly commission % (default 10% — defined in services.commission).
+     * Boxly commission % (default 15% — defined in services.commission).
      * The system computes the per-item final USD on save and persists
      * it so the quote step can sum it up cleanly.
      *
@@ -787,7 +787,7 @@ class AdminPurchaseRequestController extends Controller
             $salesTaxUsd = (float) ($validated['sales_tax']     ?? 0);
         }
         $feePercent  = (float) ($validated['processing_fee_percent']
-            ?? config('services.commission.default_percent', 10));
+            ?? config('services.commission.default_percent', 15));
 
         $purchaseRequest->load('items');
 
