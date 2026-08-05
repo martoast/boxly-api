@@ -19,7 +19,7 @@ class OrderController extends Controller
 {
     public function index(Request $request)
     {
-        $query = Order::with(['items'])
+        $query = Order::with(['items', 'boxes'])
             ->forUser($request->user()->id);
 
         if ($request->has('search') && $request->search) {
@@ -188,7 +188,7 @@ class OrderController extends Controller
             ], 403);
         }
 
-        $order->load(['items', 'arrivalImages']);
+        $order->load(['items', 'arrivalImages', 'boxes']);
 
         // Add metadata about what the user can do with this order
         $orderData = $order->toArray();
@@ -401,7 +401,7 @@ class OrderController extends Controller
 
     public function unpaidWithQuotes(Request $request)
     {
-        $orders = Order::with(['items'])
+        $orders = Order::with(['items', 'boxes'])
             ->forUser($request->user()->id)
             ->unpaidWithQuotes()
             ->latest('quote_sent_at')
