@@ -86,15 +86,97 @@ class PurchaseRequestController extends Controller
         }
     }
 
+    /**
+     * A readable product name for an item the customer pasted as a bare link.
+     *
+     * Product URLs almost always carry the product name as a slug, so we can get
+     * something human WITHOUT a network call — which is the whole point: the old
+     * create page scraped every URL just to fill this field, and the customer paid
+     * for it in seconds of spinner.
+     *
+     *   .../shop/monchhichi-classic-fruit-plushie-keychain?color=040
+     *        -> "Monchhichi Classic Fruit Plushie Keychain"
+     *   .../p/starbucks-pumpkin-spice-light-roast-ground-coffee-11oz/-/A-53409621
+     *        -> "Starbucks Pumpkin Spice Light Roast Ground Coffee 11oz"
+     *
+     * We walk the path backwards and take the last segment that reads like words,
+     * skipping numeric ids ("17795600806", "A-53409621") and routing noise
+     * ("p", "dp", "ip", "shop", "products"). If nothing qualifies we fall back to
+     * the host, which is still better than showing a raw URL in the admin list.
+     * A background job enriches these with the real title later, on our time.
+     */
+    private function nameFromUrl(?string $url): ?string
+    {
+        $url = trim((string) $url);
+        if ($url === '') {
+            return null;
+        }
+
+        $host = strtolower((string) parse_url($url, PHP_URL_HOST));
+        $host = preg_replace('/^www\./', '', $host);
+
+        $segments = array_values(array_filter(
+            explode('/', (string) parse_url($url, PHP_URL_PATH)),
+            fn ($s) => $s !== '',
+        ));
+
+        $skip = ['p', 'dp', 'ip', 'gp', 'shop', 'product', 'products', 'item', 'items', 'pd', 'prod'];
+        foreach (array_reverse($segments) as $segment) {
+            $slug = preg_replace('/\.(html?|aspx?|php|htm)$/i', '', $segment);
+            if (in_array(strtolower($slug), $skip, true)) {
+                continue;
+            }
+            // Needs a real word in it — filters out ids like "A-53409621".
+            if (! preg_match('/[a-z]{3,}/i', $slug)) {
+                continue;
+            }
+            $pretty = trim(preg_replace('/\s+/', ' ', str_replace(['-', '_', '+'], ' ', $slug)));
+            if ($pretty === '') {
+                continue;
+            }
+
+            return mb_substr(mb_convert_case($pretty, MB_CASE_TITLE, 'UTF-8'), 0, 255);
+        }
+
+        return $host !== '' ? mb_substr($host, 0, 255) : null;
+    }
+
+    /**
+     * The name to store for an item: what the customer typed, else the slug from
+     * their link. Returns null when there is neither — the caller skips those.
+     */
+    private function itemName(array $itemData): ?string
+    {
+        $given = trim((string) ($itemData['product_name'] ?? ''));
+        if ($given !== '') {
+            return mb_substr($given, 0, 255);
+        }
+
+        return $this->nameFromUrl($itemData['product_url'] ?? null);
+    }
+
     public function store(Request $request)
     {
         $request->validate([
             'currency' => 'nullable|in:usd,mxn',
             'conversation_id' => 'nullable|integer|exists:conversations,id',
             'items' => 'required|array|min:1',
-            'items.*.product_name' => 'required|string|max:255',
+            // Paste-first entry: the customer gives us a LINK, a variant and a
+            // quantity — the only three things they know that we can't find out
+            // ourselves. Name and price used to be REQUIRED, which is precisely
+            // why the create page scraped every pasted URL and made the customer
+            // wait (measured: 13s on Urban Outfitters, >100s on Target) for data
+            // we now resolve far more accurately at cart-build time.
+            //
+            // Both are optional now. An item needs a name OR a url — enforced in
+            // the loop below, where a missing name is derived from the url so the
+            // admin list stays readable. Price stays null until the cart is
+            // actually built and the REAL price is written back; the old scraped
+            // price was frequently stale (a live case recorded $12.79 for an item
+            // whose cart price was $11.19 after a promo).
+            'items.*.product_name' => 'nullable|string|max:255',
             'items.*.product_url' => 'nullable|string|max:16000', // name-only assisted items allowed
-            'items.*.price' => 'required|numeric|min:0',
+            'items.*.price' => 'nullable|numeric|min:0',
             'items.*.quantity' => 'required|integer|min:1',
             'items.*.options' => 'nullable', // Can be array or JSON string via FormData
             'items.*.notes' => 'nullable|string|max:500',
@@ -125,27 +207,40 @@ class PurchaseRequestController extends Controller
             // 2. Process Items
             $itemsInput = $request->input('items');
 
+            $createdItems = 0;
+
             foreach ($itemsInput as $index => $itemData) {
-                
+
                 // Handle options: If sent via FormData, it might be a JSON string or an array
                 $options = null;
                 if (isset($itemData['options'])) {
-                    $options = is_string($itemData['options']) 
-                        ? json_decode($itemData['options'], true) 
+                    $options = is_string($itemData['options'])
+                        ? json_decode($itemData['options'], true)
                         : $itemData['options'];
+                }
+
+                // A link or a name — one of the two. Anything else is an empty row
+                // the paste UI left behind, and silently dropping it is right:
+                // failing the whole request over a blank line would lose the
+                // customer's entire list.
+                $name = $this->itemName($itemData);
+                if ($name === null) {
+                    continue;
                 }
 
                 // Create Item Record
                 $item = PurchaseRequestItem::create([
                     'purchase_request_id' => $pr->id,
-                    'product_name' => $itemData['product_name'],
+                    'product_name' => $name,
                     'product_url' => $itemData['product_url'] ?? '',
                     'product_image_url' => $itemData['product_image_url'] ?? null,
-                    'price' => $itemData['price'],
+                    // Null until the cart is built and the REAL price is written.
+                    'price' => $itemData['price'] ?? null,
                     'quantity' => $itemData['quantity'],
                     'options' => $options,
                     'notes' => $itemData['notes'] ?? null,
                 ]);
+                $createdItems++;
 
                 // 3. Handle Image Upload
                 // Check if a file exists for this specific item index
@@ -181,6 +276,17 @@ class PurchaseRequestController extends Controller
                     // bucket so it's permanent (source thumbnails can expire).
                     $this->rehostItemImage($item, $itemData['product_image_url'], $user, $pr);
                 }
+            }
+
+            // Every row was blank — nothing to buy. Better a clear message than
+            // an empty request the team has to chase the customer about.
+            if ($createdItems === 0) {
+                DB::rollBack();
+
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Agrega al menos un producto con su link o su nombre.',
+                ], 422);
             }
 
             DB::commit();
@@ -608,9 +714,11 @@ class PurchaseRequestController extends Controller
         $request->validate([
             'currency' => 'nullable|in:usd,mxn',
             'items' => 'required|array|min:1',
-            'items.*.product_name' => 'required|string|max:255',
+            // Same relaxation as store() — a customer editing their request must
+            // not suddenly be asked for a price we never made them enter.
+            'items.*.product_name' => 'nullable|string|max:255',
             'items.*.product_url' => 'nullable|string|max:16000', // name-only assisted items allowed
-            'items.*.price' => 'required|numeric|min:0',
+            'items.*.price' => 'nullable|numeric|min:0',
             'items.*.quantity' => 'required|integer|min:1',
             'items.*.options' => 'nullable',
             'items.*.notes' => 'nullable|string|max:500',
@@ -654,23 +762,28 @@ class PurchaseRequestController extends Controller
                 }
 
                 if ($item) {
-                    // Update existing
+                    // Update existing. Name falls back to the link's slug and
+                    // price may legitimately still be null — the cart step owns it.
                     $item->update([
-                        'product_name' => $itemData['product_name'],
+                        'product_name' => $this->itemName($itemData) ?? $item->product_name,
                         'product_url' => $itemData['product_url'] ?? '',
-                        'price' => $itemData['price'],
+                        'price' => $itemData['price'] ?? null,
                         'quantity' => $itemData['quantity'],
                         'options' => $options,
                         'notes' => $itemData['notes'] ?? null,
                     ]);
                 } else {
                     // Create new
+                    $name = $this->itemName($itemData);
+                    if ($name === null) {
+                        continue; // blank row from the paste UI
+                    }
                     $item = PurchaseRequestItem::create([
                         'purchase_request_id' => $purchaseRequest->id,
-                        'product_name' => $itemData['product_name'],
+                        'product_name' => $name,
                         'product_url' => $itemData['product_url'] ?? '',
                         'product_image_url' => $itemData['product_image_url'] ?? null,
-                        'price' => $itemData['price'],
+                        'price' => $itemData['price'] ?? null,
                         'quantity' => $itemData['quantity'],
                         'options' => $options,
                         'notes' => $itemData['notes'] ?? null,
