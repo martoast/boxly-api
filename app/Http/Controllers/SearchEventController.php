@@ -153,6 +153,23 @@ class SearchEventController extends Controller
         $days = max(1, min((int) $request->query('days', 30), 365));
         $since = Carbon::now()->subDays($days)->startOfDay();
 
+        /**
+         * ?light=1 — skip the blocks the admin UI does not render.
+         *
+         * Measured in production: this response is 42.3 KB, and 35 KB of that is
+         * `recent_questions` (27 KB) + `recent_searches` (8 KB) — the activity
+         * feed, which now pages through /admin/ai-search/events instead and so
+         * throws all of it away. Another 5 KB is top_queries / top_questions /
+         * top_stores / daily, which nothing on the page draws.
+         *
+         * OPT-IN, deliberately. `cli/commands/ai-search.js` dumps this endpoint
+         * raw, so dropping the fields outright would quietly delete data an
+         * analysis session relies on. Without the param the response is exactly
+         * what it has always been. Skipped blocks come back as empty collections
+         * rather than missing keys, so the shape never changes either.
+         */
+        $light = $request->boolean('light');
+
         try {
             $base = SearchEvent::where('created_at', '>=', $since);
             $searches = (clone $base)->where('type', SearchEvent::TYPE_SEARCH);
@@ -169,30 +186,30 @@ class SearchEventController extends Controller
             $zeroResultSearches = (clone $searches)->where('results', 0)->count();
             $guestSearches = (clone $searches)->whereNull('user_id')->count();
 
-            $topQueries = (clone $searches)->whereNotNull('query')->where('query', '<>', '')
+            $topQueries = $light ? collect() : (clone $searches)->whereNotNull('query')->where('query', '<>', '')
                 ->select('query', DB::raw('count(*) as c'))
                 ->groupBy('query')->orderByDesc('c')->limit(25)->get();
 
             // Failing queries — searches that returned nothing. Most actionable
             // list on the dashboard: these are the brands/terms we can't yet serve.
-            $zeroResultQueries = (clone $searches)->where('results', 0)
+            $zeroResultQueries = $light ? collect() : (clone $searches)->where('results', 0)
                 ->whereNotNull('query')->where('query', '<>', '')
                 ->select('query', DB::raw('count(*) as c'))
                 ->groupBy('query')->orderByDesc('c')->limit(25)->get();
 
-            $topStores = (clone $views)->whereNotNull('store')->where('store', '<>', '')
+            $topStores = $light ? collect() : (clone $views)->whereNotNull('store')->where('store', '<>', '')
                 ->select('store', DB::raw('count(*) as c'))
                 ->groupBy('store')->orderByDesc('c')->limit(25)->get();
 
             // Most common questions (people often ask the same things) + the
             // failing/repeated terms list mirrors search analytics.
-            $topQuestions = (clone $questions)->whereNotNull('query')->where('query', '<>', '')
+            $topQuestions = $light ? collect() : (clone $questions)->whereNotNull('query')->where('query', '<>', '')
                 ->select('query', DB::raw('count(*) as c'))
                 ->groupBy('query')->orderByDesc('c')->limit(25)->get();
 
             // Recent questions WITH the assistant's answer (stored in results_sample)
             // — the Q&A pairs an admin (or an AI) can review.
-            $recentQuestions = (clone $questions)->whereNotNull('query')->where('query', '<>', '')
+            $recentQuestions = $light ? collect() : (clone $questions)->whereNotNull('query')->where('query', '<>', '')
                 ->with('user:id,name,email,created_at')
                 ->latest()->limit(40)->get(['id', 'query', 'results_sample', 'user_id', 'conversation_id', 'created_at'])
                 ->map(fn ($e) => [
@@ -206,7 +223,7 @@ class SearchEventController extends Controller
 
             $guestQuestions = (clone $questions)->whereNull('user_id')->count();
 
-            $daily = (clone $base)
+            $daily = $light ? collect() : (clone $base)
                 ->select(DB::raw('DATE(created_at) as d'), 'type', DB::raw('count(*) as c'))
                 ->groupBy('d', 'type')->orderBy('d')->get()
                 ->groupBy('d')->map(fn ($rows, $d) => [
@@ -219,7 +236,7 @@ class SearchEventController extends Controller
             $uniqueUsers = (clone $base)->whereNotNull('user_id')->distinct('user_id')->count('user_id');
 
             // Query → results: the most recent searches with what we served.
-            $recentSearches = (clone $searches)->whereNotNull('results')
+            $recentSearches = $light ? collect() : (clone $searches)->whereNotNull('results')
                 ->with('user:id,name,email,created_at')
                 ->latest()->limit(30)->get(['id', 'query', 'results', 'results_sample', 'user_id', 'conversation_id', 'created_at'])
                 ->map(fn ($e) => [
@@ -314,7 +331,10 @@ class SearchEventController extends Controller
         $v = $request->validate([
             'user_id'  => 'nullable|integer',
             'search'   => 'nullable|string|max:120',
-            'type'     => 'nullable|in:search,question,product_view',
+            // Comma-separated list allowed ("search,question") so a caller can ask
+            // for several kinds at once — the admin activity feed wants searches
+            // and questions but not product views. A single value still works.
+            'type'     => ['nullable', 'string', 'regex:/^(search|question|product_view)(,(search|question|product_view))*$/'],
             'query'    => 'nullable|string|max:200',
             'from'     => 'nullable|date',
             'to'       => 'nullable|date',
@@ -340,7 +360,10 @@ class SearchEventController extends Controller
             'url'             => $e->url,
             'conversation_id' => $e->conversation_id,
             'guest'           => $e->user_id === null,
-            'user'            => $e->user ? ['id' => $e->user->id, 'name' => $e->user->name, 'email' => $e->user->email] : null,
+            // created_at is the ACCOUNT's creation date, not the event's — the
+            // admin feed renders it as "cliente desde …". It was already
+            // eager-loaded on the relation and simply never returned.
+            'user'            => $e->user ? ['id' => $e->user->id, 'name' => $e->user->name, 'email' => $e->user->email, 'created_at' => $e->user->created_at] : null,
             'created_at'      => $e->created_at,
         ]);
 
@@ -393,7 +416,8 @@ class SearchEventController extends Controller
             $q->whereHas('user', fn ($u) => $u->where('name', 'like', "%{$s}%")->orWhere('email', 'like', "%{$s}%"));
         }
         if (! empty($v['type'])) {
-            $q->where('type', $v['type']);
+            $types = array_values(array_filter(array_map('trim', explode(',', $v['type']))));
+            count($types) === 1 ? $q->where('type', $types[0]) : $q->whereIn('type', $types);
         }
         if (! empty($v['query'])) {
             $q->where('query', 'like', '%' . $v['query'] . '%');
