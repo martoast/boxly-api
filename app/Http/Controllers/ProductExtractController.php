@@ -206,9 +206,19 @@ class ProductExtractController extends Controller
         // extra round-trips. (Set $retailers to re-enable priority passes.)
         $retailers = [];
 
+        // When the customer named a store, read that brand's OWN catalog FIRST.
+        // Now that it no longer goes through ScraperAPI it costs ~0.5s (and is
+        // cached 30 min), and having it in hand changes what the Google Shopping
+        // pass is FOR: a supplement, not the only hope. That lets us cap the
+        // Shopping wait much shorter AND skip the second fallback pass entirely.
+        // Those two 12s SerpAPI timeouts were the whole remaining 24s — measured
+        // 24.40 / 24.44 / 24.49s on three different queries, i.e. 2 x 12 every
+        // time SerpAPI lagged.
+        $own = ($store !== '' && $start === 0) ? $this->brandOwnCatalog($store, $limit) : [];
+
         // One Google Shopping query per source, fetched in parallel (cached each).
         $queries = array_merge([$baseQ], array_map(fn ($r) => $baseQ . ' ' . $r, $retailers));
-        $byQuery = $this->multiShopping($queries, $start);
+        $byQuery = $this->multiShopping($queries, $start, $own ? 6 : 12);
 
         $general = $byQuery[$baseQ] ?? [];
 
@@ -217,7 +227,9 @@ class ProductExtractController extends Controller
         // Retry ONCE with just the brand — which reliably returns the store's products —
         // so we never dead-end a customer who searched a real store. One extra call,
         // and only when the primary pass found nothing.
-        if (empty($general) && $store !== '' && $this->slugify($baseQ) !== $this->slugify($store)) {
+        // Only worth a SECOND Shopping pass when we have nothing at all — if the
+        // brand's own catalog answered, another 12s round-trip buys nothing.
+        if (empty($general) && empty($own) && $store !== '' && $this->slugify($baseQ) !== $this->slugify($store)) {
             $fallback = $this->multiShopping([$store], $start);
             $general = $fallback[$store] ?? [];
             if (! empty($general)) {
@@ -244,7 +256,7 @@ class ProductExtractController extends Controller
         // NONE of the Shopping results are actually from it, pull the brand's own
         // catalog straight from its site and lead with it. (First page only — later
         // pages paginate Shopping.)
-        if ($store !== '' && $start === 0) {
+        if (! empty($own)) {
             $want = $this->slugify($store);
             $hasStore = false;
             foreach ($general as $p) {
@@ -255,10 +267,7 @@ class ProductExtractController extends Controller
                 }
             }
             if (! $hasStore) {
-                $own = $this->brandOwnCatalog($store, $limit);
-                if (! empty($own)) {
-                    $general = array_merge($own, $general);
-                }
+                $general = array_merge($own, $general);
             }
         }
 
@@ -1757,7 +1766,7 @@ class ProductExtractController extends Controller
      * query => products[]. Lets us check the stores customers actually shop
      * (Target, Walmart, Dick's…) without serializing the latency or re-billing.
      */
-    private function multiShopping(array $queries, int $start = 0): array
+    private function multiShopping(array $queries, int $start = 0, int $timeoutSec = 12): array
     {
         $key = config('services.serpapi.key');
         $location = config('services.serpapi.location');
@@ -1801,7 +1810,7 @@ class ProductExtractController extends Controller
 
         if ($key && $toFetch) {
             try {
-                $responses = Http::pool(function ($pool) use ($toFetch, $key, $location, $start) {
+                $responses = Http::pool(function ($pool) use ($toFetch, $key, $location, $start, $timeoutSec) {
                     $reqs = [];
                     foreach ($toFetch as $q => $cacheKey) {
                         $params = [
@@ -1815,7 +1824,7 @@ class ProductExtractController extends Controller
                         // slow/hung SerpAPI call would otherwise drag the whole search to its tail
                         // (the 20-25s spikes). Cap it — a laggard fails fast and returns [] while
                         // the other passes (base + priority retailers) still serve results.
-                        $reqs[] = $pool->as($q)->timeout(12)->connectTimeout(5)->get('https://serpapi.com/search.json', $params);
+                        $reqs[] = $pool->as($q)->timeout($timeoutSec)->connectTimeout(5)->get('https://serpapi.com/search.json', $params);
                     }
 
                     return $reqs;
@@ -2396,7 +2405,7 @@ class ProductExtractController extends Controller
             return $cached;
         }
 
-        $products = $this->shopifyProducts('https://' . $slug . '.com', $limit);
+        $products = $this->shopifyProducts('https://' . $slug . '.com', $limit, false, true);
         if (empty($products)) {
             Cache::put($cacheKey, [], now()->addMinutes(10));
 
@@ -2416,7 +2425,7 @@ class ProductExtractController extends Controller
      * $onlySale is set, returns only items whose compare_at_price beats the
      * current price (i.e. real deals).
      */
-    private function shopifyProducts(string $origin, int $limit, bool $onlySale = false): array
+    private function shopifyProducts(string $origin, int $limit, bool $onlySale = false, bool $directOnly = false): array
     {
         // Pull a wide window. Sale items are sparse, AND a big upcoming "drop" can
         // fill the newest pages with future-dated (gated) items we filter out — so
@@ -2429,7 +2438,15 @@ class ProductExtractController extends Controller
         // on these stores and ultra-premium then runs. That single call was what
         // pushed a store-named search past the chat's ~30s stream budget and hung
         // the assistant. Direct first; the proxy only if the store blocks us.
-        $body = $this->fetchDirect($url) ?: $this->fetch($url);
+        // $directOnly: for a SPECULATIVE probe ("is this brand a Shopify store?")
+        // the proxy fallback is the thing we're trying to avoid. Target/Walmart/
+        // Amazon have no products.json, and paying ~25s through ScraperAPI to
+        // confirm that on every store-named search is worse than the bug we just
+        // fixed. A direct 404 is a definitive enough answer for a probe.
+        $body = $this->fetchDirect($url);
+        if (! $body && ! $directOnly) {
+            $body = $this->fetch($url);
+        }
         if (! $body) {
             return [];
         }
