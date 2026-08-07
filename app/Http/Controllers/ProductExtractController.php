@@ -1808,6 +1808,24 @@ class ProductExtractController extends Controller
             }
         }
 
+        // CIRCUIT BREAKER. During a SerpAPI incident the shopping engine does not
+        // error — it HANGS (observed 2026-08-07: 45s and 60s with no response at
+        // all, while serpapi.com/account answered in 0.2s). Every search then
+        // paid the full timeout to learn the same thing. Once it has failed
+        // outright, stop calling it for 5 minutes and serve what we can get
+        // locally (the brand's own catalog); the next request after that window
+        // re-probes and closes the breaker on the first success.
+        $breakerKey = 'serpshopping:down';
+        if ($key && $toFetch && Cache::get($breakerKey)) {
+            foreach ($toFetch as $q => $cacheKey) {
+                $out[$q] = [];
+                if (isset($locks[$q])) {
+                    $locks[$q]->release();
+                }
+            }
+            $toFetch = [];
+        }
+
         if ($key && $toFetch) {
             try {
                 $responses = Http::pool(function ($pool) use ($toFetch, $key, $location, $start, $timeoutSec) {
@@ -1832,9 +1850,11 @@ class ProductExtractController extends Controller
             } catch (\Throwable $e) {
                 $responses = [];
             }
+            $anySuccess = false;
             foreach ($toFetch as $q => $cacheKey) {
                 $resp = $responses[$q] ?? null;
                 if ($resp instanceof \Illuminate\Http\Client\Response && $resp->successful()) {
+                    $anySuccess = true;
                     $products = $this->parseShoppingResults($resp->json());
                     // SerpAPI returns 0 shopping_results NON-DETERMINISTICALLY for the
                     // exact same query (a real store like "rhode" can come back empty one
@@ -1853,6 +1873,12 @@ class ProductExtractController extends Controller
                 if (isset($locks[$q])) {
                     $locks[$q]->release();
                 }
+            }
+            // Every call failed => the provider is down, not the query.
+            if ($anySuccess) {
+                Cache::forget($breakerKey);
+            } else {
+                Cache::put($breakerKey, 1, 300);
             }
         }
 
