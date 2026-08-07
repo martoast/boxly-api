@@ -2039,6 +2039,24 @@ class ProductExtractController extends Controller
         return $products;
     }
 
+    /**
+     * A plain, unproxied GET. For endpoints that are public by design (Shopify's
+     * products.json) this is ~25x faster than the ScraperAPI path and costs no
+     * credits. Returns null on any failure so the caller can fall back.
+     */
+    private function fetchDirect(string $url): ?string
+    {
+        try {
+            $res = Http::timeout(8)->withHeaders([
+                'User-Agent' => 'Mozilla/5.0 (compatible; BoxlyBot/1.0)',
+            ])->get($url);
+
+            return $res->successful() ? $res->body() : null;
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
     private function fetch(string $url, bool $render = false): ?string
     {
         $key = config('services.scraperapi.key');
@@ -2369,13 +2387,27 @@ class ProductExtractController extends Controller
         if ($slug === '') {
             return [];
         }
+        // Uncached, this ran on EVERY store-named search — the same brand catalog
+        // re-fetched for every customer, every query. A brand's catalog changes
+        // daily at most. The empty result is cached too (shorter), so a store
+        // that isn't Shopify doesn't re-pay the full lookup on every search.
+        $cacheKey = 'brandcatalog:' . $slug . ':' . $limit;
+        if (($cached = Cache::get($cacheKey)) !== null) {
+            return $cached;
+        }
+
         $products = $this->shopifyProducts('https://' . $slug . '.com', $limit);
         if (empty($products)) {
+            Cache::put($cacheKey, [], now()->addMinutes(10));
+
             return [];
         }
         foreach ($products as &$p) {
             $p['store'] = $store;
         }
+        unset($p);
+        Cache::put($cacheKey, $products, now()->addMinutes(30));
+
         return $products;
     }
 
@@ -2390,7 +2422,14 @@ class ProductExtractController extends Controller
         // fill the newest pages with future-dated (gated) items we filter out — so
         // fetch deep enough that live products below the drop still backfill.
         $fetch = $onlySale ? min($limit * 5, 200) : min($limit * 3, 150);
-        $body = $this->fetch($origin . '/products.json?limit=' . $fetch);
+        $url = $origin . '/products.json?limit=' . $fetch;
+        // products.json is a PUBLIC Shopify endpoint — a plain GET answers it in
+        // under a second (measured: gymshark 0.62s, youngla 0.92s). Routing it
+        // through ScraperAPI cost ~25s, because the cheap pool times out at 12s
+        // on these stores and ultra-premium then runs. That single call was what
+        // pushed a store-named search past the chat's ~30s stream budget and hung
+        // the assistant. Direct first; the proxy only if the store blocks us.
+        $body = $this->fetchDirect($url) ?: $this->fetch($url);
         if (! $body) {
             return [];
         }
