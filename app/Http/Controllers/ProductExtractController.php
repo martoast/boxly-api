@@ -2416,6 +2416,33 @@ class ProductExtractController extends Controller
      * [] and we simply fall back to the Google Shopping results. Only reached when
      * the brand was NOT already in Shopping, so it adds no latency to normal search.
      */
+    /**
+     * Brands whose own Shopify catalog lives somewhere other than "<slug>.com".
+     *
+     * brandOwnCatalog guessed slug + ".com", which silently failed for some of
+     * the brands customers search MOST — coach.com and kipling.com both answer
+     * 403, so those searches fell through to Google Shopping and inherited its
+     * latency and its outages. Every domain here was probed on 2026-08-08 and
+     * actually returns products.json; brands with no reachable catalog
+     * (Coach, New Balance, Bath & Body Works, Nike, Sephora, Under Armour,
+     * Victoria's Secret, Owala, Vuori, Lululemon, Tory Burch, Hoka) are
+     * deliberately ABSENT rather than listed and broken — they have no direct
+     * path and must go through Google Shopping.
+     *
+     * Verify with NO redirect-following: coachoutlet.com/products.json 302s to
+     * an HTML page, which looks like a 322 KB "catalog" under curl -L and is
+     * not one. Every entry below was confirmed to return 200 with a non-empty
+     * products array, unfollowed.
+     */
+    private const BRAND_DOMAINS = [
+        'kipling'   => 'kipling-usa.com',   // kipling.com => 403
+        'rhode'     => 'rhodeskin.com',     // rhode.com   => unreachable
+        'rhodeskin' => 'rhodeskin.com',
+        'stanley'   => 'stanley1913.com',
+        'alo'       => 'aloyoga.com',       // alo.com     => 301
+        'aloyoga'   => 'aloyoga.com',
+    ];
+
     private function brandOwnCatalog(string $store, int $limit): array
     {
         $slug = $this->slugify($store);
@@ -2431,7 +2458,8 @@ class ProductExtractController extends Controller
             return $cached;
         }
 
-        $products = $this->shopifyProducts('https://' . $slug . '.com', $limit, false, true);
+        $domain = self::BRAND_DOMAINS[$slug] ?? ($slug . '.com');
+        $products = $this->shopifyProducts('https://' . $domain, $limit, false, true);
         if (empty($products)) {
             Cache::put($cacheKey, [], now()->addMinutes(10));
 
