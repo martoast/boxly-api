@@ -441,7 +441,12 @@ class ProductExtractController extends Controller
                         'snippet' => $r['snippet'] ?? '',
                     ];
                 }, array_slice($organic, 0, $num))));
-                Cache::put($cacheKey, $results, now()->addMinutes(30));
+                // 12h, same reasoning as the shopping cache: at our traffic a
+                // 30-minute window almost never got a second hit, so this paid
+                // SerpAPI nearly every time. Web results (a store's product page
+                // URL) are MORE stable than shopping listings, not less — this is
+                // the safest place to hold results longer.
+                Cache::put($cacheKey, $results, now()->addHours(12));
             } catch (\Throwable $e) {
                 $results = [];
             }
@@ -1856,14 +1861,31 @@ class ProductExtractController extends Controller
                 if ($resp instanceof \Illuminate\Http\Client\Response && $resp->successful()) {
                     $anySuccess = true;
                     $products = $this->parseShoppingResults($resp->json());
-                    // SerpAPI returns 0 shopping_results NON-DETERMINISTICALLY for the
-                    // exact same query (a real store like "rhode" can come back empty one
-                    // second and full the next). Never pin an empty pass for the full 30
-                    // min — that dead-ends the query for everyone who retries it in that
-                    // window (the store-search-returns-nothing bug). Cache real results
-                    // for 30 min; cache an empty for only 60s (light stampede protection)
-                    // so the very next retry re-queries SerpAPI and self-heals.
-                    $ttl = empty($products) ? now()->addSeconds(60) : now()->addMinutes(30);
+                    // TTL is asymmetric on purpose.
+                    //
+                    // EMPTY -> 60s. SerpAPI returns 0 shopping_results
+                    // NON-DETERMINISTICALLY for the exact same query (a real store like
+                    // "rhode" comes back empty one second and full the next). Pinning an
+                    // empty for hours would dead-end that query for everyone who retries
+                    // in the window (the store-search-returns-nothing bug), so it stays
+                    // short and self-heals on the next attempt. The circuit breaker above
+                    // is what stops a provider outage from making that short window
+                    // expensive.
+                    //
+                    // HIT -> 12h, raised from 30 min. At ~12 searches/day spread over 24
+                    // hours, two identical queries almost never landed inside the same
+                    // 30-minute window, so the cache essentially never hit and nearly
+                    // every search paid SerpAPI full price. It was tuned for traffic we
+                    // don't have. 41% of searches are the same 3 starter-prompt strings
+                    // and 50% are the top 10, so a 12h window turns those into about one
+                    // call a day each instead of one per search — and it keeps the
+                    // starter prompts warm through the next outage, which is what was
+                    // making them return nothing.
+                    //
+                    // The staleness this buys is a gallery up to 12h old. Acceptable:
+                    // these are discovery results, the product modal keeps its own 10-min
+                    // cache for live price/stock, and nobody pays until Boxly quotes.
+                    $ttl = empty($products) ? now()->addSeconds(60) : now()->addHours(12);
                     Cache::put($cacheKey, $products, $ttl);
                     $out[$q] = $products;
                 } else {
