@@ -52,7 +52,7 @@ MD,
 El precio que ves en la tienda **no es el precio final**. Tu total se forma así:
 
 - **Precio del producto** (lo que cuesta en la tienda de EE. UU.)
-- **+ Comisión de Boxly (10%)**
+- **+ Comisión de Boxly (15%)**
 - **+ Envío internacional** (de EE. UU. a México)
 - **+ Impuestos** cuando aplican
 
