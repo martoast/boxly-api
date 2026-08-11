@@ -194,8 +194,9 @@ class ProductExtractController extends Controller
         $limit = $validated['limit'] ?? 40;
         $start = (int) ($validated['start'] ?? 0);
         $store = trim($validated['store'] ?? '');
-        // Bias the query toward the store when one is specified.
-        $baseQ = $store !== '' ? $store . ' ' . $validated['query'] : $validated['query'];
+        // Bias the query toward the store when one is specified — without
+        // repeating it (see composeStoreQuery).
+        $baseQ = $this->composeStoreQuery($store, $validated['query']);
 
         // SPEED: a single Google Shopping pass. We used to also fire category-aware
         // passes at priority retailers (Target/Walmart) to surface them, but that
@@ -229,11 +230,39 @@ class ProductExtractController extends Controller
         // and only when the primary pass found nothing.
         // Only worth a SECOND Shopping pass when we have nothing at all — if the
         // brand's own catalog answered, another 12s round-trip buys nothing.
+        // When that happens we are no longer answering what the customer asked —
+        // we're showing the store's general catalog. `broadened` says so out loud
+        // so the assistant can tell them ("no encontré X en particular, pero aquí
+        // está el catálogo de Y") instead of passing a generic catalog off as a
+        // match. Without it a search for "PINK promos" came back as Victoria's
+        // Secret bras and the bot said "Encontré varias opciones".
+        $broadened = false;
         if (empty($general) && empty($own) && $store !== '' && $this->slugify($baseQ) !== $this->slugify($store)) {
             $fallback = $this->multiShopping([$store], $start);
             $general = $fallback[$store] ?? [];
             if (! empty($general)) {
                 $baseQ = $store; // reflect the query we actually served (cache-prime, ranking)
+                $broadened = true;
+            }
+        }
+
+        // Same dead-end with NO store named — a long phrase Shopping can't match
+        // ("cherry collection coach"). Retry once on the first meaningful word.
+        // This used to live in the Nuxt search_products tool, where it cost a
+        // second HTTP round-trip AND logged a phantom analytics row for every
+        // broadened search (one 0-result event + one N-result event for a single
+        // customer search, which is what pushed the admin zero-result rate to
+        // 60%). One call, one event, one truth.
+        if (empty($general) && $store === '') {
+            $words = array_values(array_filter(preg_split('/\s+/', trim($validated['query'])) ?: []));
+            if (count($words) > 1) {
+                $first = $words[0];
+                $fallback = $this->multiShopping([$first], $start);
+                $general = $fallback[$first] ?? [];
+                if (! empty($general)) {
+                    $baseQ = $first;
+                    $broadened = true;
+                }
             }
         }
         // SPEED: the ScraperAPI structured-shopping fallback is reliable but SLOW
@@ -257,6 +286,12 @@ class ProductExtractController extends Controller
         // catalog straight from its site and lead with it. (First page only — later
         // pages paginate Shopping.)
         if (! empty($own)) {
+            // brandOwnCatalog() is NOT query-filtered — it's the store's front
+            // page. Leading with it when Shopping matched nothing is the same
+            // silent substitution as the retry above, so flag it the same way.
+            if (empty($general)) {
+                $broadened = true;
+            }
             $want = $this->slugify($store);
             $hasStore = false;
             foreach ($general as $p) {
@@ -375,6 +410,12 @@ class ProductExtractController extends Controller
                     'type'            => SearchEvent::TYPE_SEARCH,
                     'query'           => mb_substr(trim($validated['query']), 0, 255),
                     'results'        => count($shown),
+                    // What the customer ASKED vs what we actually served. When
+                    // broadened, `results` is a count of generic store/catalog
+                    // items — NOT matches for `query`. The admin AI-search page
+                    // reads this so a broadened row can't be mistaken for a hit.
+                    'broadened'      => $broadened,
+                    'served_query'   => $broadened ? mb_substr($baseQ, 0, 255) : null,
                     'results_sample' => array_map(fn ($p) => [
                         'store' => $p['store'] ?? null,
                         'title' => isset($p['title']) ? mb_substr((string) $p['title'], 0, 140) : null,
@@ -388,7 +429,18 @@ class ProductExtractController extends Controller
 
         return response()->json([
             'success' => true,
-            'data'    => ['query' => $baseQ, 'products' => $shown, 'price_range' => $range, 'has_more' => $hasMore, 'start' => $start],
+            'data'    => [
+                'query'       => $baseQ,
+                'products'    => $shown,
+                'price_range' => $range,
+                'has_more'    => $hasMore,
+                'start'       => $start,
+                // TRUE = these are generic store/catalog items, not matches for
+                // what was asked. The assistant must say so rather than present
+                // them as results (see search_products in assistant.post.ts).
+                'broadened'      => $broadened,
+                'asked_query'    => mb_substr(trim($validated['query']), 0, 255),
+            ],
         ]);
     }
 
@@ -2041,6 +2093,53 @@ class ProductExtractController extends Controller
     private function slugify(string $s): string
     {
         return preg_replace('/[^a-z0-9]/', '', mb_strtolower($s));
+    }
+
+    /**
+     * Bias the query toward the named store WITHOUT repeating it.
+     *
+     * The assistant is told to always put the brand in `store`, and it routinely
+     * puts it in `query` as well — so we were sending Google Shopping literals
+     * like "Nike Nike shoes apparel deals", "Owala Owala bottle",
+     * "Target deals promotions Target" and "Coach Outlet cherry print coach".
+     * Those doubled-up phrasings are exactly the ones Shopping returns few or
+     * zero results for, which then trips the broaden-to-store fallback and the
+     * customer gets a generic catalog instead of what they asked for (real case:
+     * "cherry collection coach" → 0 → generic Coach bags).
+     *
+     * So: drop the store's own words out of the query, keep everything else in
+     * the order the user said it, and prepend the store exactly once.
+     */
+    private function composeStoreQuery(string $store, string $query): string
+    {
+        $query = trim($query);
+        $store = trim($store);
+        if ($store === '') {
+            return $query;
+        }
+
+        // "Victoria's Secret" → ['victorias', 'secret']
+        $storeTerms = array_values(array_filter(
+            array_map(fn ($t) => $this->slugify($t), preg_split('/\s+/', $store) ?: []),
+            fn ($t) => $t !== '',
+        ));
+        if (! $storeTerms) {
+            return $query;
+        }
+
+        $kept = [];
+        foreach (preg_split('/\s+/', $query) ?: [] as $word) {
+            if ($word === '' || in_array($this->slugify($word), $storeTerms, true)) {
+                continue;
+            }
+            $kept[] = $word;
+        }
+
+        // Nothing distinctive left ("Coach Outlet" + "coach outlet") — the store
+        // name alone IS the query, which is what reads the brand's catalog.
+        $rest = trim(implode(' ', $kept));
+
+        return $rest === '' ? $store : $store . ' ' . $rest;
     }
 
     /** Fallback: ScraperAPI structured Google Shopping. Null on failure. */

@@ -8,6 +8,7 @@ use App\Models\SearchEvent;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * AI-search usage analytics. The frontend logs each search + product view here
@@ -186,6 +187,17 @@ class SearchEventController extends Controller
             $zeroResultSearches = (clone $searches)->where('results', 0)->count();
             $guestSearches = (clone $searches)->whereNull('user_id')->count();
 
+            // A search can "succeed" with 16 results and still have failed the
+            // customer: when the specific query matched nothing we fall back to
+            // the store's general catalog (`broadened`). Those rows used to be
+            // indistinguishable from real hits — a customer asking for PINK
+            // promos was served Victoria's Secret bras and this page called it 16
+            // results. Counted separately, and folded into ONE honest number.
+            // Guarded on the column so the page keeps working before migrate.
+            $hasBroadened = Schema::hasColumn('search_events', 'broadened');
+            $broadenedSearches = $hasBroadened ? (clone $searches)->where('broadened', true)->count() : 0;
+            $unmatchedSearches = $zeroResultSearches + $broadenedSearches;
+
             $topQueries = $light ? collect() : (clone $searches)->whereNotNull('query')->where('query', '<>', '')
                 ->select('query', DB::raw('count(*) as c'))
                 ->groupBy('query')->orderByDesc('c')->limit(25)->get();
@@ -193,6 +205,15 @@ class SearchEventController extends Controller
             // Failing queries — searches that returned nothing. Most actionable
             // list on the dashboard: these are the brands/terms we can't yet serve.
             $zeroResultQueries = $light ? collect() : (clone $searches)->where('results', 0)
+                ->whereNotNull('query')->where('query', '<>', '')
+                ->select('query', DB::raw('count(*) as c'))
+                ->groupBy('query')->orderByDesc('c')->limit(25)->get();
+
+            // Queries we ANSWERED WITH SOMETHING ELSE. Just as actionable as the
+            // zero-result list and previously invisible — the customer saw a full
+            // gallery, so nothing here looked broken.
+            $broadenedQueries = ($light || ! $hasBroadened) ? collect() : (clone $searches)
+                ->where('broadened', true)
                 ->whereNotNull('query')->where('query', '<>', '')
                 ->select('query', DB::raw('count(*) as c'))
                 ->groupBy('query')->orderByDesc('c')->limit(25)->get();
@@ -238,10 +259,15 @@ class SearchEventController extends Controller
             // Query → results: the most recent searches with what we served.
             $recentSearches = $light ? collect() : (clone $searches)->whereNotNull('results')
                 ->with('user:id,name,email,created_at')
-                ->latest()->limit(30)->get(['id', 'query', 'results', 'results_sample', 'user_id', 'conversation_id', 'created_at'])
+                ->latest()->limit(30)->get(array_merge(
+                    ['id', 'query', 'results', 'results_sample', 'user_id', 'conversation_id', 'created_at'],
+                    $hasBroadened ? ['broadened', 'served_query'] : [],
+                ))
                 ->map(fn ($e) => [
                     'query'           => $e->query,
                     'results'         => $e->results,
+                    'broadened'       => (bool) ($e->broadened ?? false),
+                    'served_query'    => $e->served_query ?? null,
                     'stores'          => collect($e->results_sample ?? [])->pluck('store')
                         ->filter()->map(fn ($s) => $this->normStore($s))->unique()->take(6)->values(),
                     'guest'           => $e->user_id === null,
@@ -283,12 +309,20 @@ class SearchEventController extends Controller
                 'avg_results'            => round((float) $avgResults, 1),
                 'zero_result_searches'   => $zeroResultSearches,
                 'zero_result_rate'       => $totalSearches ? round($zeroResultSearches / $totalSearches * 100, 1) : 0,
+                // Served the store's catalog instead of what was asked.
+                'broadened_searches'     => $broadenedSearches,
+                'broadened_rate'         => $totalSearches ? round($broadenedSearches / $totalSearches * 100, 1) : 0,
+                // The honest headline: share of searches where the customer did
+                // NOT get what they asked for (empty gallery OR generic catalog).
+                'unmatched_searches'     => $unmatchedSearches,
+                'unmatched_rate'         => $totalSearches ? round($unmatchedSearches / $totalSearches * 100, 1) : 0,
                 'guest_rate'             => $totalSearches ? round($guestSearches / $totalSearches * 100, 1) : 0,
                 'purchase_requests'      => $onlinePr,
                 'view_rate'              => $totalSearches ? round($totalViews / $totalSearches * 100, 1) : 0,
                 'search_to_pr_rate'      => $totalSearches ? round($onlinePr / $totalSearches * 100, 1) : 0,
                 'top_queries'            => $topQueries,
                 'zero_result_queries'    => $zeroResultQueries,
+                'broadened_queries'      => $broadenedQueries,
                 'top_questions'          => $topQuestions,
                 'recent_questions'       => $recentQuestions,
                 'top_stores'             => $topStores,
@@ -303,8 +337,11 @@ class SearchEventController extends Controller
                 'total_questions' => 0, 'unique_signed_in_users' => 0, 'guest_searches' => 0,
                 'guest_questions' => 0, 'question_guest_rate' => 0, 'avg_results' => 0,
                 'zero_result_searches' => 0, 'zero_result_rate' => 0, 'guest_rate' => 0,
+                'broadened_searches' => 0, 'broadened_rate' => 0,
+                'unmatched_searches' => 0, 'unmatched_rate' => 0,
                 'purchase_requests' => 0, 'view_rate' => 0, 'search_to_pr_rate' => 0,
-                'top_queries' => [], 'zero_result_queries' => [], 'top_questions' => [],
+                'top_queries' => [], 'zero_result_queries' => [], 'broadened_queries' => [],
+                'top_questions' => [],
                 'recent_questions' => [], 'top_stores' => [],
                 'top_result_stores' => [], 'recent_searches' => [], 'daily' => [],
                 'unavailable' => true,
@@ -353,6 +390,11 @@ class SearchEventController extends Controller
             'query'           => $e->query,
             'answer'          => collect($e->results_sample ?? [])->pluck('answer')->filter()->first(),
             'results'         => $e->results,
+            // TRUE = the customer's query matched nothing and these results are
+            // the store's general catalog, not what they asked for. Without it a
+            // broadened miss is indistinguishable from a hit in the feed.
+            'broadened'       => (bool) ($e->broadened ?? false),
+            'served_query'    => $e->served_query ?? null,
             'stores'          => collect($e->results_sample ?? [])->pluck('store')
                 ->filter()->map(fn ($s) => $this->normStore($s))->unique()->take(8)->values(),
             'store'           => $e->store,
