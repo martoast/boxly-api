@@ -740,17 +740,18 @@ class AdminPurchaseRequestController extends Controller
     /**
      * Unified quote flow — applies to ALL PRs regardless of source.
      *
-     * Items are the source of truth: subtotal = sum(price × quantity)
-     * for items marked 'available' (or every item, if no stock state
-     * was ever set — i.e. legacy assisted PRs). On top of that the
-     * admin enters three adjustments at the PR level: shipping (USD),
-     * sales tax (USD), and service fee % (default 8). Total = subtotal
-     * + shipping + tax + (subtotal+shipping+tax) × fee%.
+     * ONE number in: `amount_spent` — exactly what Boxly paid at the US
+     * stores, everything included (product prices, US store shipping,
+     * sales tax, whatever else the receipts show). The admin reads it off
+     * the receipts; we never re-derive it from item prices, because
+     * splitting a multi-store receipt into products / shipping / tax by
+     * hand is what was producing wrong invoices.
      *
-     * Stripe gets ONE invoice line for the grand total in MXN at the
-     * captured FX rate — customer sees a single charge, not a per-item
-     * breakdown. All inputs land on the PR so the dashboard reflects
-     * what the customer was billed.
+     * Total = amount_spent + amount_spent × commission% (default 15).
+     *
+     * Stripe gets two lines — the purchase and the commission — so the
+     * customer is billed exactly the two numbers the admin saw. The item
+     * list still travels with the quote email, so nothing is hidden.
      */
     public function createQuote(Request $request, PurchaseRequest $purchaseRequest)
     {
@@ -759,34 +760,13 @@ class AdminPurchaseRequestController extends Controller
         }
 
         $validated = $request->validate([
-            'shipping_cost'           => 'nullable|numeric|min:0',
-            'sales_tax'               => 'nullable|numeric|min:0',
-            'store_costs'             => 'nullable|array',
-            'store_costs.*.shipping' => 'nullable|numeric|min:0',
-            'store_costs.*.tax'      => 'nullable|numeric|min:0',
+            'amount_spent'            => 'required|numeric|min:0.01',
             'processing_fee_percent'  => 'nullable|numeric|min:0|max:100',
             'admin_notes'             => 'nullable|string',
         ]);
 
-        // Per-store breakdown is the source of truth when present — Velonie
-        // checks out at each US store separately, so shipping + tax are
-        // captured per-store and we sum them here for the invoice math.
-        // Fall back to PR-level fields for legacy callers.
-        $storeCosts = $validated['store_costs'] ?? $purchaseRequest->store_costs;
-        if (is_array($storeCosts) && count($storeCosts) > 0) {
-            $shippingUsd = round(array_sum(array_map(
-                fn ($c) => (float) ($c['shipping'] ?? 0),
-                $storeCosts,
-            )), 2);
-            $salesTaxUsd = round(array_sum(array_map(
-                fn ($c) => (float) ($c['tax'] ?? 0),
-                $storeCosts,
-            )), 2);
-        } else {
-            $shippingUsd = (float) ($validated['shipping_cost'] ?? 0);
-            $salesTaxUsd = (float) ($validated['sales_tax']     ?? 0);
-        }
-        $feePercent  = (float) ($validated['processing_fee_percent']
+        $amountSpentUsd = round((float) $validated['amount_spent'], 2);
+        $feePercent     = (float) ($validated['processing_fee_percent']
             ?? config('services.commission.default_percent', 15));
 
         $purchaseRequest->load('items');
@@ -810,20 +790,11 @@ class AdminPurchaseRequestController extends Controller
             ], 422);
         }
 
-        // Subtotal: items' price × quantity. Admin's inline edits on the
-        // detail page already pushed updated price/qty to the items table,
-        // so reading them here gives us the exact totals shown in the UI.
-        $itemsSubtotalUsd = round(
-            $billableItems->reduce(fn ($carry, $i) => $carry + ((float) $i->price * (int) $i->quantity), 0.0),
-            2,
-        );
-
         // In-person PRs paid the $10/store scheduling deposit upfront via
         // Stripe Checkout — we don't double-charge it on the post-trip
-        // quote. Items + actual store shipping/tax + processing fee only.
-        $preFeeUsd = round($itemsSubtotalUsd + $shippingUsd + $salesTaxUsd, 2);
-        $feeUsd    = round($preFeeUsd * ($feePercent / 100), 2);
-        $totalUsd  = round($preFeeUsd + $feeUsd, 2);
+        // quote. What was spent + the commission on it, nothing else.
+        $feeUsd   = round($amountSpentUsd * ($feePercent / 100), 2);
+        $totalUsd = round($amountSpentUsd + $feeUsd, 2);
 
         DB::beginTransaction();
 
@@ -859,19 +830,12 @@ class AdminPurchaseRequestController extends Controller
                 'auto_advance' => false,
             ]);
 
-            // Itemized, because a single "Boxly — PR-26-XXXXX" line for the grand
-            // total tells the customer nothing about what they're paying for.
-            // One Stripe line per product they actually get, then the costs that
-            // turn those into the amount due. Unavailable items were already
-            // filtered out of $billableItems, so they never appear here — the
-            // customer is not billed for, or shown, something we can't supply.
-            //
-            // The cents are summed and reconciled against $totalUsd below: Stripe
-            // charges the sum of its lines, so a rounding drift would silently
-            // bill a different number than the PR records.
-            $lineCents = 0;
+            // Two lines, mirroring what the admin typed: the purchase and the
+            // commission on it. Their cents sum to $totalUsd exactly (both are
+            // rounded to 2dp before this point), so Stripe cannot bill a number
+            // the PR doesn't record.
             $addLine = function (string $description, float $amountUsd) use (
-                $stripe, $shoppingCustomerId, $stripeInvoice, &$lineCents
+                $stripe, $shoppingCustomerId, $stripeInvoice
             ) {
                 $cents = (int) round($amountUsd * 100);
                 if ($cents === 0) {
@@ -884,50 +848,33 @@ class AdminPurchaseRequestController extends Controller
                     'currency'    => 'usd',
                     'description' => mb_substr($description, 0, 250),
                 ]);
-                $lineCents += $cents;
             };
 
-            foreach ($billableItems as $item) {
-                $qty  = (int) $item->quantity;
-                $unit = (float) $item->price;
-                $label = $item->product_name;
-                if (is_array($item->options) && count($item->options) > 0) {
-                    $label .= ' (' . collect($item->options)
-                        ->map(fn ($v, $k) => "{$k}: {$v}")
-                        ->implode(', ') . ')';
-                }
-                $addLine("{$qty} × {$label}", $unit * $qty);
-            }
+            $itemCount = $billableItems->count();
+            $addLine(
+                sprintf(
+                    'Compra de %d %s en tiendas de EE. UU. (incluye envío e impuestos) / Purchase incl. US shipping & tax',
+                    $itemCount,
+                    $itemCount === 1 ? 'producto' : 'productos',
+                ),
+                $amountSpentUsd,
+            );
 
-            $addLine('Envío en tiendas de EE. UU. / US store shipping', $shippingUsd);
-            $addLine('Impuestos / Sales tax', $salesTaxUsd);
-            $addLine(sprintf('Comisión Boxly / Boxly commission (%.0f%%)', $feePercent), $feeUsd);
-
-            // Reconcile: Stripe bills the sum of its lines, so if per-line
-            // rounding drifted from the recorded total, absorb the difference
-            // rather than charging a number the PR doesn't show.
-            $driftCents = (int) round($totalUsd * 100) - $lineCents;
-            if ($driftCents !== 0) {
-                $stripe->invoiceItems->create([
-                    'customer'    => $shoppingCustomerId,
-                    'invoice'     => $stripeInvoice->id,
-                    'amount'      => $driftCents,
-                    'currency'    => 'usd',
-                    'description' => 'Ajuste de redondeo / Rounding adjustment',
-                ]);
-                Log::info('[quote] rounding adjustment applied', [
-                    'pr' => $purchaseRequest->request_number, 'cents' => $driftCents,
-                ]);
-            }
+            // 15 → "15", 12.5 → "12.5" — never "13%" on a 12.5% commission.
+            $feeLabel = rtrim(rtrim(number_format($feePercent, 1, '.', ''), '0'), '.');
+            $addLine("Comisión Boxly / Boxly commission ({$feeLabel}%)", $feeUsd);
 
             $stripe->invoices->finalizeInvoice($stripeInvoice->id);
             $sentInvoice = $stripe->invoices->sendInvoice($stripeInvoice->id);
 
             $purchaseRequest->update([
-                'items_total'       => $itemsSubtotalUsd,
-                'shipping_cost'     => $shippingUsd,
-                'sales_tax'         => $salesTaxUsd,
-                'store_costs'       => is_array($storeCosts) && count($storeCosts) > 0 ? $storeCosts : null,
+                // items_total is our cost basis (what we actually paid, all in);
+                // shipping/tax are no longer captured separately, so they stay 0
+                // rather than holding a stale split the invoice never used.
+                'items_total'       => $amountSpentUsd,
+                'shipping_cost'     => 0,
+                'sales_tax'         => 0,
+                'store_costs'       => null,
                 'processing_fee'    => $feeUsd,
                 'total_amount'      => $totalUsd,
                 'total_usd'         => $totalUsd,

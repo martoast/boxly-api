@@ -100,16 +100,11 @@
 
     <table style="width: 100%; border-collapse: collapse; margin-bottom: 25px;">
         <tr>
-            <td style="padding: 5px 0;">{{ $locale === 'es' ? 'Productos' : 'Products' }}</td>
+            <td style="padding: 5px 0;">
+                {{ $locale === 'es' ? 'Compra en tiendas de EE. UU.' : 'US store purchase' }}
+                <br><span style="color: #888; font-size: 12px;">{{ $locale === 'es' ? 'incluye envío e impuestos de las tiendas' : 'includes store shipping and sales tax' }}</span>
+            </td>
             <td style="padding: 5px 0; text-align: right;">${{ number_format((float) $request->items_total, 2) }}</td>
-        </tr>
-        <tr>
-            <td style="padding: 5px 0;">{{ $locale === 'es' ? 'Envío en tiendas de EE. UU.' : 'US store shipping' }}</td>
-            <td style="padding: 5px 0; text-align: right;">${{ number_format((float) $request->shipping_cost, 2) }}</td>
-        </tr>
-        <tr>
-            <td style="padding: 5px 0;">{{ $locale === 'es' ? 'Impuestos' : 'Sales tax' }}</td>
-            <td style="padding: 5px 0; text-align: right;">${{ number_format((float) $request->sales_tax, 2) }}</td>
         </tr>
         <tr>
             <td style="padding: 5px 0; border-top: 1px solid #ddd;">{{ $locale === 'es' ? 'Comisión Boxly' : 'Boxly commission' }}</td>
