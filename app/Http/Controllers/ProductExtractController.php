@@ -265,15 +265,47 @@ class ProductExtractController extends Controller
                 }
             }
         }
-        // SPEED: the ScraperAPI structured-shopping fallback is reliable but SLOW
-        // (ultra_premium, ~20-40s) and was the root of the 20-25s tail whenever
-        // SerpAPI returned nothing. Take it OFF the request path: serve what we
-        // have now (possibly empty) and PRIME the cache in the background so the
-        // NEXT identical search is instant. Dedupe (Cache::add) so we don't queue
-        // the same 40s scrape repeatedly inside the window. (Runs on the queue —
-        // the prod worker handles it; no-op without a ScraperAPI key, e.g. local.)
-        if (empty($general) && $start === 0 && config('services.scraperapi.key')
+        // DEAD END: nothing from Shopping AND no brand catalog — the customer is
+        // about to be shown an empty gallery, which the assistant reads as "this
+        // product doesn't exist" and says so. That is the worst outcome we can
+        // produce, and it is usually WRONG: the ScraperAPI structured endpoint
+        // (slow, ~20-40s, but reliable) normally has the results.
+        //
+        // So on THIS path only, we wait for it. Everywhere else the fallback
+        // stays off the request path — it was the root of the 20-25s tail — but
+        // here there is nothing to protect: the fast answer is empty. A shopper
+        // waiting 25s for products beats a shopper told we have none.
+        // (Observed 2026-08-11: a customer searched Nike four ways during a
+        // SerpAPI outage, got nothing every time, and left. The background prime
+        // had the catalog seconds later; nobody ever asked for it again.)
+        //
+        // Cache the win under the same key the prime job uses, so the next
+        // search for this query is instant either way.
+        $deadEndWait = (int) config('services.scraperapi.deadend_wait', 25);
+        if (empty($general) && empty($own) && $start === 0 && config('services.scraperapi.key') && $deadEndWait > 0) {
+            $viaScraper = self::shoppingViaScraperapi($baseQ, $deadEndWait);
+            if (is_array($viaScraper) && $viaScraper !== []) {
+                // Logged because this is the case we can't see from analytics: the
+                // search that WOULD have been a zero-result event and now isn't.
+                Log::info('[search] dead-end rescued by scraperapi', [
+                    'query' => $baseQ, 'store' => $store, 'products' => count($viaScraper),
+                ]);
+                $general = $viaScraper;
+                Cache::put(
+                    self::shopCacheKey($baseQ, config('services.serpapi.location'), $start),
+                    $viaScraper,
+                    now()->addMinutes(30),
+                );
+            } elseif (Cache::add('scraperprime:' . md5($baseQ) . ':' . $start, 1, 300)) {
+                // Timed out or came back empty — it may still land inside the
+                // job's longer budget, so queue it for whoever searches next.
+                PrimeShoppingCache::dispatch($baseQ, $start);
+            }
+        } elseif (empty($general) && $start === 0 && config('services.scraperapi.key')
             && Cache::add('scraperprime:' . md5($baseQ) . ':' . $start, 1, 300)) {
+            // Shopping missed but the brand's own catalog is carrying the page —
+            // the customer sees products now, so don't make them wait. Prime in
+            // the background as before.
             PrimeShoppingCache::dispatch($baseQ, $start);
         }
 
@@ -2129,7 +2161,11 @@ class ProductExtractController extends Controller
 
         $kept = [];
         foreach (preg_split('/\s+/', $query) ?: [] as $word) {
-            if ($word === '' || in_array($this->slugify($word), $storeTerms, true)) {
+            $slug = $this->slugify($word);
+            // Drop store terms, and drop punctuation-only words outright: the "&"
+            // in "Bath & Body Works" slugifies to nothing, so it matched no store
+            // term and survived — we were querying "Bath & Body Works &".
+            if ($word === '' || $slug === '' || in_array($slug, $storeTerms, true)) {
                 continue;
             }
             $kept[] = $word;
@@ -2142,8 +2178,14 @@ class ProductExtractController extends Controller
         return $rest === '' ? $store : $store . ' ' . $rest;
     }
 
-    /** Fallback: ScraperAPI structured Google Shopping. Null on failure. */
-    public static function shoppingViaScraperapi(string $q): ?array
+    /**
+     * Fallback: ScraperAPI structured Google Shopping. Null on failure.
+     *
+     * $timeoutSec is the caller's patience: the background prime job can afford
+     * the full 40s, but a live request waiting on a dead-end search caps it so
+     * the shopper isn't left hanging indefinitely.
+     */
+    public static function shoppingViaScraperapi(string $q, int $timeoutSec = 40): ?array
     {
         $key = config('services.scraperapi.key');
         if (! $key) {
@@ -2152,7 +2194,7 @@ class ProductExtractController extends Controller
         try {
             // Google needs advanced/residential proxies — plain/premium 500
             // intermittently; ultra_premium is reliable but slower (~20-30s).
-            $res = Http::timeout(40)->get('https://api.scraperapi.com/structured/google/shopping', [
+            $res = Http::timeout($timeoutSec)->get('https://api.scraperapi.com/structured/google/shopping', [
                 'api_key'       => $key,
                 'query'         => $q,
                 'country'       => 'us',

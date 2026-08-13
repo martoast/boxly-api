@@ -18,6 +18,13 @@ return [
      */
     'scraperapi' => [
         'key' => env('SCRAPERAPI_KEY'),
+        // Seconds a live search will WAIT on the structured-shopping fallback
+        // when it would otherwise return an empty gallery. Env-tunable because
+        // the ceiling isn't ours: the Nuxt route calling us runs as a hosted
+        // function with its own limit, so if searches start failing outright
+        // instead of coming back slow, lower this rather than redeploying code.
+        // 0 disables the wait and reverts to background-prime-only.
+        'deadend_wait' => (int) env('SCRAPERAPI_DEADEND_WAIT', 25),
         // Retry heavily-protected retailers (Foot Locker, Nordstrom…) on the
         // ultra premium pool when the standard one 403s asking for it. ~20x the
         // credits, but only ever spent on a request that already failed.
