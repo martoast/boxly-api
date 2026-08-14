@@ -21,9 +21,38 @@ class ProductController extends Controller
                 'limit' => 100
             ]);
 
-            // Format products from prices
-            $products = collect($prices->data)
-                ->filter(fn($price) => $price->product->active)
+            // ONLY prices in the currency we actually bill in.
+            //
+            // A Stripe product can carry prices in several currencies at once —
+            // Boxly Protection currently has both 200 MXN and 11.60 USD. This
+            // endpoint returned both, so any client doing find(is_protection)
+            // got whichever Stripe happened to list first: the USD one. The
+            // admin order pages showed "+$11.60" beside a $4,400 MXN box.
+            // (Customers were always charged correctly — the amount billed comes
+            // from ProtectionProduct::price(), which already filters this way.)
+            //
+            // Filtering here rather than in each client because the constraint
+            // is real, not cosmetic: an invoice has ONE currency, so a price in
+            // any other currency can never legally go on it. A number this
+            // endpoint hands out that cannot be charged is not useful to anyone.
+            $currency = strtolower(config('cashier.currency') ?: 'mxn');
+
+            $active = collect($prices->data)->filter(fn($price) => $price->product->active);
+            $inCurrency = $active->filter(fn($price) => strtolower($price->currency) === $currency);
+
+            // config/cashier.php defaults CASHIER_CURRENCY to 'usd'; production
+            // sets it to mxn. If that env var is ever missing, filtering strictly
+            // would hand back an empty catalog and the admin would have no boxes
+            // to consolidate with — a far worse failure than the label it fixes.
+            // So an empty result means the filter is wrong, not the catalog.
+            if ($inCurrency->isEmpty() && $active->isNotEmpty()) {
+                Log::warning('No active Stripe prices in the billing currency — serving unfiltered', [
+                    'currency' => $currency,
+                ]);
+                $inCurrency = $active;
+            }
+
+            $products = $inCurrency
                 ->map(function ($price) {
                     return $this->formatPrice($price);
                 })
