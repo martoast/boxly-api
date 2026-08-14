@@ -31,6 +31,10 @@ class OrderBox extends Model
         'width',
         'height',
         'weight',
+        // What the courier charged US to move this box (MXN). The same money as
+        // the shipping business_expense rows — recorded per box so margin can be
+        // read by size. Never add it to the expense total.
+        'shipping_cost',
         // GIA file fields (one per box)
         'guia_number',
         'gia_path',
@@ -49,6 +53,7 @@ class OrderBox extends Model
         'width' => 'decimal:2',
         'height' => 'decimal:2',
         'weight' => 'decimal:2',
+        'shipping_cost' => 'decimal:2',
         'gia_size' => 'integer',
     ];
 

@@ -121,13 +121,19 @@ class AdminOrderBoxController extends Controller
             'width'  => 'nullable|numeric|min:0|max:999999.99',
             'height' => 'nullable|numeric|min:0|max:999999.99',
             'weight' => 'nullable|numeric|min:0|max:999999.99',
+            // What the courier charged for this box (MXN). Here as well as on
+            // the order edit page because box close-out happens from the CLI
+            // (and Telegram) as often as from the panel.
+            'shipping_cost' => 'nullable|numeric|min:0|max:999999.99',
         ]);
 
-        $box->update($request->only(['length', 'width', 'height', 'weight']));
+        // only() would silently drop an absent key, which is what we want:
+        // omitting shipping_cost leaves whatever was recorded before.
+        $box->update($request->only(['length', 'width', 'height', 'weight', 'shipping_cost']));
 
         return response()->json([
             'success' => true,
-            'message' => 'Box dimensions updated',
+            'message' => 'Box updated',
             'data' => $box->fresh(),
         ]);
     }

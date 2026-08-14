@@ -205,6 +205,9 @@ class AdminOrderManagementController extends Controller
             'boxes.*.width' => 'nullable|numeric|min:0|max:999999.99',
             'boxes.*.height' => 'nullable|numeric|min:0|max:999999.99',
             'boxes.*.weight' => 'nullable|numeric|min:0|max:999999.99',
+            // What the courier charged for this box (MXN) — the input to
+            // per-size margin. Read off the Estafeta invoice, not derived.
+            'boxes.*.shipping_cost' => 'nullable|numeric|min:0|max:999999.99',
             // Per-box GIA fields
             'boxes.*.guia_number' => 'nullable|string|max:50',
             'boxes.*.gia_file' => 'nullable|file|mimes:pdf|max:10240',
@@ -491,6 +494,11 @@ class AdminOrderManagementController extends Controller
                     if (isset($boxInput['width'])) $updateData['width'] = $boxInput['width'];
                     if (isset($boxInput['height'])) $updateData['height'] = $boxInput['height'];
                     if (isset($boxInput['weight'])) $updateData['weight'] = $boxInput['weight'];
+                    // '' clears it back to null — an admin who empties the field
+                    // means "we don't know yet", which must not read as 0 cost.
+                    if (array_key_exists('shipping_cost', $boxInput)) {
+                        $updateData['shipping_cost'] = $boxInput['shipping_cost'] === '' ? null : $boxInput['shipping_cost'];
+                    }
                     $box->update($updateData);
                 }
 
@@ -549,6 +557,7 @@ class AdminOrderManagementController extends Controller
                     'width' => $boxInput['width'] ?? null,
                     'height' => $boxInput['height'] ?? null,
                     'weight' => $boxInput['weight'] ?? null,
+                    'shipping_cost' => ($boxInput['shipping_cost'] ?? '') === '' ? null : $boxInput['shipping_cost'],
                 ]);
 
                 // Handle GIA file upload for new box
