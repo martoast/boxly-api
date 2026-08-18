@@ -28,7 +28,7 @@ class BusinessExpense extends Model
     // Which War Chest account the expense was paid from (debits that balance).
     // Mirrors the War Chest account list 1:1 — a chip with no matching
     // account is an expense that can never be reconciled against a balance.
-    const PAYMENT_METHODS = ['NU', 'HSBC', 'Stripe US', 'Stripe MX', 'US Bank'];
+    const PAYMENT_METHODS = ['NU', 'HSBC', 'Stripe US', 'Stripe MX', 'US Bank Boxly LLC'];
 
     protected $casts = [
         'amount' => 'decimal:2',

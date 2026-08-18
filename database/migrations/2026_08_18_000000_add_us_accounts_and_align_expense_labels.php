@@ -4,16 +4,19 @@ use Illuminate\Database\Migrations\Migration;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Line the expense "paid from" labels up with the real War Chest accounts.
+ * Point the expense "paid from" labels at the War Chest accounts that actually
+ * exist: Stripe US, Stripe MX, US Bank Boxly LLC, HSBC, NU.
  *
- * The 2026_07_29 migration split Stripe into "Stripe US" and "Stripe MX", but
- * the expense form was never told: it kept offering a single ambiguous
- * "Stripe" chip and had no way at all to record something paid from Stripe MX.
- * Adding Boxly USA's US bank account is what surfaced it.
+ * The 2026_07_29 migrations split Stripe into US/MX and added the US bank, but
+ * the expense form was never told — it still offered one ambiguous "Stripe"
+ * chip, and had no way at all to record something paid from Stripe MX or the
+ * US account.
  *
- * After this: chips and War Chest accounts are the same five names, and the
- * `payment_method` routing key on each account matches the label an expense
- * stores — which is what that column was added for.
+ * Data only. The accounts already exist and `war_chest_accounts` has no
+ * routing column any more (2026_07_29_100000 dropped `payment_method` on
+ * purpose — the War Chest is pure CRUD and nothing matches an expense to an
+ * account automatically). The label an expense stores is exactly the account
+ * name, which is all the link there is.
  */
 return new class extends Migration
 {
@@ -21,62 +24,30 @@ return new class extends Migration
     {
         $now = now();
 
-        // Existing expenses said "Stripe" back when there was only one. They
-        // were all the US account, so move them rather than stranding them
-        // under a label the form no longer offers.
+        // Everything recorded as "Stripe" predates the split, so it was paid
+        // from the US account — the only Stripe account that existed then.
         DB::table('business_expenses')
             ->where('payment_method', 'Stripe')
             ->update(['payment_method' => 'Stripe US', 'updated_at' => $now]);
 
-        // Boxly USA LLC's bank. USD, unlike the Mexican accounts.
-        if (! DB::table('war_chest_accounts')->where('name', 'US Bank')->exists()) {
-            DB::table('war_chest_accounts')->insert([
-                'name'            => 'US Bank',
-                'payment_method'  => 'US Bank',
-                'current_balance' => 0,
-                'target_amount'   => 0,
-                'currency'        => 'usd',
-                'sort_order'      => 5,
-                'is_active'       => true,
-                'created_at'      => $now,
-                'updated_at'      => $now,
-            ]);
-        }
-
-        // Routing keys still held the pre-split names.
-        DB::table('war_chest_accounts')->where('name', 'Stripe US')
-            ->update(['payment_method' => 'Stripe US', 'updated_at' => $now]);
-        DB::table('war_chest_accounts')->where('name', 'Stripe MX')
-            ->update(['payment_method' => 'Stripe MX', 'updated_at' => $now]);
+        // A first cut of this shipped the chip as a bare "US Bank", which
+        // matches no account. Move any expense saved in that window onto the
+        // real account name.
+        DB::table('business_expenses')
+            ->where('payment_method', 'US Bank')
+            ->update(['payment_method' => 'US Bank Boxly LLC', 'updated_at' => $now]);
     }
 
-    /**
-     * Reversible except for the US Bank row, which is only dropped when it has
-     * no ledger history — same rule the Stripe split used, so a rollback can
-     * never destroy recorded movements.
-     */
     public function down(): void
     {
-        $now = now();
-
         DB::table('business_expenses')
             ->where('payment_method', 'Stripe US')
-            ->update(['payment_method' => 'Stripe', 'updated_at' => $now]);
+            ->update(['payment_method' => 'Stripe', 'updated_at' => now()]);
 
-        // Expenses paid from accounts that didn't exist before this migration
-        // have no valid old label — null is honest, a wrong bucket isn't.
+        // Stripe MX and the US bank had no label before this, and guessing a
+        // wrong bucket is worse than admitting we don't know.
         DB::table('business_expenses')
-            ->whereIn('payment_method', ['Stripe MX', 'US Bank'])
-            ->update(['payment_method' => null, 'updated_at' => $now]);
-
-        DB::table('war_chest_accounts')->where('name', 'Stripe US')
-            ->update(['payment_method' => 'Stripe', 'updated_at' => $now]);
-        DB::table('war_chest_accounts')->where('name', 'Stripe MX')
-            ->update(['payment_method' => null, 'updated_at' => $now]);
-
-        $usBank = DB::table('war_chest_accounts')->where('name', 'US Bank')->first();
-        if ($usBank && ! DB::table('war_chest_transactions')->where('account_id', $usBank->id)->exists()) {
-            DB::table('war_chest_accounts')->where('id', $usBank->id)->delete();
-        }
+            ->whereIn('payment_method', ['Stripe MX', 'US Bank Boxly LLC'])
+            ->update(['payment_method' => null, 'updated_at' => now()]);
     }
 };
