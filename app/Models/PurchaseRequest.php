@@ -43,6 +43,8 @@ class PurchaseRequest extends Model
         'store_categories',
         'deposit_amount_usd',
         'deposit_checkout_session_id',
+        'deposit_payment_link',
+        'deposit_payment_link_id',
         'deposit_paid_at',
     ];
 

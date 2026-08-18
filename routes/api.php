@@ -625,6 +625,13 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/', [AdminPurchaseRequestController::class, 'index']);
             Route::post('/', [AdminPurchaseRequestController::class, 'store']);
 
+            // In-person Las Americas visits started by the shopping team.
+            // Step 1 of two — creates the PR in awaiting_deposit and returns a
+            // $10/store Payment Link to send the customer. Declared before
+            // /{purchaseRequest} so "in-person" isn't read as an id.
+            Route::get('/in-person/per-store-fee', [AdminPurchaseRequestController::class, 'inPersonPerStoreFee']);
+            Route::post('/in-person', [AdminPurchaseRequestController::class, 'storeInPerson']);
+
             Route::delete('/bulk', [AdminPurchaseRequestController::class, 'bulkDestroy']);
             Route::put('/bulk-status', [AdminPurchaseRequestController::class, 'bulkUpdateStatus']);
             Route::post('/merge', [AdminPurchaseRequestController::class, 'mergePurchaseRequests']);
@@ -636,6 +643,9 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/{purchaseRequest}/quote', [AdminPurchaseRequestController::class, 'createQuote']);
             Route::post('/{purchaseRequest}/mark-purchased', [AdminPurchaseRequestController::class, 'markAsPurchased']);
             Route::put('/{purchaseRequest}/reject', [AdminPurchaseRequestController::class, 'reject']);
+
+            // Remint the deposit link when the first one got lost.
+            Route::post('/{purchaseRequest}/deposit-link', [AdminPurchaseRequestController::class, 'createDepositLink']);
 
             // Per-item stock verification — Velonie marks each line available/unavailable
             // before quoting a store-source PR. Available items get billed via Stripe;

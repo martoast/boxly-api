@@ -417,6 +417,187 @@ class AdminPurchaseRequestController extends Controller
     }
 
     /**
+     * The live $/store reservation rate, so the create form totals the same
+     * way the Payment Link will. Read from Stripe, not hardcoded in the UI.
+     */
+    public function inPersonPerStoreFee()
+    {
+        return response()->json([
+            'success'            => true,
+            'per_store_fee_usd'  => \App\Services\InPersonDeposit::perStoreFeeUsd(),
+        ]);
+    }
+
+    /**
+     * Start an in-person Las Americas visit on a customer's behalf.
+     *
+     * Step 1 of two. The customer's own booking flow
+     * (PurchaseRequestController::storeInPerson) needs a scheduled trip, a
+     * store picker and a budget; when the shopping team takes the request over
+     * WhatsApp none of that is settled yet — all Velonie knows is who it's for
+     * and how many stores she's visiting. So everything but the customer and
+     * the store count is optional here.
+     *
+     * The PR lands in awaiting_deposit and comes back with a Payment Link for
+     * $10 × stores. Once that link is paid the existing webhook flips it to
+     * pending_review, exactly as it does for a self-serve booking. Step 2 —
+     * what was actually spent plus commission — is createQuote, unchanged.
+     */
+    public function storeInPerson(Request $request)
+    {
+        $validated = $request->validate([
+            'user_id'            => 'required|exists:users,id',
+            'store_count'        => 'required|integer|min:1|max:20',
+            'shopping_trip_id'   => 'nullable|exists:shopping_trips,id',
+            'store_ids'          => 'nullable|array',
+            'store_ids.*'        => 'integer|exists:stores,id',
+            'minimum_budget_usd' => 'nullable|numeric|min:0',
+            'customer_notes'     => 'nullable|string|max:2000',
+            'admin_notes'        => 'nullable|string|max:2000',
+            // Backfill controls — see the note above the flags below.
+            'create_payment_link' => 'nullable|boolean',
+            'status'              => 'nullable|in:awaiting_deposit,pending_review,quoted,paid,purchased',
+            'deposit_paid'        => 'nullable|boolean',
+            'deposit_paid_at'     => 'nullable|date',
+            'deposit_amount_usd'  => 'nullable|numeric|min:0',
+        ]);
+
+        // Recording a visit that already happened must stay silent: no Stripe
+        // object, no link, nothing the customer could receive. Nobody wants a
+        // payment request for a trip they paid for weeks ago.
+        $status     = $validated['status'] ?? PurchaseRequest::STATUS_AWAITING_DEPOSIT;
+        $isBacklog  = $status !== PurchaseRequest::STATUS_AWAITING_DEPOSIT;
+
+        // A visit logged as already past the reservation stage has, by
+        // definition, had its reservation settled — but an explicit flag wins.
+        $depositPaid = $request->has('deposit_paid')
+            ? $request->boolean('deposit_paid')
+            : $isBacklog;
+
+        // Never mint a link for something already paid for, whatever was asked.
+        $wantsLink = $request->boolean('create_payment_link', true) && ! $depositPaid;
+
+        DB::beginTransaction();
+
+        try {
+            $user       = User::findOrFail($validated['user_id']);
+            $storeCount = (int) $validated['store_count'];
+
+            // Rate read live from Stripe (seeded from config on first use), so
+            // the number on the link and the number on the PR are the same
+            // number — the customer can't be quoted one and billed another.
+            // A backfilled visit may have been charged something else entirely,
+            // so an explicit amount overrides the current rate.
+            $depositAmount = isset($validated['deposit_amount_usd'])
+                ? round((float) $validated['deposit_amount_usd'], 2)
+                : round(\App\Services\InPersonDeposit::perStoreFeeUsd() * $storeCount, 2);
+
+            $pr = PurchaseRequest::create([
+                'user_id'               => $user->id,
+                'request_number'        => PurchaseRequest::generateRequestNumber(),
+                'status'                => $status,
+                'source'                => PurchaseRequest::SOURCE_IN_PERSON,
+                'shopping_trip_id'      => $validated['shopping_trip_id'] ?? null,
+                'currency'              => 'usd',
+                'payment_method'        => PurchaseRequest::PAYMENT_METHOD_STRIPE,
+                'in_person_store_count' => $storeCount,
+                'deposit_amount_usd'    => $depositAmount,
+                'deposit_paid_at'       => $depositPaid
+                    ? ($validated['deposit_paid_at'] ?? now())
+                    : null,
+                'minimum_budget_usd'    => $validated['minimum_budget_usd'] ?? null,
+                'customer_notes'        => $validated['customer_notes'] ?? null,
+                'admin_notes'           => $validated['admin_notes'] ?? null,
+            ]);
+
+            if (! empty($validated['store_ids'])) {
+                $pr->stores()->sync($validated['store_ids']);
+            }
+
+            // Inside the transaction on purpose: if Stripe refuses we don't
+            // want a PR sitting in awaiting_deposit with no way to pay it.
+            $paymentLink = $wantsLink
+                ? \App\Services\InPersonDeposit::createPaymentLink($pr)
+                : null;
+
+            DB::commit();
+
+            Log::info('Shopping team created an in-person PR', [
+                'purchase_request_id' => $pr->id,
+                'created_by'          => $request->user()->id,
+                'customer_id'         => $user->id,
+                'store_count'         => $storeCount,
+                'status'              => $status,
+                'payment_link'        => (bool) $paymentLink,
+            ]);
+
+            return response()->json([
+                'success'      => true,
+                'message'      => $paymentLink
+                    ? 'Visita creada. Envía el link de pago al cliente.'
+                    : 'Visita registrada. No se generó ningún cobro ni se envió correo.',
+                'payment_link' => $paymentLink,
+                'data'         => $pr->fresh()->load(['user', 'stores', 'shoppingTrip']),
+            ], 201);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Failed to create in-person PR from the shopping team', [
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'No se pudo crear la visita: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Mint a fresh deposit Payment Link for an in-person PR.
+     *
+     * For when the original was never sent, got lost in a WhatsApp thread, or
+     * the store count changed. Refuses once the deposit has cleared so a paid
+     * reservation can't sprout a second way to pay it.
+     */
+    public function createDepositLink(Request $request, PurchaseRequest $purchaseRequest)
+    {
+        if (! $purchaseRequest->isInPerson()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Esta solicitud no es de compra en persona.',
+            ], 400);
+        }
+
+        if ($purchaseRequest->depositPaid()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'El depósito de esta visita ya fue pagado.',
+            ], 400);
+        }
+
+        try {
+            // Retire the previous link so only one live URL can be paid.
+            \App\Services\InPersonDeposit::deactivatePaymentLink($purchaseRequest);
+
+            return response()->json([
+                'success'      => true,
+                'payment_link' => \App\Services\InPersonDeposit::createPaymentLink($purchaseRequest),
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Failed to remint an in-person deposit link', [
+                'purchase_request_id' => $purchaseRequest->id,
+                'error'               => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'No se pudo generar el link: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
      * Update purchase request details (Admin Manual Override)
      */
     public function update(Request $request, PurchaseRequest $purchaseRequest)

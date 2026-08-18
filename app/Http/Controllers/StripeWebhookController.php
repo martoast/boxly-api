@@ -85,6 +85,26 @@ class StripeWebhookController extends Controller
         $metadata = isset($session->metadata) ? $session->metadata->toArray() : [];
         $type = $metadata['type'] ?? null;
 
+        // Sessions born from a Payment Link (the deposit link the shopping team
+        // sends over WhatsApp) rather than a Checkout Session we created.
+        // Stripe copies the link's metadata onto them, but we don't want the
+        // whole in-person flow resting on that: if the type didn't come
+        // through, read it off the link itself.
+        if (! $type && ! empty($session->payment_link)) {
+            try {
+                $link = \App\Services\StripeAccount::shopping()
+                    ->paymentLinks->retrieve($session->payment_link);
+                $metadata = $link->metadata ? $link->metadata->toArray() : [];
+                $type = $metadata['type'] ?? null;
+            } catch (\Exception $e) {
+                Log::error('Could not read metadata from the payment link behind a checkout session', [
+                    'session_id'      => $session->id,
+                    'payment_link_id' => $session->payment_link,
+                    'error'           => $e->getMessage(),
+                ]);
+            }
+        }
+
         Log::info('Checkout Session Completed Webhook', [
             'session_id' => $session->id,
             'type' => $type,
@@ -216,6 +236,11 @@ class StripeWebhookController extends Controller
                 'status'           => PurchaseRequest::STATUS_PENDING_REVIEW,
                 'deposit_paid_at'  => now(),
             ]);
+
+            // Retire the shareable link now that it's been paid. Belt and
+            // braces — it's already capped at one completed session — and a
+            // no-op for deposits paid through a self-serve Checkout Session.
+            \App\Services\InPersonDeposit::deactivatePaymentLink($pr);
 
             $pr->load(['items', 'user', 'shoppingTrip', 'stores']);
 
