@@ -688,6 +688,20 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::delete('/{purchasedProduct}', [AdminPurchasedProductController::class, 'destroy']);
         });
 
+        // In-person shopping trip schedule — the same CRUD as
+        // /admin/shopping-trips, mounting the same controller so the admin
+        // view and the shopping view can never drift. Full write access is
+        // deliberate: Velonie runs the Las Américas visits, so she owns the
+        // calendar — opening, editing and closing dates, and reading each
+        // trip's confirmed bookings.
+        Route::prefix('shopping-trips')->group(function () {
+            Route::get('/', [AdminShoppingTripsController::class, 'index']);
+            Route::post('/', [AdminShoppingTripsController::class, 'store']);
+            Route::get('/{shoppingTrip}', [AdminShoppingTripsController::class, 'show']);
+            Route::put('/{shoppingTrip}', [AdminShoppingTripsController::class, 'update']);
+            Route::delete('/{shoppingTrip}', [AdminShoppingTripsController::class, 'destroy']);
+        });
+
         // Customer lookup — needed by the "create PR for customer" form.
         // Read-only; full customer CRUD remains admin-only under /admin/customers.
         Route::get('/customers', [AdminCustomerController::class, 'index']);
