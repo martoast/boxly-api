@@ -10,7 +10,7 @@ class EmployeeMiddleware
 {
     public function handle(Request $request, Closure $next): Response
     {
-        if (!$request->user() || !$request->user()->isEmployee()) {
+        if (!$request->user() || !$request->user()->canManageWarehouse()) {
             return response()->json([
                 'success' => false,
                 'message' => 'Unauthorized. Employee access required.'

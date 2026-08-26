@@ -261,6 +261,18 @@ class User extends Authenticatable
     }
 
     /**
+     * Warehouse namespace access. Mirrors canManageShopping(): admins have
+     * full visibility everywhere, so they pass here too — Alex works the
+     * warehouse queue himself, and Jarvis reaches it with an admin token.
+     * Without this the /employee/* routes 403 for the very account that owns
+     * the business.
+     */
+    public function canManageWarehouse(): bool
+    {
+        return $this->isAdmin() || $this->isWarehouseEmployee();
+    }
+
+    /**
      * Get the user's full address as array
      */
     public function getAddressAttribute(): array
