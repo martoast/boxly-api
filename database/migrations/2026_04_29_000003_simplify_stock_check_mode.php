@@ -7,9 +7,7 @@ use Illuminate\Support\Facades\Schema;
 
 /**
  * Replace `source_protection (none|cloudflare|manual)` with the simpler
- * `stock_check_mode (auto|manual)`. We always use ScraperAPI for `auto`
- * products now so there's no longer a meaningful difference between
- * "direct" and "via ScraperAPI" — the cron just uses ScraperAPI always.
+ * `stock_check_mode (auto|manual)`.
  */
 return new class extends Migration
 {

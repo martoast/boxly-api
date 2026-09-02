@@ -10,7 +10,7 @@ return new class extends Migration
     {
         Schema::table('products', function (Blueprint $table) {
             // 'none'       — direct curl works (free, default)
-            // 'cloudflare' — needs to go through ScraperAPI (paid, used for protected stores)
+            // 'cloudflare' — requires a browser-mediated verification path
             // 'manual'     — admin maintains stock manually (no automated check)
             $table->enum('source_protection', ['none', 'cloudflare', 'manual'])
                 ->default('none')

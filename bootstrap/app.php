@@ -9,9 +9,6 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
         api: __DIR__.'/../routes/api.php',
         apiPrefix: '/',
-        // routes/console.php was never loaded, so nothing in it ran and
-        // schedule:list reported no tasks at all. The product index upkeep
-        // (boxly:index-warm) is defined there.
         commands: __DIR__.'/../routes/console.php',
         health: '/up',
     )

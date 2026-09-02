@@ -12,39 +12,6 @@ return [
         'token' => env('POSTMARK_TOKEN'),
     ],
 
-    /**
-     * ScraperAPI — bypasses Cloudflare on protected store pages so the stock-check
-     * cron can still reach .json/.js endpoints on stores like YoungLA, Gymshark, Alo.
-     */
-    'scraperapi' => [
-        'key' => env('SCRAPERAPI_KEY'),
-        // Seconds a live search will WAIT on the structured-shopping fallback
-        // when it would otherwise return an empty gallery. Env-tunable because
-        // the ceiling isn't ours: the Nuxt route calling us runs as a hosted
-        // function with its own limit, so if searches start failing outright
-        // instead of coming back slow, lower this rather than redeploying code.
-        // 0 disables the wait and reverts to background-prime-only.
-        'deadend_wait' => (int) env('SCRAPERAPI_DEADEND_WAIT', 25),
-        // Retry heavily-protected retailers (Foot Locker, Nordstrom…) on the
-        // ultra premium pool when the standard one 403s asking for it. ~20x the
-        // credits, but only ever spent on a request that already failed.
-        'ultra' => env('SCRAPERAPI_ULTRA', true),
-        // Delivery ZIP for retailer pricing/stock (Amazon/Walmart structured).
-        // Defaults to the San Ysidro / San Diego receiving warehouse.
-        'zip' => env('SEARCH_ZIP', '92173'),
-    ],
-
-    /**
-     * SerpAPI — fast, reliable Google Shopping results (the assistant's primary
-     * universal product-search engine; ScraperAPI is the fallback).
-     */
-    'serpapi' => [
-        'key' => env('SERPAPI_KEY'),
-        // City-level location for Google Shopping — pinned to the San Diego
-        // warehouse area so prices/availability match where goods land.
-        'location' => env('SEARCH_LOCATION', 'San Diego, California, United States'),
-    ],
-
     'resend' => [
         'key' => env('RESEND_KEY'),
     ],
@@ -128,6 +95,42 @@ return [
      */
     'boxly_protection' => [
         'product_id' => env('STRIPE_PROTECTION_PRODUCT_ID', 'prod_V1AEN4i1Io6J6X'),
+    ],
+
+    /**
+     * Live Shopping engine — the remote browser/streaming service that drives a
+     * live, conversation-attached shopping session (P1: one store, view-only).
+     *
+     * Laravel is the CONTROL PLANE only: it never proxies, terminates or sees
+     * video. Env-only, no defaults — an unset value must mean "off", never a
+     * half-configured deployment pointed at nothing.
+     *
+     * `enabled` is advisory; LiveShoppingEngine::configured() is the authority,
+     * and it is false unless base_url AND service_secret are both present.
+     *
+     * The engine owns the callback destination: it maps the fixed callback_id
+     * to its own configured HTTPS webhook URL. Laravel never builds one, which
+     * is why there is no callback_base here.
+     */
+    'live_shopping_engine' => [
+        'enabled'         => (bool) env('LIVE_SHOPPING_ENABLED', false),
+        'base_url'        => env('LIVE_SHOPPING_BASE_URL'),
+        'service_secret'  => env('LIVE_SHOPPING_SERVICE_SECRET'),
+        // Which service key signs our OUTBOUND requests, so the engine can
+        // rotate our credential without a flag day.
+        'service_key_id'  => env('LIVE_SHOPPING_SERVICE_KEY_ID'),
+        // Inbound webhook secrets, keyed by X-Boxly-Key-Id so a secret can be
+        // rotated without a flag day: LIVE_SHOPPING_WEBHOOK_KEYS="k1:secret1,k2:secret2"
+        'webhook_keys'    => env('LIVE_SHOPPING_WEBHOOK_KEYS'),
+        'timeout'         => (int) env('LIVE_SHOPPING_TIMEOUT', 8),
+        'skew'            => (int) env('LIVE_SHOPPING_SKEW', 300),
+        'expiry_grace'    => (int) env('LIVE_SHOPPING_EXPIRY_GRACE', 60),
+        'drain_grace'     => (int) env('LIVE_SHOPPING_DRAIN_GRACE', 30),
+        // How long a terminal delivery may arrive before its own session row is
+        // visible (the engine can be faster than our create round-trip).
+        'orphan_horizon'  => (int) env('LIVE_SHOPPING_ORPHAN_HORIZON', 300),
+        // callback_id is NOT configurable: it is the frozen literal
+        // LiveShoppingEngine::CALLBACK_ID.
     ],
 
     /**

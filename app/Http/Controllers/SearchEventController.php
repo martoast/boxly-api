@@ -82,7 +82,7 @@ class SearchEventController extends Controller
                 'user_id', 'user_name', 'user_email', 'results_json',
             ]);
 
-            $q = SearchEvent::query()->with('user:id,name,email')->orderBy('id');
+            $q = $this->organic(SearchEvent::query())->with('user:id,name,email')->orderBy('id');
             if ($days > 0) {
                 $q->where('created_at', '>=', Carbon::now()->subDays($days)->startOfDay());
             }
@@ -113,6 +113,30 @@ class SearchEventController extends Controller
         }, $filename, ['Content-Type' => 'text/csv; charset=UTF-8']);
     }
 
+
+    /**
+     * Restrict an aggregate to the ORGANIC AI-search corpus.
+     *
+     * These endpoints segment by `type`, never by source, so live-shopping
+     * result sets (written as type=search, source='live_engine') would otherwise
+     * land in totalSearches, avgResults, the zero-result/broadened quality
+     * ratios and the intent-map corpus — silently shifting a historical series
+     * the day live sessions start running. That is the kind of breakage nobody
+     * notices for a week.
+     *
+     * Guarded on the column so the page keeps working through the deploy window,
+     * exactly like the `broadened` guard below: BEFORE the migration these
+     * queries behave as they always have, and AFTER it they return the same rows.
+     */
+    private function organic($query)
+    {
+        if (Schema::hasColumn('search_events', 'source')) {
+            $query->whereNull('source');
+        }
+
+        return $query;
+    }
+
     /** Normalize a store name ("Walmart - SellerX" → "Walmart") for aggregation. */
     private function normStore(string $s): string
     {
@@ -129,7 +153,7 @@ class SearchEventController extends Controller
         $since = Carbon::now()->subDays($days)->startOfDay();
 
         try {
-            $rows = SearchEvent::where('created_at', '>=', $since)
+            $rows = $this->organic(SearchEvent::where('created_at', '>=', $since))
                 ->whereIn('type', [SearchEvent::TYPE_SEARCH, SearchEvent::TYPE_QUESTION])
                 ->whereNotNull('query')->where('query', '<>', '')
                 ->select('type', 'query', DB::raw('count(*) as c'))
@@ -172,7 +196,7 @@ class SearchEventController extends Controller
         $light = $request->boolean('light');
 
         try {
-            $base = SearchEvent::where('created_at', '>=', $since);
+            $base = $this->organic(SearchEvent::where('created_at', '>=', $since));
             $searches = (clone $base)->where('type', SearchEvent::TYPE_SEARCH);
             $views = (clone $base)->where('type', SearchEvent::TYPE_PRODUCT_VIEW);
             $questions = (clone $base)->where('type', SearchEvent::TYPE_QUESTION);
@@ -380,7 +404,7 @@ class SearchEventController extends Controller
             'page'     => 'nullable|integer|min:1',
         ]);
 
-        $q = SearchEvent::query()->with('user:id,name,email,created_at');
+        $q = $this->organic(SearchEvent::query())->with('user:id,name,email,created_at');
         $this->applyEventFilters($q, $v);
 
         $events = $q->latest()->paginate($v['per_page'] ?? 50);

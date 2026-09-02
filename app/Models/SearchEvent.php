@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class SearchEvent extends Model
 {
     protected $fillable = [
-        'user_id', 'conversation_id', 'type', 'query', 'store', 'title', 'url', 'results',
+        'user_id', 'conversation_id', 'type', 'source', 'query', 'store', 'title', 'url', 'results',
         'broadened', 'served_query', 'results_sample',
     ];
 
