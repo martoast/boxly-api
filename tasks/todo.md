@@ -175,3 +175,12 @@ sees it because:
   filter takes hours. Worth a `DatabaseTransactions`/migrate-once fixture before the suite grows; not
   changed here (out of scope for the caveat label).
 - Not pushed. Diff handed to the lead as `/tmp/boxly-api-caveat-label.patch`.
+
+## Item 3 — terminal → gallery latency (2026-09-03): no API change
+`LiveShoppingController::show()` already reconciles a terminal engine session and runs
+`ProcessLiveShoppingResultJob` inline (`reconcileEngineTerminal`), idempotent by delivery_id/status. The
+Nuxt refresh chain now calls it once before its first reload, so the queued job (`queue:work database
+--sleep=1`, dispatched by the webhook as a latency optimisation; the drainer guarantees the work) is off the
+customer-visible path. Nothing to change here; worker sleep and inline webhook processing deliberately
+left alone.
+
