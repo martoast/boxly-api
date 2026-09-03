@@ -184,3 +184,25 @@ Nuxt refresh chain now calls it once before its first reload, so the queued job 
 customer-visible path. Nothing to change here; worker sleep and inline webhook processing deliberately
 left alone.
 
+## Multi-store sessions — PLAN ONLY (2026-09-03; L2, lands after the engine's L1 and the owner's go)
+Contract: one session, N store workers (the one-active-slot per customer and the engine's one-active-session
+cap decide it); the store list is the closed engine catalog, selected server-side; N is the engine's
+`max_stores_per_session` (default 2, bounded 1..4). Full brief: `MULTI_STORE_PLAN.md` in the engine repo.
+- [ ] `POST /live-shopping/sessions` (`LiveShoppingController::store` :34-90): accept `store_ids` (1..N distinct
+      slugs, the existing regex :42; `store_id` still accepted as one) → row `store_id` = first, `stores = [{id}, …]`
+      (the column was built for this: migration :41 "P2-shaped; one entry in P1"); `createSession(store_ids)`.
+- [ ] `present()` (:339-352): tenth key `stores: [{id, status, error_code}]`; per-store codes through the same
+      closed sanitizer as `publicErrorCode`; `PublicContractTest` exact-key pin and the Nuxt `CREATE_DATA_KEYS`
+      change together.
+- [ ] Webhook `validated()` (`LiveShoppingWebhookController` :230, :250): `result` + `stores`,
+      `assistant_part.output` + `stores`, per-store caveats from the closed vocabulary; products/part equality
+      unchanged. `ProcessLiveShoppingResultJob`: part verbatim; session `error_code` (:179) + per-store outcomes
+      into `stores` (outcome, error_code per entry); no new table.
+- [ ] `reconcileEngineTerminal` (:254-300): same shape from the engine status (gains `stores`).
+- [ ] `GET /live-shopping/stores`: pass `max_stores_per_session` through from the engine catalog.
+- [ ] Budget/quarantine: none (per store in the engine); `active_slot` stays one session per customer.
+- [ ] Tests: `PublicContractTest` (create with store_ids; ten-key present; per-store sanitizing); webhook contract
+      (strict keys with stores; a mixed full + partial delivery); `ShowSessionTest` (reconcile persists per-store
+      outcomes); `CreateSessionTest` (two stores → one row, one engine call).
+- [ ] Live check (lead): one single-store session through the UI + the contract tests in the container.
+
