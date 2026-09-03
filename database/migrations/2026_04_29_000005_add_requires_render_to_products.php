@@ -5,8 +5,9 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
 /**
- * Historical compatibility column for products that required rendered
- * verification. New verification runs through the authenticated browser path.
+ * For products from JS-rendered SPAs (Gymshark, Victoria's Secret) where the
+ * HTML returned by ScraperAPI's standard mode is a barebones shell. Setting
+ * this flag tells the cron to pass &render=true (~10× credits, but works).
  */
 return new class extends Migration
 {

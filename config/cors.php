@@ -52,11 +52,6 @@ return [
         'campaign/*',
         'employee/*',
         'shopping/*',
-        // Browser-plane live shopping: ONLY the session-scoped routes the SPA
-        // calls directly (ticket mint, status). The create runs server-to-server
-        // from Nuxt and the webhook is engine-to-Laravel — neither is a browser
-        // surface, so neither belongs here.
-        'live-shopping/sessions/*',
         'store/*',
         'me/*',
         'fx-rate',

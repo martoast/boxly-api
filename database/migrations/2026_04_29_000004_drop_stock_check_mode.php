@@ -5,9 +5,10 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
 /**
- * Drop stock_check_mode entirely. Product verification is handled by the
- * authenticated live-shopping pipeline, so products no longer carry a
- * provider-specific code-path selector.
+ * Drop stock_check_mode entirely. ScraperAPI works for every source URL —
+ * Shopify, Cloudflare-protected, plain HTML — so there's no scenario where
+ * a product needs a different code path. The cron just runs against every
+ * active product with a source_url.
  */
 return new class extends Migration
 {

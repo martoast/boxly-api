@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\StarterPrompt;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 
 class AdminStarterPromptController extends Controller
@@ -44,6 +46,8 @@ class AdminStarterPromptController extends Controller
         ]);
 
         $prompt = StarterPrompt::create($validated);
+        $this->maybeResolveImage($prompt, queryChanged: true);
+
         return response()->json(['success' => true, 'data' => $prompt->fresh()], 201);
     }
 
@@ -59,9 +63,94 @@ class AdminStarterPromptController extends Controller
             'sort_order' => 'nullable|integer|min:0',
         ]);
 
+        $queryChanged = array_key_exists('image_query', $validated)
+            && $validated['image_query'] !== $starterPrompt->image_query;
+
         $starterPrompt->update($validated);
+        $this->maybeResolveImage($starterPrompt, $queryChanged);
 
         return response()->json(['success' => true, 'data' => $starterPrompt->fresh()]);
+    }
+
+    /**
+     * Resolve a representative product photo for the card ONCE, at save time,
+     * and copy it to Spaces — the search page used to resolve this live on
+     * every page load (StarterPromptController::index / /api/card-image),
+     * which is why the starter cards took seconds to paint. A failed
+     * resolution just leaves the emoji fallback; it never fails the save.
+     */
+    private function maybeResolveImage(StarterPrompt $prompt, bool $queryChanged): void
+    {
+        $query = trim((string) $prompt->image_query);
+        if ($query === '') {
+            return;
+        }
+        if (! $queryChanged && ! empty($prompt->resolved_image_url)) {
+            return;
+        }
+
+        try {
+            $sourceUrl = $this->searchFirstProductImage($query);
+            if (! $sourceUrl) {
+                return;
+            }
+
+            $spacesUrl = $this->copyImageToSpaces($prompt->id, $sourceUrl);
+            if ($spacesUrl) {
+                $prompt->update(['resolved_image_url' => $spacesUrl]);
+            }
+        } catch (\Throwable $e) {
+            Log::warning('Starter prompt image resolution failed', [
+                'id' => $prompt->id,
+                'query' => $query,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Same product search /api/card-image runs today — take the first
+     * result with an image.
+     */
+    private function searchFirstProductImage(string $query): ?string
+    {
+        $response = Http::timeout(8)->post(rtrim(config('app.url'), '/').'/products/search', [
+            'query' => $query,
+        ]);
+        if (! $response->successful()) {
+            return null;
+        }
+
+        foreach ($response->json('data.products') ?? [] as $product) {
+            if (! empty($product['image'])) {
+                return $product['image'];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Merchant CDNs may hotlink-block server-side downloads — a failure here
+     * just bubbles up to maybeResolveImage's catch and leaves the fallback.
+     */
+    private function copyImageToSpaces(int $promptId, string $sourceUrl): ?string
+    {
+        $response = Http::timeout(8)->get($sourceUrl);
+        if (! $response->successful() || $response->body() === '') {
+            return null;
+        }
+
+        $ext = strtolower(pathinfo(parse_url($sourceUrl, PHP_URL_PATH) ?? '', PATHINFO_EXTENSION));
+        $ext = preg_match('/^[a-z0-9]{2,5}$/', $ext) ? $ext : 'jpg';
+        $path = "starter-prompts/{$promptId}/resolved-".time().'.'.$ext;
+
+        Storage::disk('spaces')->put($path, $response->body(), [
+            'visibility' => 'public',
+            'CacheControl' => 'public, max-age=31536000, immutable',
+        ]);
+
+        return config('filesystems.disks.spaces.url').'/'.$path;
     }
 
     public function destroy(StarterPrompt $starterPrompt)

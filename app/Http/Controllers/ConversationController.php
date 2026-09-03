@@ -3,7 +3,6 @@
 namespace App\Http\Controllers;
 
 use App\Models\Conversation;
-use App\Support\ProductV1;
 use Illuminate\Http\Request;
 
 /**
@@ -189,22 +188,13 @@ class ConversationController extends Controller
                     if (is_string($img) && str_starts_with($img, 'data:')) {
                         $img = null; // never carry base64 in the registry
                     }
-                    // Live-shopping results arrive as ProductV1, whose money
-                    // lives in {amount, currency} objects rather than the
-                    // scalar price/was this rail reads. Without this the rail
-                    // renders priceless; passing the object straight through
-                    // would render "[object Object]", which is worse because it
-                    // looks like data. Legacy keys always win, so parts written
-                    // by every existing tool are untouched.
-                    $money = ProductV1::money($p);
-
                     $out[] = [
                         'id'      => $id,
                         'title'   => $title,
                         'store'   => $p['store'] ?? null,
-                        'price'   => $p['price'] ?? $p['price_usd'] ?? $money['price'],
-                        'was'     => $p['was'] ?? $money['was'],
-                        'on_sale' => $p['on_sale'] ?? $money['on_sale'],
+                        'price'   => $p['price'] ?? $p['price_usd'] ?? null,
+                        'was'     => $p['was'] ?? null,
+                        'on_sale' => $p['on_sale'] ?? false,
                         'image'   => $img,
                         'url'     => $url,
                         'snippet' => $p['snippet'] ?? null,
