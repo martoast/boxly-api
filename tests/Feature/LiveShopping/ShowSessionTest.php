@@ -111,6 +111,39 @@ class ShowSessionTest extends LiveShoppingTestCase
         $this->assertSame(1, \App\Models\ConversationMessage::count());
     }
 
+    /** The status-reconcile projector persists the SAME part shape as the webhook: the caveat rides on it. */
+    public function test_a_completed_partial_match_status_read_persists_the_caveat_on_the_part(): void
+    {
+        $owner = User::factory()->createQuietly();
+        $session = $this->makeSession($owner);
+        $product = [
+            'store' => 'On', 'store_id' => 'on', 'title' => 'Cloudmonster',
+            'url' => 'https://www.on.com/cloudmonster', 'image' => null,
+            'current_price' => ['amount' => 149.99, 'currency' => 'USD'], 'list_price' => null, 'availability' => 'in_stock',
+            'observed_at' => gmdate('Y-m-d\\TH:i:s\\Z', time() - 60),
+        ];
+        Http::fake(['engine.test/*' => Http::response(['ok' => true, 'data' => [
+            'schema_version' => 1, 'session' => [
+                'id' => 'eng_1', 'conversation_id' => (string) $session->conversation_id,
+                'store_id' => 'on', 'status' => 'completed', 'latest_seq' => 6,
+                'media_status' => 'stopped', 'terminal_result' => [
+                    'outcome' => 'completed', 'products' => [$product], 'error_code' => 'partial_match',
+                ], 'created_at' => now()->subMinute()->toIso8601String(),
+                'updated_at' => now()->toIso8601String(), 'expires_at' => now()->addMinute()->toIso8601String(),
+            ],
+        ]], 200)]);
+
+        $this->actingAs($owner)->getJson("/live-shopping/sessions/{$session->id}")
+            ->assertOk()->assertJsonPath('data.status', 'completed')
+            ->assertJsonPath('data.error_code', 'partial_match');
+        $this->assertSame('partial_match', $session->fresh()->error_code);
+        $message = \App\Models\ConversationMessage::query()->firstOrFail();
+        $part = $message->content['parts'][0];
+        $this->assertSame('tool-live_results', $part['type']);
+        $this->assertSame('partial_match', $part['output']['caveat'] ?? null, 'the persisted gallery part carries the caveat');
+        $this->assertCount(1, $part['output']['products']);
+    }
+
     public function test_engine_status_mismatch_or_unavailable_leaves_local_row_unchanged(): void
     {
         $owner = User::factory()->createQuietly();

@@ -132,7 +132,7 @@ class PublicContractTest extends LiveShoppingTestCase
      * session exposes one, a hostile/absent stored value presents as the
      * literal 'failed', and every non-failed status presents null.
      */
-    public function test_error_code_is_sanitized_failed_only_and_null_otherwise(): void
+    public function test_error_code_is_sanitized_failed_reasons_and_the_completed_caveat_only(): void
     {
         $user = User::factory()->createQuietly();
         $conversation = Conversation::create(['user_id' => $user->id]);
@@ -147,6 +147,18 @@ class PublicContractTest extends LiveShoppingTestCase
         // Non-failed statuses are null even if a code is somehow stored.
         $this->assertNull($show());
         $session->forceFill(['status' => 'completed', 'active_slot' => null, 'error_code' => 'store_blocked'])->save();
+        $this->assertNull($show());
+
+        // A COMPLETED session exposes exactly one caveat — the engine's
+        // partial_match (a verified product that misses a requested constraint)
+        // — and nothing else: a closed vocabulary, not a pass-through.
+        $session->forceFill(['status' => 'completed', 'error_code' => 'partial_match'])->save();
+        $this->assertSame('partial_match', $show());
+        foreach (['PARTIAL_MATCH', 'partial_match!', 'partial', null] as $notTheCaveat) {
+            $session->forceFill(['status' => 'completed', 'error_code' => $notTheCaveat])->save();
+            $this->assertNull($show());
+        }
+        $session->forceFill(['status' => 'cancelled', 'error_code' => 'partial_match'])->save();
         $this->assertNull($show());
 
         // Failed with a clean machine slug passes through verbatim.

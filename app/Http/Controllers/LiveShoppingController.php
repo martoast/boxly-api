@@ -24,6 +24,9 @@ use Illuminate\Support\Facades\Schema;
  */
 class LiveShoppingController extends Controller
 {
+    /** The one caveat a COMPLETED session may expose (engine partial_match). */
+    private const COMPLETED_CAVEAT = 'partial_match';
+
     public function __construct(private readonly LiveShoppingEngine $engine)
     {
     }
@@ -276,7 +279,13 @@ class LiveShoppingController extends Controller
             'terminal_seq' => $remote['latest_seq'],
             'occurred_at' => now()->toIso8601String(),
             'result' => ['outcome' => $remote['status'], 'products' => $products, 'error_code' => $remote['error_code']],
-            'assistant_part' => ['type' => 'tool-live_results', 'state' => 'output-available', 'output' => ['products' => $products]],
+            // The EXACT part shape the webhook projector persists: the caveat
+            // rides on the part when the engine's terminal carries it, so the
+            // persisted gallery says so whichever projector wins the race.
+            'assistant_part' => ['type' => 'tool-live_results', 'state' => 'output-available', 'output' => array_merge(
+                ['products' => $products],
+                $remote['error_code'] === self::COMPLETED_CAVEAT ? ['caveat' => self::COMPLETED_CAVEAT] : []
+            )],
         ];
         $receipt = LiveShoppingWebhookReceipt::firstOrCreate(
             ['delivery_id' => $payload['delivery_id']],
@@ -343,13 +352,20 @@ class LiveShoppingController extends Controller
     }
 
     /**
-     * Bounded public terminal reason. Only a FAILED session exposes one, and
-     * only as a closed machine slug — anything else stored (hostile, oversized,
-     * or absent) presents as the literal 'failed'. The sanitizer here is a
-     * guarantee about this surface, not an observation about today's writers.
+     * Bounded public terminal reason. A FAILED session exposes its reason as a
+     * closed machine slug — anything else stored (hostile, oversized, or absent)
+     * presents as the literal 'failed'. A COMPLETED session exposes exactly one
+     * caveat, 'partial_match' (the engine verified a product that misses a
+     * requested constraint), and nothing else; every other status is null. The
+     * sanitizer here is a guarantee about this surface, not an observation
+     * about today's writers.
      */
     private function publicErrorCode(LiveShoppingSession $session): ?string
     {
+        if ($session->status === LiveShoppingSession::STATUS_COMPLETED) {
+            return $session->error_code === self::COMPLETED_CAVEAT ? self::COMPLETED_CAVEAT : null;
+        }
+
         if ($session->status !== LiveShoppingSession::STATUS_FAILED) {
             return null;
         }

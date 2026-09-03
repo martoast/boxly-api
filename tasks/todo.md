@@ -117,3 +117,61 @@ Convert the Boxly Store checkout from "pay-up-front via Stripe" to a two-step fl
 ### Risks / things to watch on first prod run
 - Old store PRs (created before this migration) have `stock_status` defaulting to `unverified`. None of them are in `pending_review` though, so the gate logic doesn't fire. Only NEW store PRs go through the new flow.
 - The cycler-built panty/bra products have huge variant counts. The current `variants/sync` POST is not chunked — first ~1700-variant submit might fail with payload-too-large. If that happens, we add chunking on a follow-up.
+
+# Customer-visible caveat label (partial_match) — API side (PLAN, awaiting approval)
+
+Status: PLAN ONLY — nothing below is implemented until approved. Never push (a push deploys).
+
+Facts (live trace 2026-09-03, sessions ace8d110 / 80cb048b): the engine terminal and the
+`live_shopping_sessions` row both carry `error_code = partial_match` for a COMPLETED session, and the
+webhook-persisted `tool-live_results` part carries `output.caveat = partial_match`. The customer never
+sees it because:
+1. `app/Http/Controllers/LiveShoppingController.php:351-361` `publicErrorCode()` returns null unless
+   `status === failed`, so `GET /live-shopping/sessions/{id}` presents `error_code: null` for a completed
+   session — and the Nuxt panel's authority reads commit their terminal from exactly this answer.
+2. The status-reconcile projector (`LiveShoppingController.php:277-280`) builds
+   `assistant_part.output = ['products' => …]` WITHOUT the caveat, while the webhook projector
+   (`LiveShoppingWebhookController.php:290-294`) adds `caveat` when `result.error_code` is partial_match.
+   Whichever projector wins the race decides whether the persisted gallery part carries the caveat.
+
+## Todo (smallest change)
+- [x] `publicErrorCode()`: closed vocabulary per status — `failed` unchanged (slug or literal 'failed');
+      `completed` exposes exactly `'partial_match'` when that is stored, otherwise null; every other status
+      null. Update the docblock ("Only a FAILED session…" → failed reasons + the one completed caveat).
+- [x] Status-reconcile projector: `'output' => array_merge(['products' => $products],
+      $remote['error_code'] === 'partial_match' ? ['caveat' => 'partial_match'] : [])` — the exact
+      webhook shape. Verify `ProcessLiveShoppingResultJob` persists the receipt's `assistant_part`
+      verbatim (it does not re-derive the output) so both projectors persist the same part.
+- [x] Tests — `tests/Feature/LiveShopping/PublicContractTest.php::test_error_code_is_sanitized_failed_only_and_null_otherwise`
+      (rename to `…_failed_reasons_and_the_completed_caveat_only`): completed + `store_blocked` → null
+      (kept); completed + `partial_match` → `partial_match`; cancelled + `partial_match` → null;
+      completed + `PARTIAL_MATCH` / `partial_match!` → null; failed cases unchanged.
+      `tests/Feature/LiveShopping/ShowSessionTest.php`: a status read whose engine terminal is
+      `completed` + `error_code partial_match` persists the part with `output.caveat = partial_match`
+      and the row with `error_code = partial_match`; with `error_code null` the part has no `caveat` key
+      (existing case).
+- [x] Run `php artisan test --filter LiveShopping` (needs the docker MySQL test database).
+- [x] Review section below; hand the diff to the lead. NO PUSH.
+
+## Review (2026-09-03)
+- Change: `LiveShoppingController::publicErrorCode()` now has a closed vocabulary per status — `failed`
+  unchanged (sanitized slug or the literal `failed`), `completed` exposes exactly `partial_match` when that
+  is what the engine stored (`COMPLETED_CAVEAT`), every other status and every other completed value is
+  null. The status-reconcile projector adds `output.caveat = 'partial_match'` to the persisted assistant part
+  with the exact shape the webhook projector already used, so both projectors persist the same part and the
+  gallery can render the "partial match" label whichever one wins the race. No other endpoint, job or
+  schema changed; no migration.
+- Tests: `PublicContractTest::test_error_code_is_sanitized_failed_reasons_and_the_completed_caveat_only`
+  (completed + store_blocked → null kept; completed + partial_match → partial_match; cancelled + partial_match
+  → null; `PARTIAL_MATCH` / `partial_match!` → null; failed cases unchanged) and
+  `ShowSessionTest::test_a_completed_partial_match_status_read_persists_the_caveat_on_the_part`.
+- Run (docker `boxly-local-stack-laravel.test-1`, `APP_ENV=testing LIVE_SHOPPING_MYSQL_GATE=1
+  DB_DATABASE=testing DB_HOST=mysql`, stdout to a file): the two changed files → 12 passed (59 assertions),
+  773.87 s. A full `--filter LiveShopping` run was started twice: the first, piped, was stopped after ~100
+  min with 12 classes PASS (through `ReconcileTest`, `PublicContractTest` included) and no summary line; the
+  second was started to a file and is left running in the background.
+- Cost note for whoever runs this next: every LiveShopping test re-migrates the `testing` schema from
+  scratch (`RefreshDatabase` + the live-shopping MySQL gate), ~60–70 s per test on this stack — the full
+  filter takes hours. Worth a `DatabaseTransactions`/migrate-once fixture before the suite grows; not
+  changed here (out of scope for the caveat label).
+- Not pushed. Diff handed to the lead as `/tmp/boxly-api-caveat-label.patch`.
