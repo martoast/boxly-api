@@ -91,6 +91,7 @@ class CorsTest extends LiveShoppingTestCase
             'media_available' => false,
             'whep_url'        => null,
             'ice_servers'     => [],
+            'input_url'       => null,
         ]], 200)]);
 
         $this->actingAs($user)

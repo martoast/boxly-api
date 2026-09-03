@@ -195,6 +195,7 @@ class EngineServiceAuthTest extends LiveShoppingTestCase
             'sse_url' => 'https://engine.test/s', 'media_available' => true,
             'whep_url' => 'https://engine.test/w',
             'ice_servers' => [['urls' => 'stun:stun.test:3478']],
+            'input_url' => null,
         ]], 200)]);
 
         $this->actingAs($user)->postJson("/live-shopping/sessions/{$session->id}/ticket")->assertOk();

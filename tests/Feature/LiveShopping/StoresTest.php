@@ -38,9 +38,9 @@ class StoresTest extends LiveShoppingTestCase
         $this->actingAs($user)->getJson('/live-shopping/stores')
             ->assertStatus(200)
             ->assertExactJson(['success' => true, 'stores' => [
-                ['id' => 'target', 'name' => 'Target'],
-                ['id' => 'walmart', 'name' => 'Walmart'],
-                ['id' => 'acme-outlet', 'name' => 'Acme Outlet'],
+                ['id' => 'target', 'name' => 'Target', 'url' => 'https://www.target.com/'],
+                ['id' => 'walmart', 'name' => 'Walmart', 'url' => 'https://www.walmart.com/'],
+                ['id' => 'acme-outlet', 'name' => 'Acme Outlet', 'url' => 'https://shop.acme-outlet.example/'],
             ], 'max_stores_per_session' => 1]); // L2: an engine that advertises no cap opens one store per session
 
         // Cached: a second read does not call the engine again.
@@ -121,5 +121,25 @@ class StoresTest extends LiveShoppingTestCase
         \Illuminate\Support\Facades\Cache::flush();
         // An out-of-range cap (9) is bounded to the one-store default, and the cap is not memoised across requests.
         $this->actingAs($user)->getJson('/live-shopping/stores')->assertStatus(200)->assertJsonPath('max_stores_per_session', 1);
+    }
+    /** Remote store browser: the storefront URL feeds the store cards; only
+     *  https URLs pass, anything else is dropped without failing the catalog. */
+    public function test_stores_route_forwards_https_storefront_urls_only(): void
+    {
+        $user = User::factory()->createQuietly();
+        Http::fake(['engine.test/v1/catalog' => Http::response(['ok' => true, 'data' => [
+            'schema_version' => 1,
+            'stores'         => [
+                ['id' => 'target', 'name' => 'Target', 'url' => 'https://www.target.com/'],
+                ['id' => 'plain', 'name' => 'Plain', 'url' => 'http://plain.example/'],
+                ['id' => 'creds', 'name' => 'Creds', 'url' => 'https://u:p@creds.example/'],
+            ],
+        ]], 200)]);
+
+        $this->actingAs($user)->getJson('/live-shopping/stores')
+            ->assertOk()
+            ->assertJsonPath('stores.0.url', 'https://www.target.com/')
+            ->assertJsonMissingPath('stores.1.url')
+            ->assertJsonMissingPath('stores.2.url');
     }
 }

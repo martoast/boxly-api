@@ -469,4 +469,71 @@ class CreateSessionTest extends LiveShoppingTestCase
         Http::assertNotSent(fn ($request) => str_contains($request->url(), '/v1/sessions'));
         $this->assertSame(0, LiveShoppingSession::count());
     }
+    /** Remote store browser: a manual session needs no conversation and no
+     *  objective; the row and the engine both learn the kind. */
+    public function test_a_manual_session_is_created_without_a_conversation(): void
+    {
+        $user = User::factory()->createQuietly();
+        $this->engineOk(['conversation_id' => '0']);
+
+        $response = $this->actingAs($user)->postJson('/live-shopping/sessions', [
+            'kind'     => 'manual',
+            'store_id' => 'on',
+        ]);
+
+        $response->assertStatus(201)
+            ->assertJsonPath('data.kind', 'manual')
+            ->assertJsonPath('data.conversation_id', null)
+            ->assertJsonPath('data.status', 'running');
+
+        $session = LiveShoppingSession::first();
+        $this->assertSame('manual', $session->kind);
+        $this->assertNull($session->conversation_id);
+        $this->assertSame('manual', $session->objective);
+
+        Http::assertSent(function ($request) {
+            if (! str_contains($request->url(), '/v1/sessions')) {
+                return false;
+            }
+            $body = $request->data();
+
+            return ($body['kind'] ?? null) === 'manual'
+                && ($body['query'] ?? null) === 'manual'
+                && ($body['conversation_id'] ?? null) === '0'
+                && ! array_key_exists('store_ids', $body);
+        });
+    }
+
+    public function test_a_manual_session_refuses_an_objective_and_store_ids(): void
+    {
+        $user = User::factory()->createQuietly();
+        $this->engineOk();
+
+        $this->actingAs($user)->postJson('/live-shopping/sessions', [
+            'kind' => 'manual', 'store_id' => 'on', 'objective' => 'x',
+        ])->assertStatus(422);
+        $this->actingAs($user)->postJson('/live-shopping/sessions', [
+            'kind' => 'manual', 'store_id' => 'on', 'store_ids' => ['on', 'target'],
+        ])->assertStatus(422);
+        $this->actingAs($user)->postJson('/live-shopping/sessions', [
+            'kind' => 'robot', 'store_id' => 'on',
+        ])->assertStatus(422)->assertJsonPath('code', 'invalid_kind');
+        $this->assertSame(0, LiveShoppingSession::count());
+    }
+
+    public function test_an_agent_session_stays_byte_compatible_and_reads_kind_agent(): void
+    {
+        [$user, $conversation] = $this->actor();
+        $this->engineOk(['conversation_id' => (string) $conversation->id]);
+
+        $this->actingAs($user)->postJson('/live-shopping/sessions', [
+            'conversation_id' => $conversation->id,
+            'objective'       => 'check stock',
+            'store_id'        => 'on',
+        ])->assertStatus(201)->assertJsonPath('data.kind', 'agent');
+
+        Http::assertSent(function ($request) {
+            return str_contains($request->url(), '/v1/sessions') && ! array_key_exists('kind', $request->data());
+        });
+    }
 }

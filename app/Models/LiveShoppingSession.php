@@ -14,7 +14,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class LiveShoppingSession extends Model
 {
     protected $fillable = [
-        'user_id', 'conversation_id', 'engine_session_id', 'status', 'store_id',
+        'user_id', 'conversation_id', 'engine_session_id', 'status', 'store_id', 'kind',
         'stores', 'objective', 'expires_at', 'latest_seq', 'terminal_seq',
         'terminal_delivery_id', 'error_code', 'active_slot',
     ];
@@ -25,6 +25,11 @@ class LiveShoppingSession extends Model
         'latest_seq' => 'integer',
         'terminal_seq' => 'integer',
     ];
+
+    /** Who drives the session: the agent (today's flow) or the customer (remote store browser). */
+    public const KIND_AGENT  = 'agent';
+    public const KIND_MANUAL = 'manual';
+    public const KINDS = [self::KIND_AGENT, self::KIND_MANUAL];
 
     public const STATUS_PENDING   = 'pending';
     public const STATUS_RUNNING   = 'running';

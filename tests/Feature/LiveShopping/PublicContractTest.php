@@ -57,7 +57,7 @@ class PublicContractTest extends LiveShoppingTestCase
 
         $this->assertSame([
             'id', 'status', 'engine_session_id', 'conversation_id',
-            'store_id', 'expires_at', 'created_at', 'updated_at', 'error_code', 'stores',
+            'store_id', 'kind', 'expires_at', 'created_at', 'updated_at', 'error_code', 'stores',
         ], array_keys($response->json('data')));
         // L2 (multi-store): one entry per requested store, sharing the session's status before a terminal.
         $this->assertSame([['id' => 'on', 'status' => 'running', 'error_code' => null]], $response->json('data.stores'));
@@ -86,7 +86,7 @@ class PublicContractTest extends LiveShoppingTestCase
 
         $this->assertSame([
             'id', 'status', 'engine_session_id', 'conversation_id',
-            'store_id', 'expires_at', 'created_at', 'updated_at', 'error_code', 'stores',
+            'store_id', 'kind', 'expires_at', 'created_at', 'updated_at', 'error_code', 'stores',
         ], array_keys($response->json('data')));
         $this->assertSame([], $response->json('data.stores'), 'a row created with an empty stores list presents none');
     }
@@ -107,6 +107,7 @@ class PublicContractTest extends LiveShoppingTestCase
             'sse_url' => 'https://engine.test/s', 'media_available' => true,
             'whep_url' => 'https://engine.test/w',
             'ice_servers' => [['urls' => 'stun:stun.test:3478']],
+            'input_url' => null,
         ]], 200)]);
 
         // GET must not be routable: a credential-minting call is not a link, so
@@ -122,7 +123,7 @@ class PublicContractTest extends LiveShoppingTestCase
 
         $this->assertSame(['success', 'data'], array_keys($response->json()));
         $this->assertSame(
-            ['ticket', 'expires_at', 'sse_url', 'media_available', 'whep_url', 'ice_servers'],
+            ['ticket', 'expires_at', 'sse_url', 'media_available', 'whep_url', 'ice_servers', 'input_url'],
             array_keys($response->json('data')),
         );
         // No engine envelope leaks through.

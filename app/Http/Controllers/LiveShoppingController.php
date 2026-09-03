@@ -37,17 +37,26 @@ class LiveShoppingController extends Controller
             return $disabled;
         }
 
+        // Remote store browser: `kind` selects who drives the session. `manual`
+        // (the customer controls the streamed store) needs no conversation and
+        // no objective — there is no assistant result to land anywhere.
+        $kind = $request->input('kind', LiveShoppingSession::KIND_AGENT);
+        if (! in_array($kind, LiveShoppingSession::KINDS, true)) {
+            return response()->json(['success' => false, 'code' => 'invalid_kind', 'message' => 'kind must be agent or manual.'], 422);
+        }
+        $manual = $kind === LiveShoppingSession::KIND_MANUAL;
         $validated = $request->validate([
-            // Required: EngineV1 is conversation-attached end to end, and a
-            // session with no conversation has nowhere to land its result.
-            'conversation_id' => 'required|integer',
-            'objective'       => 'required|string|max:500',
+            // Required for agent sessions: EngineV1 is conversation-attached end
+            // to end, and a session with no conversation has nowhere to land its
+            // result. Manual sessions carry none.
+            'conversation_id' => $manual ? 'nullable|integer' : 'required|integer',
+            'objective'       => $manual ? 'prohibited' : 'required|string|max:500',
+            'store_ids'       => $manual ? 'prohibited' : ['sometimes', 'array', 'min:1', 'max:4'],
             // Shape only. No retailer allowlist: the engine owns which stores
             // exist, and a list here would need editing every time it learns one.
             'store_id'        => ['required', 'string', 'regex:/^[a-z0-9][a-z0-9_-]{0,39}$/'],
             // L2 (multi-store): an optional ordered list whose first entry is
             // store_id; distinct slugs; bounded by the engine's advertised cap.
-            'store_ids'       => ['sometimes', 'array', 'min:1', 'max:4'],
             'store_ids.*'     => ['string', 'regex:/^[a-z0-9][a-z0-9_-]{0,39}$/'],
         ]);
         $storeIds = array_values($validated['store_ids'] ?? [$validated['store_id']]);
@@ -65,12 +74,16 @@ class LiveShoppingController extends Controller
             }
         }
 
-        $conversation = Conversation::find($validated['conversation_id']);
-        if (! $conversation || $conversation->user_id !== $request->user()->id) {
-            // Same answer either way: the existence of someone else's thread is
-            // not ours to confirm.
-            abort(403, 'Not your conversation.');
+        $conversation = null;
+        if (! $manual || ! empty($validated['conversation_id'])) {
+            $conversation = Conversation::find($validated['conversation_id']);
+            if (! $conversation || $conversation->user_id !== $request->user()->id) {
+                // Same answer either way: the existence of someone else's thread is
+                // not ours to confirm.
+                abort(403, 'Not your conversation.');
+            }
         }
+        $objective = $manual ? LiveShoppingSession::KIND_MANUAL : $validated['objective'];
 
         // Claim the one active slot at INSERT. No precheck: two concurrent
         // creates would both read "none" and both insert. The unique index on
@@ -78,11 +91,12 @@ class LiveShoppingController extends Controller
         try {
             $session = LiveShoppingSession::create([
                 'user_id'         => $request->user()->id,
-                'conversation_id' => $conversation->id,
+                'conversation_id' => $conversation?->id,
                 'status'          => LiveShoppingSession::STATUS_PENDING,
                 'store_id'        => $storeIds[0],
+                'kind'            => $kind,
                 'stores'          => array_map(fn ($id) => ['id' => $id], $storeIds),
-                'objective'       => $validated['objective'],
+                'objective'       => $objective,
                 'active_slot'     => 1,
             ]);
         } catch (QueryException $e) {
@@ -102,9 +116,10 @@ class LiveShoppingController extends Controller
         try {
             $engineSession = $this->engine->createSession(
                 $session->id,
-                $conversation->id,
+                $conversation?->id,
                 $storeIds,
-                $validated['objective'],
+                $objective,
+                $kind,
             );
         } catch (LiveShoppingEngineException $e) {
             // A store the engine does not know is NOT an outage: the row and the
@@ -201,7 +216,9 @@ class LiveShoppingController extends Controller
         }
 
         try {
-            $ticket = $this->engine->viewerTicket($session->engine_session_id, $request->user()->id);
+            // Only the customer-driven session gets an input plane; the agent's
+            // session stays view-only.
+            $ticket = $this->engine->viewerTicket($session->engine_session_id, $request->user()->id, $session->kind === LiveShoppingSession::KIND_MANUAL);
         } catch (LiveShoppingEngineException $e) {
             return response()->json(['success' => false, 'message' => $e->customer()], $e->status);
         }
@@ -384,6 +401,8 @@ class LiveShoppingController extends Controller
             'engine_session_id' => $session->engine_session_id,
             'conversation_id'   => $session->conversation_id,
             'store_id'          => $session->store_id,
+            // Remote store browser: who drives the session (agent | manual).
+            'kind'              => $session->kind ?? LiveShoppingSession::KIND_AGENT,
             'expires_at'        => optional($session->expires_at)->toIso8601String(),
             'created_at'        => optional($session->created_at)->toIso8601String(),
             'updated_at'        => optional($session->updated_at)->toIso8601String(),

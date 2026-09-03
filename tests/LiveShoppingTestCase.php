@@ -37,6 +37,7 @@ abstract class LiveShoppingTestCase extends TestCase
         'database/migrations/2026_09_01_000000_create_live_shopping_sessions_table.php',
         'database/migrations/2026_09_01_005000_create_live_shopping_webhook_receipts_table.php',
         'database/migrations/2026_09_01_010000_add_source_to_search_events_table.php',
+        'database/migrations/2026_09_03_000000_add_kind_to_live_shopping_sessions_table.php',
     ];
 
     protected function setUp(): void

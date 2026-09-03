@@ -37,6 +37,7 @@ class TicketTest extends LiveShoppingTestCase
             'media_available' => true,
             'whep_url'        => 'https://engine.test/whep/1',
             'ice_servers'     => [['urls' => 'stun:stun.test:3478']],
+            'input_url'       => null,
         ], $overrides)], $status)]);
     }
 
@@ -52,7 +53,7 @@ class TicketTest extends LiveShoppingTestCase
         // The envelope is unwrapped by the client and never forwarded.
         $data = $response->json('data');
         $this->assertSame(
-            ['ticket', 'expires_at', 'sse_url', 'media_available', 'whep_url', 'ice_servers'],
+            ['ticket', 'expires_at', 'sse_url', 'media_available', 'whep_url', 'ice_servers', 'input_url'],
             array_keys($data),
         );
         $this->assertTrue($data['media_available']);
@@ -255,6 +256,48 @@ class TicketTest extends LiveShoppingTestCase
     public function test_the_60s_ceiling_holds_just_past_the_boundary(): void
     {
         $this->fakeTicket(['expires_at' => now()->addSeconds(61)->toIso8601String()]);
+        $this->actingAs($this->user)
+            ->postJson("/live-shopping/sessions/{$this->session->id}/ticket")
+            ->assertStatus(503);
+    }
+    /** Remote store browser: only a manual session asks the engine for
+     *  input:write, and only then may a ticket carry input_url. */
+    public function test_a_manual_session_ticket_requests_input_and_forwards_input_url(): void
+    {
+        $this->session->forceFill(['kind' => 'manual'])->save();
+        $this->fakeTicket(['input_url' => 'wss://engine.test/v1/sessions/1/input']);
+
+        $this->actingAs($this->user)
+            ->postJson("/live-shopping/sessions/{$this->session->id}/ticket")
+            ->assertOk()
+            ->assertJsonPath('data.input_url', 'wss://engine.test/v1/sessions/1/input');
+
+        Http::assertSent(fn ($r) => str_contains($r->url(), '/viewer-tickets') && in_array('input:write', $r->data()['scopes'] ?? [], true));
+    }
+
+    public function test_an_agent_session_ticket_never_requests_input_and_refuses_an_input_url(): void
+    {
+        $this->fakeTicket();
+        $this->actingAs($this->user)
+            ->postJson("/live-shopping/sessions/{$this->session->id}/ticket")
+            ->assertOk()->assertJsonPath('data.input_url', null);
+        Http::assertSent(fn ($r) => str_contains($r->url(), '/viewer-tickets') && ! in_array('input:write', $r->data()['scopes'] ?? [], true));
+    }
+
+    /** An engine that hands an agent ticket an input plane is misbehaving. (Own
+     *  method: a second Http::fake() would stack behind the first stub.) */
+    public function test_an_agent_session_ticket_with_an_input_url_is_refused(): void
+    {
+        $this->fakeTicket(['input_url' => 'wss://engine.test/v1/sessions/1/input']);
+        $this->actingAs($this->user)
+            ->postJson("/live-shopping/sessions/{$this->session->id}/ticket")
+            ->assertStatus(503);
+    }
+
+    public function test_a_ticket_without_input_url_or_with_a_non_wss_url_is_refused(): void
+    {
+        $this->session->forceFill(['kind' => 'manual'])->save();
+        $this->fakeTicket(['input_url' => 'https://engine.test/input']);
         $this->actingAs($this->user)
             ->postJson("/live-shopping/sessions/{$this->session->id}/ticket")
             ->assertStatus(503);

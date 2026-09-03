@@ -66,17 +66,20 @@ class LiveShoppingEngine
      * entry is store_id. `store_ids` is sent ONLY when there is more than one,
      * so a single-store create is byte-identical to before.
      */
-    public function createSession(int $localRowId, int $conversationId, string|array $storeId, string $objective): array
+    public function createSession(int $localRowId, ?int $conversationId, string|array $storeId, string $objective, string $kind = 'agent'): array
     {
         $storeIds = is_array($storeId) ? array_values($storeId) : [$storeId];
         $storeId = (string) ($storeIds[0] ?? '');
+        $conversationRef = (string) ($conversationId ?? 0);
         $data = $this->post('/v1/sessions', array_merge([
             'schema_version'  => self::SCHEMA_VERSION,
-            'conversation_id' => (string) $conversationId,
+            // A manual (customer-driven) session has no conversation: the
+            // engine contract still wants a non-empty string, so it carries "0".
+            'conversation_id' => $conversationRef,
             'store_id'        => $storeId,
             'query'           => $objective,
             'callback_id'     => self::CALLBACK_ID,
-        ], count($storeIds) > 1 ? ['store_ids' => $storeIds] : []), ['Idempotency-Key' => 'live-shopping-session-' . $localRowId]);
+        ], count($storeIds) > 1 ? ['store_ids' => $storeIds] : [], $kind === 'manual' ? ['kind' => 'manual'] : []), ['Idempotency-Key' => 'live-shopping-session-' . $localRowId]);
 
         // The envelope is closed too, not just the session inside it. An extra
         // key out here means the same thing it means in there: we are not
@@ -92,6 +95,7 @@ class LiveShoppingEngine
         // contract we think we are.
         $this->assertClosedKeys($session, [
             'id', 'conversation_id', 'store_id', 'status', 'latest_seq', 'created_at', 'expires_at',
+            'kind', // remote store browser: agent | manual (absent from an older engine)
         ], 'session');
 
         $id = $this->boundedId($session['id'] ?? null, 200);
@@ -113,7 +117,7 @@ class LiveShoppingEngine
         // Correlation validated, not assumed: a mismatch means we would attach
         // another session's live stream to this customer's thread, and nothing
         // about status or expiry would ever catch it.
-        if ((string) ($session['conversation_id'] ?? '') !== (string) $conversationId
+        if ((string) ($session['conversation_id'] ?? '') !== $conversationRef
             || (string) ($session['store_id'] ?? '') !== $storeId) {
             throw LiveShoppingEngineException::unavailable('correlation_mismatch');
         }
@@ -148,7 +152,7 @@ class LiveShoppingEngine
      * Mint a viewer ticket. Engine round-trip on EVERY request; nothing is
      * persisted and nothing is invented.
      */
-    public function viewerTicket(string $engineSessionId, int $userId): array
+    public function viewerTicket(string $engineSessionId, int $userId, bool $input = false): array
     {
         // The id came from the engine, but it lands in a URL path: encode it so
         // a hostile or merely odd id cannot alter which endpoint we call.
@@ -157,11 +161,13 @@ class LiveShoppingEngine
         $data = $this->post($path, [
             'schema_version' => self::SCHEMA_VERSION,
             'user_id'        => (string) $userId,
-            'scopes'         => ['events:read', 'media:read'],   // P1 is view-only
+            // input:write only for the customer-driven session (the controller
+            // decides from the row's kind); the agent's session stays view-only.
+            'scopes'         => $input ? ['events:read', 'media:read', 'input:write'] : ['events:read', 'media:read'],
         ]);
 
         $this->assertClosedKeys($data, [
-            'schema_version', 'ticket', 'expires_at', 'sse_url', 'media_available', 'whep_url', 'ice_servers',
+            'schema_version', 'ticket', 'expires_at', 'sse_url', 'media_available', 'whep_url', 'ice_servers', 'input_url',
         ], 'ticket');
 
         $ticket = $this->boundedId($data['ticket'] ?? null, 4096);
@@ -200,6 +206,16 @@ class LiveShoppingEngine
             $iceServers = [];
         }
 
+        // input_url: exactly null, or a public wss URL. Present on every ticket;
+        // non-null only when input:write was requested AND granted.
+        if (! array_key_exists('input_url', $data)) {
+            throw LiveShoppingEngineException::unavailable('bad_input_url');
+        }
+        $inputUrl = $data['input_url'] === null ? null : $this->publicWssUrl($data['input_url']);
+        if ($inputUrl !== null && ! $input) {
+            throw LiveShoppingEngineException::unavailable('bad_input_url');
+        }
+
         return [
             'ticket'          => $ticket,
             'expires_at'      => gmdate('Y-m-d\TH:i:s\Z', $expiresAt),
@@ -207,6 +223,7 @@ class LiveShoppingEngine
             'media_available' => $mediaAvailable,
             'whep_url'        => $whepUrl,
             'ice_servers'     => $iceServers,
+            'input_url'       => $inputUrl,
         ];
     }
 
@@ -227,6 +244,7 @@ class LiveShoppingEngine
             'id', 'conversation_id', 'store_id', 'status', 'latest_seq', 'media_status',
             'terminal_result', 'created_at', 'updated_at', 'expires_at',
             'stores', // L2 (multi-store): optional per-store outcomes; absent from a single-store engine
+            'kind',   // remote store browser: agent | manual (absent from an older engine)
         ], 'status_session');
         $id = $this->boundedId($session['id'] ?? null, 200);
         $status = $session['status'] ?? null;
@@ -477,7 +495,17 @@ class LiveShoppingEngine
                 Log::warning('live-shopping engine catalog entry rejected');
                 throw LiveShoppingEngineException::unavailable('unreadable');
             }
-            $stores[$store['id']] = ['id' => $store['id'], 'name' => trim($store['name'])];
+            $entry = ['id' => $store['id'], 'name' => trim($store['name'])];
+            // Remote store browser: the storefront URL feeds the store cards. Only
+            // an https URL without credentials passes; anything else is dropped,
+            // never an outage.
+            if (is_string($store['url'] ?? null) && strlen($store['url']) <= 2048) {
+                $u = parse_url($store['url']);
+                if (is_array($u) && ($u['scheme'] ?? '') === 'https' && ! empty($u['host']) && ! isset($u['user']) && ! isset($u['pass'])) {
+                    $entry['url'] = $store['url'];
+                }
+            }
+            $stores[$store['id']] = $entry;
         }
         if ($stores === []) {
             throw LiveShoppingEngineException::unavailable('unreadable');
@@ -566,6 +594,23 @@ class LiveShoppingEngine
     }
 
     /** A public https URL with no credentials, query or fragment. */
+    /**
+     * A public wss:// URL for the input socket: same rules as publicHttpsUrl
+     * (no credentials, no fragment, bounded), different scheme.
+     */
+    private function publicWssUrl(mixed $raw): string
+    {
+        if (! is_string($raw) || $raw === '' || strlen($raw) > 2048) {
+            throw LiveShoppingEngineException::unavailable('bad_input_url');
+        }
+        $parts = parse_url($raw);
+        if (! is_array($parts) || ($parts['scheme'] ?? '') !== 'wss' || empty($parts['host'])
+            || isset($parts['user']) || isset($parts['pass']) || isset($parts['fragment'])) {
+            throw LiveShoppingEngineException::unavailable('bad_input_url');
+        }
+        return $raw;
+    }
+
     private function publicHttpsUrl($value): string
     {
         if (! is_string($value) || strlen($value) > 2000) {
