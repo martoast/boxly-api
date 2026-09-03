@@ -190,4 +190,29 @@ class ShowSessionTest extends LiveShoppingTestCase
         $this->actingAs($owner)->getJson("/live-shopping/sessions/{$session->id}")->assertOk();
         $this->assertSame('running', $session->fresh()->status);
     }
+
+    /** L2 (multi-store): a status read carrying per-store outcomes persists them and present() shows them per store. */
+    public function test_a_terminal_status_read_with_store_outcomes_persists_and_presents_them(): void
+    {
+        $owner = User::factory()->createQuietly();
+        $session = $this->makeSession($owner);
+        $session->forceFill(['stores' => [['id' => 'on'], ['id' => 'target']]])->save();
+        Http::fake(['engine.test/*' => Http::response(['ok' => true, 'data' => [
+            'schema_version' => 1, 'session' => [
+                'id' => 'eng_1', 'conversation_id' => (string) $session->conversation_id,
+                'store_id' => 'on', 'status' => 'completed', 'latest_seq' => 6,
+                'media_status' => 'stopped', 'terminal_result' => ['outcome' => 'completed', 'products' => [], 'error_code' => null],
+                'stores' => [['store_id' => 'on', 'outcome' => 'completed', 'error_code' => null], ['store_id' => 'target', 'outcome' => 'failed', 'error_code' => 'store_blocked']],
+                'created_at' => now()->subMinute()->toIso8601String(),
+                'updated_at' => now()->toIso8601String(), 'expires_at' => now()->addMinute()->toIso8601String(),
+            ],
+        ]], 200)]);
+
+        $response = $this->actingAs($owner)->getJson("/live-shopping/sessions/{$session->id}")->assertOk()->assertJsonPath('data.status', 'completed');
+        $this->assertSame([
+            ['id' => 'on', 'status' => 'completed', 'error_code' => null],
+            ['id' => 'target', 'status' => 'failed', 'error_code' => 'store_blocked'],
+        ], $response->json('data.stores'));
+        $this->assertSame('failed', $session->fresh()->stores[1]['outcome']);
+    }
 }

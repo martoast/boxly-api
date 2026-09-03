@@ -309,4 +309,20 @@ class ResultJobTest extends LiveShoppingTestCase
         $this->assertArrayNotHasKey('toolCallId', $part);
         $this->assertArrayNotHasKey('input', $part);
     }
+
+    /** L2 (multi-store): per-store outcomes land on the row's stores json, matched by id, in request order. */
+    public function test_per_store_outcomes_are_persisted_on_the_stores_json(): void
+    {
+        $this->session->forceFill(['stores' => [['id' => 'on'], ['id' => 'target']]])->save();
+        $stores = [['store_id' => 'target', 'outcome' => 'failed', 'error_code' => 'store_blocked'], ['store_id' => 'on', 'outcome' => 'completed', 'error_code' => null]];
+        $receipt = $this->receipt(['result' => ['outcome' => 'completed', 'products' => [], 'error_code' => null, 'stores' => $stores]]);
+
+        (new ProcessLiveShoppingResultJob($receipt->id))->handle();
+
+        $this->assertSame([
+            ['id' => 'on', 'outcome' => 'completed', 'error_code' => null],
+            ['id' => 'target', 'outcome' => 'failed', 'error_code' => 'store_blocked'],
+        ], $this->session->fresh()->stores);
+        $this->assertSame('completed', $this->session->fresh()->status);
+    }
 }

@@ -41,7 +41,7 @@ class StoresTest extends LiveShoppingTestCase
                 ['id' => 'target', 'name' => 'Target'],
                 ['id' => 'walmart', 'name' => 'Walmart'],
                 ['id' => 'acme-outlet', 'name' => 'Acme Outlet'],
-            ]]);
+            ], 'max_stores_per_session' => 1]); // L2: an engine that advertises no cap opens one store per session
 
         // Cached: a second read does not call the engine again.
         Http::fake(['engine.test/v1/catalog' => Http::response(['ok' => false], 500)]);
@@ -105,5 +105,21 @@ class StoresTest extends LiveShoppingTestCase
             ->assertJson(['success' => false, 'code' => 'engine_refused']);
 
         $this->assertSame('engine_unavailable', LiveShoppingSession::first()->error_code);
+    }
+
+    /** L2 (multi-store): the engine's advertised cap passes through; anything outside 1..4 reads as 1. */
+    public function test_stores_route_passes_the_engine_store_cap_through(): void
+    {
+        $user = User::factory()->createQuietly();
+        // One fake with a sequence: a second Http::fake() would stack behind the first stub, not replace it.
+        $stores = [['id' => 'target', 'name' => 'Target', 'url' => 'https://www.target.com/']];
+        Http::fake(['engine.test/v1/catalog' => Http::sequence()
+            ->push(['ok' => true, 'data' => ['schema_version' => 1, 'max_stores_per_session' => 2, 'stores' => $stores]], 200)
+            ->push(['ok' => true, 'data' => ['schema_version' => 1, 'max_stores_per_session' => 9, 'stores' => $stores]], 200)]);
+        $this->actingAs($user)->getJson('/live-shopping/stores')->assertStatus(200)->assertJsonPath('max_stores_per_session', 2);
+
+        \Illuminate\Support\Facades\Cache::flush();
+        // An out-of-range cap (9) is bounded to the one-store default, and the cap is not memoised across requests.
+        $this->actingAs($user)->getJson('/live-shopping/stores')->assertStatus(200)->assertJsonPath('max_stores_per_session', 1);
     }
 }

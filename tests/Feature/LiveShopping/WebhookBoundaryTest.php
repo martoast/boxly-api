@@ -211,7 +211,11 @@ class WebhookBoundaryTest extends LiveShoppingTestCase
         $receipt = LiveShoppingWebhookReceipt::first();
         $this->assertNotNull($receipt);
         $this->assertSame('partial_match', $receipt->payload['assistant_part']['output']['caveat'] ?? null);
-        $this->assertSame(['products', 'caveat'], array_keys($receipt->payload['assistant_part']['output']));
+        // The key SET is the contract; MySQL's JSON column stores object keys in its own order
+        // (shorter first), so insertion order is not something a persisted payload can promise.
+        $keys = array_keys($receipt->payload['assistant_part']['output']);
+        sort($keys);
+        $this->assertSame(['caveat', 'products'], $keys);
     }
 
     public function test_an_unknown_caveat_is_rejected(): void
@@ -225,5 +229,35 @@ class WebhookBoundaryTest extends LiveShoppingTestCase
     {
         $this->deliver($this->body())->assertSuccessful();
         $this->assertSame(['products'], array_keys(LiveShoppingWebhookReceipt::first()->payload['assistant_part']['output']));
+    }
+
+    /** L2 (multi-store): per-store outcomes ride on result and on the part, in the closed shape, and must agree. */
+    public function test_per_store_outcomes_are_accepted_in_the_closed_shape_and_must_agree(): void
+    {
+        $stores = [['store_id' => 'on', 'outcome' => 'completed', 'error_code' => null], ['store_id' => 'target', 'outcome' => 'failed', 'error_code' => 'store_blocked']];
+
+        // Refusals first (assertRejected expects an empty receipt table), the accepted delivery last.
+        $mismatch = $this->body();
+        $mismatch['result']['stores'] = $stores;
+        $this->assertRejected($mismatch, 'stores on the result but not on the part');
+
+        $unknownKey = $this->body();
+        $unknownKey['result']['stores'] = [['store_id' => 'on', 'outcome' => 'completed', 'error_code' => null, 'products' => []]];
+        $unknownKey['assistant_part']['output']['stores'] = $unknownKey['result']['stores'];
+        $this->assertRejected($unknownKey, 'an unknown key inside a store entry');
+
+        $badOutcome = $this->body();
+        $badOutcome['result']['stores'] = [['store_id' => 'on', 'outcome' => 'running', 'error_code' => null]];
+        $badOutcome['assistant_part']['output']['stores'] = $badOutcome['result']['stores'];
+        $this->assertRejected($badOutcome, 'a non-terminal per-store outcome');
+
+        $body = $this->body();
+        $body['result']['stores'] = $stores;
+        $body['assistant_part']['output']['stores'] = $stores;
+        $this->deliver($body)->assertSuccessful();
+        $this->assertSame(1, LiveShoppingWebhookReceipt::count());
+        // Entry key order is MySQL's (JSON columns reorder object keys); the values are the contract.
+        $canonical = fn (array $list) => array_map(function (array $e) { ksort($e); return $e; }, $list);
+        $this->assertSame($canonical($stores), $canonical(LiveShoppingWebhookReceipt::first()->payload['result']['stores']));
     }
 }

@@ -66,10 +66,10 @@ trait SignsDeliveries
             'conversation_id' => $body['conversation_id'],
             'terminal_seq'    => $body['terminal_seq'],
             'occurred_at'     => $body['occurred_at'],
-            'result'          => [
+            'result'          => array_merge([
                 'outcome'    => $body['result']['outcome'],
                 'error_code' => $body['result']['error_code'],
-            ],
+            ], isset($body['result']['stores']) ? ['stores' => $body['result']['stores']] : []),
             'assistant_part'  => $body['assistant_part'],
         ];
     }

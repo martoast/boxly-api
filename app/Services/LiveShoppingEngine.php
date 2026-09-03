@@ -30,6 +30,7 @@ class LiveShoppingEngine
 
     /** Engine catalog cache: brief, success-only, so a restart shows within a minute. */
     public const CATALOG_CACHE_KEY = 'live_shopping_engine.catalog';
+    public const CATALOG_CAP_CACHE_KEY = 'live_shopping_engine.catalog_cap';
     public const CATALOG_CACHE_SECONDS = 60;
     public const STORE_ID_PATTERN = '/^[a-z0-9][a-z0-9_-]{0,39}$/';
 
@@ -60,15 +61,22 @@ class LiveShoppingEngine
      * or transmits a callback URL, so there is no field a caller could influence
      * and no outbound URL for this repo to get wrong.
      */
-    public function createSession(int $localRowId, int $conversationId, string $storeId, string $objective): array
+    /**
+     * L2 (multi-store): $storeIds is the ordered store list (1..N); the first
+     * entry is store_id. `store_ids` is sent ONLY when there is more than one,
+     * so a single-store create is byte-identical to before.
+     */
+    public function createSession(int $localRowId, int $conversationId, string|array $storeId, string $objective): array
     {
-        $data = $this->post('/v1/sessions', [
+        $storeIds = is_array($storeId) ? array_values($storeId) : [$storeId];
+        $storeId = (string) ($storeIds[0] ?? '');
+        $data = $this->post('/v1/sessions', array_merge([
             'schema_version'  => self::SCHEMA_VERSION,
             'conversation_id' => (string) $conversationId,
             'store_id'        => $storeId,
             'query'           => $objective,
             'callback_id'     => self::CALLBACK_ID,
-        ], ['Idempotency-Key' => 'live-shopping-session-' . $localRowId]);
+        ], count($storeIds) > 1 ? ['store_ids' => $storeIds] : []), ['Idempotency-Key' => 'live-shopping-session-' . $localRowId]);
 
         // The envelope is closed too, not just the session inside it. An extra
         // key out here means the same thing it means in there: we are not
@@ -218,6 +226,7 @@ class LiveShoppingEngine
         $this->assertClosedKeys($session, [
             'id', 'conversation_id', 'store_id', 'status', 'latest_seq', 'media_status',
             'terminal_result', 'created_at', 'updated_at', 'expires_at',
+            'stores', // L2 (multi-store): optional per-store outcomes; absent from a single-store engine
         ], 'status_session');
         $id = $this->boundedId($session['id'] ?? null, 200);
         $status = $session['status'] ?? null;
@@ -231,9 +240,13 @@ class LiveShoppingEngine
         }
         $terminal = $session['terminal_result'] ?? null;
         if ($terminal !== null && (! is_array($terminal)
-            || array_diff(array_keys($terminal), ['outcome', 'products', 'error_code']) !== []
+            || array_diff(array_keys($terminal), ['outcome', 'products', 'error_code', 'stores']) !== []
             || ! in_array($terminal['outcome'] ?? null, ['completed', 'failed', 'cancelled'], true))) {
             throw LiveShoppingEngineException::unavailable('bad_terminal_result');
+        }
+        $storeOutcomes = self::storeOutcomes($session['stores'] ?? ($terminal['stores'] ?? null));
+        if ($storeOutcomes === false) {
+            throw LiveShoppingEngineException::unavailable('bad_store_outcomes');
         }
         if (in_array($status, ['completed', 'failed', 'cancelled'], true) && ! is_array($terminal)) {
             throw LiveShoppingEngineException::unavailable('missing_terminal_result');
@@ -263,7 +276,64 @@ class LiveShoppingEngine
             'error_code' => is_array($terminal) && is_string($terminal['error_code'] ?? null)
                 ? $terminal['error_code'] : null,
             'products' => $products,
+            'stores' => $storeOutcomes,
         ];
+    }
+
+    /**
+     * L2 (multi-store): the closed per-store outcome list [{store_id, outcome,
+     * error_code}] — null when absent, false when malformed. Shared by the
+     * status read and the webhook so both projections agree.
+     */
+    public static function storeOutcomes($raw): array|null|false
+    {
+        if ($raw === null) {
+            return null;
+        }
+        if (! is_array($raw) || array_keys($raw) !== array_keys(array_values($raw)) || count($raw) > 4) {
+            return false;
+        }
+        $out = [];
+        $seen = [];
+        foreach ($raw as $entry) {
+            if (! is_array($entry) || array_diff(array_keys($entry), ['store_id', 'outcome', 'error_code']) !== []
+                || ! is_string($entry['store_id'] ?? null) || ! preg_match(self::STORE_ID_PATTERN, $entry['store_id'])
+                || isset($seen[$entry['store_id']])
+                || ! in_array($entry['outcome'] ?? null, ['completed', 'failed', 'cancelled'], true)) {
+                return false;
+            }
+            $code = $entry['error_code'] ?? null;
+            if ($code !== null && (! is_string($code) || strlen($code) > 120 || ! preg_match('/^[a-z0-9_.-]+$/i', $code))) {
+                return false;
+            }
+            $seen[$entry['store_id']] = true;
+            $out[] = ['store_id' => $entry['store_id'], 'outcome' => $entry['outcome'], 'error_code' => $code];
+        }
+
+        return $out;
+    }
+
+    /** L2: the engine's advertised per-session store cap (1 when the engine does not advertise one). */
+    public function maxStoresPerSession(): int
+    {
+        // Cached beside the catalog (same TTL, cleared by the same flush) — never
+        // memoised on the instance, which outlives one request under the test
+        // kernel and would serve a stale cap after the catalog cache was cleared.
+        $cached = Cache::get(self::CATALOG_CAP_CACHE_KEY);
+        if (is_int($cached)) {
+            return $cached;
+        }
+        $cap = self::boundedStoreCap($this->get('/v1/catalog'));
+        Cache::put(self::CATALOG_CAP_CACHE_KEY, $cap, self::CATALOG_CACHE_SECONDS);
+
+        return $cap;
+    }
+
+    private static function boundedStoreCap(array $envelope): int
+    {
+        $cap = $envelope['max_stores_per_session'] ?? null;
+
+        return is_int($cap) && $cap >= 1 && $cap <= 4 ? $cap : 1;
     }
 
     /**
@@ -398,6 +468,7 @@ class LiveShoppingEngine
         }
 
         $data = $this->get('/v1/catalog');
+        Cache::put(self::CATALOG_CAP_CACHE_KEY, self::boundedStoreCap($data), self::CATALOG_CACHE_SECONDS);
         $stores = [];
         foreach ((array) ($data['stores'] ?? []) as $store) {
             if (! is_array($store)
@@ -457,6 +528,7 @@ class LiveShoppingEngine
 
     /** ---- validation helpers ------------------------------------------- */
 
+    /** L2: the raw catalog envelope, memoised per request so the cap and the list come from one read. */
     private function assertClosedKeys(array $value, array $allowed, string $what): void
     {
         $unexpected = array_diff(array_keys($value), $allowed);

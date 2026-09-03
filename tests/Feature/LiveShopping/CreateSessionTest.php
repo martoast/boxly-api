@@ -406,4 +406,67 @@ class CreateSessionTest extends LiveShoppingTestCase
             'conversation_id' => $conversation->id, 'objective' => 'y', 'store_id' => 'on',
         ])->assertStatus(201);
     }
+
+    /** L2 (multi-store): two stores → one row, one engine call carrying store_ids, one slot. */
+    public function test_two_store_ids_create_one_row_and_one_engine_call_with_store_ids(): void
+    {
+        [$user, $conversation] = $this->actor();
+        Http::fake([
+            'engine.test/v1/catalog' => Http::response(['ok' => true, 'data' => [
+                'schema_version' => 1, 'max_stores_per_session' => 2,
+                'stores' => [['id' => 'on', 'name' => 'On', 'url' => 'https://www.on.com/'], ['id' => 'target', 'name' => 'Target', 'url' => 'https://www.target.com/']],
+            ]], 200),
+            'engine.test/v1/sessions' => Http::response(['ok' => true, 'data' => ['schema_version' => 1, 'session' => [
+                'id' => 'eng_1', 'conversation_id' => (string) $conversation->id, 'store_id' => 'on', 'status' => 'running',
+                'latest_seq' => 5, 'created_at' => now()->toIso8601String(), 'expires_at' => now()->addMinutes(10)->toIso8601String(),
+            ]]], 201),
+        ]);
+
+        $response = $this->actingAs($user)->postJson('/live-shopping/sessions', [
+            'conversation_id' => $conversation->id, 'objective' => 'running shoes on sale',
+            'store_id' => 'on', 'store_ids' => ['on', 'target'],
+        ]);
+
+        $response->assertStatus(201)->assertJsonPath('data.store_id', 'on');
+        $this->assertSame([
+            ['id' => 'on', 'status' => 'running', 'error_code' => null],
+            ['id' => 'target', 'status' => 'running', 'error_code' => null],
+        ], $response->json('data.stores'));
+        Http::assertSent(fn ($request) => str_contains($request->url(), '/v1/sessions')
+            && $request['store_id'] === 'on' && $request['store_ids'] === ['on', 'target']);
+        $this->assertSame(1, LiveShoppingSession::count());
+        $this->assertSame([['id' => 'on'], ['id' => 'target']], LiveShoppingSession::first()->stores);
+    }
+
+    /** L2: a single store never sends store_ids (byte-identical engine request). */
+    public function test_a_single_store_request_sends_no_store_ids(): void
+    {
+        [$user, $conversation] = $this->actor();
+        $this->engineOk(['conversation_id' => (string) $conversation->id]);
+        $this->actingAs($user)->postJson('/live-shopping/sessions', [
+            'conversation_id' => $conversation->id, 'objective' => 'x', 'store_id' => 'on',
+        ])->assertStatus(201);
+        Http::assertSent(fn ($request) => str_contains($request->url(), '/v1/sessions') && ! array_key_exists('store_ids', $request->data()));
+    }
+
+    /** L2: the list is bounded by the engine's advertised cap and must start with store_id. */
+    public function test_store_ids_beyond_the_engine_cap_or_not_starting_with_store_id_are_422(): void
+    {
+        [$user, $conversation] = $this->actor();
+        Http::fake(['engine.test/v1/catalog' => Http::response(['ok' => true, 'data' => [
+            'schema_version' => 1, 'stores' => [['id' => 'on', 'name' => 'On', 'url' => 'https://www.on.com/']],
+        ]], 200)]);
+
+        $this->actingAs($user)->postJson('/live-shopping/sessions', [
+            'conversation_id' => $conversation->id, 'objective' => 'x', 'store_id' => 'on', 'store_ids' => ['on', 'target'],
+        ])->assertStatus(422)->assertJsonPath('code', 'too_many_stores');
+        $this->actingAs($user)->postJson('/live-shopping/sessions', [
+            'conversation_id' => $conversation->id, 'objective' => 'x', 'store_id' => 'on', 'store_ids' => ['target', 'on'],
+        ])->assertStatus(422)->assertJsonPath('code', 'invalid_store_ids');
+        $this->actingAs($user)->postJson('/live-shopping/sessions', [
+            'conversation_id' => $conversation->id, 'objective' => 'x', 'store_id' => 'on', 'store_ids' => ['on', 'on'],
+        ])->assertStatus(422)->assertJsonPath('code', 'invalid_store_ids');
+        Http::assertNotSent(fn ($request) => str_contains($request->url(), '/v1/sessions'));
+        $this->assertSame(0, LiveShoppingSession::count());
+    }
 }

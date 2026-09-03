@@ -57,8 +57,10 @@ class PublicContractTest extends LiveShoppingTestCase
 
         $this->assertSame([
             'id', 'status', 'engine_session_id', 'conversation_id',
-            'store_id', 'expires_at', 'created_at', 'updated_at', 'error_code',
+            'store_id', 'expires_at', 'created_at', 'updated_at', 'error_code', 'stores',
         ], array_keys($response->json('data')));
+        // L2 (multi-store): one entry per requested store, sharing the session's status before a terminal.
+        $this->assertSame([['id' => 'on', 'status' => 'running', 'error_code' => null]], $response->json('data.stores'));
 
         // Both ID domains present and distinct.
         $this->assertIsInt($response->json('data.id'));
@@ -84,8 +86,9 @@ class PublicContractTest extends LiveShoppingTestCase
 
         $this->assertSame([
             'id', 'status', 'engine_session_id', 'conversation_id',
-            'store_id', 'expires_at', 'created_at', 'updated_at', 'error_code',
+            'store_id', 'expires_at', 'created_at', 'updated_at', 'error_code', 'stores',
         ], array_keys($response->json('data')));
+        $this->assertSame([], $response->json('data.stores'), 'a row created with an empty stores list presents none');
     }
 
     public function test_the_ticket_envelope_is_exact_and_is_a_post(): void

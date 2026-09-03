@@ -174,8 +174,28 @@ class ProcessLiveShoppingResultJob implements ShouldQueue
                 ]);
             }
 
+            // L2 (multi-store): per-store outcomes land on the row's `stores` json
+            // (one entry per requested store, matched by id; unknown ids ignored).
+            $storeOutcomes = $payload['result']['stores'] ?? null;
+            $stores = (array) $session->stores;
+            if (is_array($storeOutcomes)) {
+                $byId = [];
+                foreach ($storeOutcomes as $entry) {
+                    if (is_array($entry) && is_string($entry['store_id'] ?? null)) {
+                        $byId[$entry['store_id']] = ['outcome' => $entry['outcome'] ?? null, 'error_code' => $entry['error_code'] ?? null];
+                    }
+                }
+                foreach ($stores as $i => $entry) {
+                    $id = is_array($entry) ? ($entry['id'] ?? null) : null;
+                    if (is_string($id) && isset($byId[$id])) {
+                        $stores[$i] = ['id' => $id] + $byId[$id];
+                    }
+                }
+            }
+
             $session->forceFill([
                 'status'               => $outcome,
+                'stores'               => $stores,
                 'error_code'           => $payload['result']['error_code'] ?? null,
                 'terminal_delivery_id' => $receipt->delivery_id,
                 'terminal_seq'         => $seq,

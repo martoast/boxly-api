@@ -45,7 +45,25 @@ class LiveShoppingController extends Controller
             // Shape only. No retailer allowlist: the engine owns which stores
             // exist, and a list here would need editing every time it learns one.
             'store_id'        => ['required', 'string', 'regex:/^[a-z0-9][a-z0-9_-]{0,39}$/'],
+            // L2 (multi-store): an optional ordered list whose first entry is
+            // store_id; distinct slugs; bounded by the engine's advertised cap.
+            'store_ids'       => ['sometimes', 'array', 'min:1', 'max:4'],
+            'store_ids.*'     => ['string', 'regex:/^[a-z0-9][a-z0-9_-]{0,39}$/'],
         ]);
+        $storeIds = array_values($validated['store_ids'] ?? [$validated['store_id']]);
+        if ($storeIds[0] !== $validated['store_id'] || count(array_unique($storeIds)) !== count($storeIds)) {
+            return response()->json(['success' => false, 'code' => 'invalid_store_ids', 'message' => 'store_ids must be distinct and start with store_id.'], 422);
+        }
+        if (count($storeIds) > 1) {
+            try {
+                $cap = $this->engine->maxStoresPerSession();
+            } catch (LiveShoppingEngineException $e) {
+                return response()->json(['success' => false, 'code' => $this->publicCode($e), 'message' => $e->customer()], $e->status);
+            }
+            if (count($storeIds) > $cap) {
+                return response()->json(['success' => false, 'code' => 'too_many_stores', 'message' => 'This engine opens at most ' . $cap . ' store(s) per live session.'], 422);
+            }
+        }
 
         $conversation = Conversation::find($validated['conversation_id']);
         if (! $conversation || $conversation->user_id !== $request->user()->id) {
@@ -62,8 +80,8 @@ class LiveShoppingController extends Controller
                 'user_id'         => $request->user()->id,
                 'conversation_id' => $conversation->id,
                 'status'          => LiveShoppingSession::STATUS_PENDING,
-                'store_id'        => $validated['store_id'],
-                'stores'          => [['id' => $validated['store_id']]],
+                'store_id'        => $storeIds[0],
+                'stores'          => array_map(fn ($id) => ['id' => $id], $storeIds),
                 'objective'       => $validated['objective'],
                 'active_slot'     => 1,
             ]);
@@ -85,7 +103,7 @@ class LiveShoppingController extends Controller
             $engineSession = $this->engine->createSession(
                 $session->id,
                 $conversation->id,
-                $validated['store_id'],
+                $storeIds,
                 $validated['objective'],
             );
         } catch (LiveShoppingEngineException $e) {
@@ -215,7 +233,7 @@ class LiveShoppingController extends Controller
         }
 
         try {
-            return response()->json(['success' => true, 'stores' => $this->engine->catalog()]);
+            return response()->json(['success' => true, 'stores' => $this->engine->catalog(), 'max_stores_per_session' => $this->engine->maxStoresPerSession()]);
         } catch (LiveShoppingEngineException $e) {
             return response()->json(['success' => false, 'code' => $this->publicCode($e), 'message' => $e->customer()], $e->status);
         }
@@ -296,13 +314,17 @@ class LiveShoppingController extends Controller
             'conversation_id' => (string) $session->conversation_id,
             'terminal_seq' => $remote['latest_seq'],
             'occurred_at' => now()->toIso8601String(),
-            'result' => ['outcome' => $remote['status'], 'products' => $products, 'error_code' => $remote['error_code']],
+            'result' => array_merge(
+                ['outcome' => $remote['status'], 'products' => $products, 'error_code' => $remote['error_code']],
+                $remote['stores'] !== null ? ['stores' => $remote['stores']] : []
+            ),
             // The EXACT part shape the webhook projector persists: the caveat
             // rides on the part when the engine's terminal carries it, so the
             // persisted gallery says so whichever projector wins the race.
             'assistant_part' => ['type' => 'tool-live_results', 'state' => 'output-available', 'output' => array_merge(
                 ['products' => $products],
-                $remote['error_code'] === self::COMPLETED_CAVEAT ? ['caveat' => self::COMPLETED_CAVEAT] : []
+                $remote['error_code'] === self::COMPLETED_CAVEAT ? ['caveat' => self::COMPLETED_CAVEAT] : [],
+                $remote['stores'] !== null ? ['stores' => $remote['stores']] : []
             )],
         ];
         $receipt = LiveShoppingWebhookReceipt::firstOrCreate(
@@ -366,7 +388,38 @@ class LiveShoppingController extends Controller
             'created_at'        => optional($session->created_at)->toIso8601String(),
             'updated_at'        => optional($session->updated_at)->toIso8601String(),
             'error_code'        => $this->publicErrorCode($session),
+            // L2 (multi-store): one entry per requested store, in request order.
+            'stores'            => $this->presentStores($session),
         ];
+    }
+
+    /**
+     * L2: per-store view of the session. Before a terminal every store shares
+     * the session's status; after it each entry carries the outcome the engine
+     * reported for that store (persisted on the row's `stores` json by the
+     * result job / the status reconcile), sanitized like the session code.
+     */
+    private function presentStores(LiveShoppingSession $session): array
+    {
+        $out = [];
+        foreach ((array) $session->stores as $entry) {
+            $id = is_array($entry) ? ($entry['id'] ?? null) : null;
+            if (! is_string($id) || ! preg_match('/^[a-z0-9][a-z0-9_-]{0,39}$/', $id)) {
+                continue;
+            }
+            $outcome = is_array($entry) && is_string($entry['outcome'] ?? null) ? $entry['outcome'] : null;
+            $status = $outcome ?? $session->status;
+            $code = null;
+            if ($status === LiveShoppingSession::STATUS_COMPLETED) {
+                $code = ($entry['error_code'] ?? null) === self::COMPLETED_CAVEAT ? self::COMPLETED_CAVEAT : null;
+            } elseif ($status === LiveShoppingSession::STATUS_FAILED) {
+                $raw = (string) ($entry['error_code'] ?? ($outcome === null ? $session->error_code : ''));
+                $code = preg_match('/^[a-z0-9_]{1,40}$/', $raw) === 1 ? $raw : 'failed';
+            }
+            $out[] = ['id' => $id, 'status' => $status, 'error_code' => $code];
+        }
+
+        return $out;
     }
 
     /**

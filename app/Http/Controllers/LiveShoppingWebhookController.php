@@ -227,7 +227,13 @@ class LiveShoppingWebhookController extends Controller
         }
 
         $result = $body['result'] ?? null;
-        if (! is_array($result) || array_diff(array_keys($result), ['outcome', 'products', 'error_code']) !== []) {
+        if (! is_array($result) || array_diff(array_keys($result), ['outcome', 'products', 'error_code', 'stores']) !== []) {
+            return null;
+        }
+        // L2 (multi-store): optional per-store outcomes, closed shape, and the
+        // part's copy must agree with the result's exactly.
+        $stores = LiveShoppingEngine::storeOutcomes($result['stores'] ?? null);
+        if ($stores === false) {
             return null;
         }
         if (! in_array($result['outcome'] ?? null, ['completed', 'failed', 'cancelled'], true)) {
@@ -247,8 +253,12 @@ class LiveShoppingWebhookController extends Controller
         if (($part['type'] ?? null) !== 'tool-live_results'
             || ($part['state'] ?? null) !== 'output-available'
             || ! is_array($part['output'] ?? null)
-            || array_diff(array_keys($part['output']), ['products', 'caveat']) !== []) {
+            || array_diff(array_keys($part['output']), ['products', 'caveat', 'stores']) !== []) {
             return null;
+        }
+        if (array_key_exists('stores', $part['output']) !== array_key_exists('stores', $result)
+            || (array_key_exists('stores', $result) && json_encode($part['output']['stores']) !== json_encode($result['stores']))) {
+            return null;   // divergent per-store projections — persist neither
         }
         // Optional caveat: a CLOSED vocabulary the UI renders as a visible
         // "misses a requested constraint" label. Anything else is not ours.
@@ -283,14 +293,14 @@ class LiveShoppingWebhookController extends Controller
             'conversation_id' => $ids['conversation_id'],
             'terminal_seq'    => $seq,
             'occurred_at'     => $occurredAt,
-            'result'          => ['outcome' => $result['outcome'], 'error_code' => $errorCode],
+            'result'          => array_merge(['outcome' => $result['outcome'], 'error_code' => $errorCode], $stores === null ? [] : ['stores' => $stores]),
             // The EXACT frozen part shape. No toolCallId, no input: those were
             // never in the contract, and inventing fields here would mean the
             // persisted part is not the one that was agreed and verified.
             'assistant_part'  => [
                 'type'   => 'tool-live_results',
                 'state'  => 'output-available',
-                'output' => array_merge(['products' => $products], $caveat === null ? [] : ['caveat' => $caveat]),
+                'output' => array_merge(['products' => $products], $caveat === null ? [] : ['caveat' => $caveat], $stores === null ? [] : ['stores' => $stores]),
             ],
         ];
     }
