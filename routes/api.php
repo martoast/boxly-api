@@ -164,6 +164,12 @@ Route::middleware(['web'])->group(function () {
 | Authenticated Customer Routes
 |--------------------------------------------------------------------------
 */
+// Live Shopping terminal delivery from the engine. Authenticated by HMAC over
+// the request, NOT Sanctum — see LiveShoppingWebhookController. 404 when the
+// feature is off, so nothing half-registers.
+Route::post('/live-shopping/webhook', [\App\Http\Controllers\LiveShoppingWebhookController::class, 'handle'])
+    ->middleware('throttle:120,1');
+
 Route::middleware('auth:sanctum')->group(function () {
     // Self-issued Sanctum token for the Chrome extension. Any authenticated
     // user (admin, shopping, or customer) can mint one for themselves —
@@ -729,6 +735,29 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/{campaign}/preview-recipients', [AdminCampaignController::class, 'previewRecipients']);
         });
     });
+
+    // Live Shopping — control plane for a conversation-attached remote
+    // shopping session (P1: one store, view-only). Laravel never proxies,
+    // terminates or sees video. Ships dark: honest 503 until configured.
+    Route::prefix('live-shopping')->group(function () {
+        // Throttled explicitly: create is an engine round-trip that claims the
+        // customer's one active slot, and ticket mints a short-lived media
+        // credential. Neither should be spammable.
+        Route::post('/sessions', [\App\Http\Controllers\LiveShoppingController::class, 'store'])
+            ->middleware('throttle:10,1');
+        // The engine's store catalog: read-only, cached briefly server-side, and
+        // the only list the assistant may route a live session to.
+        Route::get('/stores', [\App\Http\Controllers\LiveShoppingController::class, 'stores'])
+            ->middleware('throttle:60,1');
+        Route::get('/sessions/{session}', [\App\Http\Controllers\LiveShoppingController::class, 'show'])
+            ->middleware('throttle:60,1');
+        // POST, not GET: minting a ticket is state-changing and issues a
+        // credential, so it must never be cached, prefetched or replayed from a
+        // link.
+        Route::post('/sessions/{session}/ticket', [\App\Http\Controllers\LiveShoppingController::class, 'ticket'])
+            ->middleware('throttle:30,1');
+    });
+
 });
 
 Route::fallback(function () {

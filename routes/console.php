@@ -37,3 +37,11 @@ Artisan::command('inspire', function () {
 //     ->hourly()
 //     ->withoutOverlapping()
 //     ->runInBackground();
+
+/*
+ * Live Shopping upkeep. Both are no-ops when the feature is disabled.
+ * reconcile — releases the one-active-session slot for sessions past the engine's deadline.
+ * drain — dispatches processing for durable inbox receipts whose job never ran.
+ */
+Schedule::command('boxly:live-shopping-reconcile')->everyMinute()->withoutOverlapping();
+Schedule::command('boxly:live-shopping-drain')->everyMinute()->withoutOverlapping();
