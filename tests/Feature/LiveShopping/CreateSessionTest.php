@@ -185,7 +185,32 @@ class CreateSessionTest extends LiveShoppingTestCase
         ])->assertStatus(503);
     }
 
-    /** status must be exactly `running`: `pending` is not durable acceptance. */
+    /** rev 32b: `starting` is durable acceptance too (the engine answered at journal acceptance). */
+    public function test_a_starting_engine_answer_is_accepted_and_the_row_stays_pending_with_the_engine_fields(): void
+    {
+        [$user, $conversation] = $this->actor();
+        $this->engineOk(['conversation_id' => (string) $conversation->id, 'status' => 'starting', 'latest_seq' => 2]);
+
+        $response = $this->actingAs($user)->postJson('/live-shopping/sessions', [
+            'conversation_id' => $conversation->id,
+            'objective'       => 'check stock of the cloudmonster',
+            'store_id'        => 'on',
+        ]);
+
+        $response->assertStatus(201)
+            ->assertJsonPath('data.engine_session_id', 'eng_1')
+            ->assertJsonPath('data.status', 'pending')
+            ->assertJsonPath('data.error_code', null);
+
+        $session = LiveShoppingSession::first();
+        $this->assertSame('pending', $session->status);
+        $this->assertSame('eng_1', $session->engine_session_id);
+        $this->assertSame(2, $session->latest_seq);
+        $this->assertNotNull($session->expires_at, 'the deadline is persisted so the reaper treats the row as live');
+        $this->assertSame(1, (int) $session->active_slot);
+    }
+
+    /** status must be `running` or `starting`: `pending` is not durable acceptance. */
     public function test_a_non_running_status_is_a_failed_create(): void
     {
         [$user, $conversation] = $this->actor();

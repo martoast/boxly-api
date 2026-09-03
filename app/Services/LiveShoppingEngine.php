@@ -93,7 +93,12 @@ class LiveShoppingEngine
 
         // "running" and nothing else. An engine that answers `pending` has not
         // durably accepted, and treating that as live is the lie this guards.
-        if (($session['status'] ?? null) !== 'running') {
+        // rev 32b: durable acceptance is `running` (the engine waited for its
+        // worker) or `starting` (the engine answered at journal acceptance and
+        // readiness follows by event). `pending` and anything else is not an
+        // accepted session and stays a failed create.
+        $status = $session['status'] ?? null;
+        if (! in_array($status, ['running', 'starting'], true)) {
             throw LiveShoppingEngineException::unavailable('not_accepted');
         }
 
@@ -125,7 +130,7 @@ class LiveShoppingEngine
             'id'              => $id,
             'conversation_id' => (string) $session['conversation_id'],
             'store_id'        => (string) $session['store_id'],
-            'status'          => 'running',
+            'status'          => $status,
             'latest_seq'      => $latestSeq,
             'expires_at'      => gmdate('Y-m-d\TH:i:s\Z', $expiresAt),
         ];

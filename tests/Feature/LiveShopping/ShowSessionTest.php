@@ -144,6 +144,31 @@ class ShowSessionTest extends LiveShoppingTestCase
         $this->assertCount(1, $part['output']['products']);
     }
 
+    /** rev 32b: a pending row (accepted with `starting`) becomes running on a status read that sees running; nothing else changes. */
+    public function test_a_pending_row_becomes_running_on_a_status_read_without_persisting_anything_else(): void
+    {
+        $owner = User::factory()->createQuietly();
+        $session = $this->makeSession($owner);
+        $session->forceFill(['status' => LiveShoppingSession::STATUS_PENDING, 'latest_seq' => 2])->save();
+        Http::fake(['engine.test/*' => Http::response(['ok' => true, 'data' => [
+            'schema_version' => 1, 'session' => [
+                'id' => 'eng_1', 'conversation_id' => (string) $session->conversation_id,
+                'store_id' => 'on', 'status' => 'running', 'latest_seq' => 3,
+                'media_status' => 'pending', 'terminal_result' => null,
+                'created_at' => now()->subMinute()->toIso8601String(),
+                'updated_at' => now()->toIso8601String(), 'expires_at' => now()->addMinute()->toIso8601String(),
+            ],
+        ]], 200)]);
+
+        $this->actingAs($owner)->getJson("/live-shopping/sessions/{$session->id}")
+            ->assertOk()->assertJsonPath('data.status', 'running')->assertJsonPath('data.error_code', null);
+        $fresh = $session->fresh();
+        $this->assertSame('running', $fresh->status);
+        $this->assertSame(2, $fresh->latest_seq, 'the sequence is not advanced by a non-terminal read');
+        $this->assertSame(1, (int) $fresh->active_slot, 'the slot stays held');
+        $this->assertSame(0, \App\Models\ConversationMessage::query()->count(), 'no part is projected before a terminal');
+    }
+
     public function test_engine_status_mismatch_or_unavailable_leaves_local_row_unchanged(): void
     {
         $owner = User::factory()->createQuietly();

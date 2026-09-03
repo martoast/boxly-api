@@ -111,7 +111,13 @@ class LiveShoppingController extends Controller
             ->whereNull('expires_at')
             ->update([
                 'engine_session_id' => $engineSession['id'],
-                'status'            => LiveShoppingSession::STATUS_RUNNING,
+                // rev 32b: `running` only when the engine confirmed its worker; a
+                // `starting` answer keeps the row pending (with the engine id and
+                // deadline, so the ticket route and the reaper treat it as live)
+                // until a status read sees running or a terminal arrives.
+                'status'            => $engineSession['status'] === 'running'
+                    ? LiveShoppingSession::STATUS_RUNNING
+                    : LiveShoppingSession::STATUS_PENDING,
                 // Parsed, NOT passed through as the engine's RFC3339 string.
                 // This is a query-builder update, so Eloquent's `datetime` cast
                 // never runs — the raw value goes to the driver. SQLite stores
@@ -265,8 +271,20 @@ class LiveShoppingController extends Controller
 
         if ($remote['id'] !== $session->engine_session_id
             || $remote['conversation_id'] !== (string) $session->conversation_id
-            || $remote['store_id'] !== $session->store_id
-            || ! in_array($remote['status'], LiveShoppingSession::TERMINAL_STATUSES, true)
+            || $remote['store_id'] !== $session->store_id) {
+            return;
+        }
+        // rev 32b: a pending row whose engine session is now running becomes
+        // running here (status only; nothing else about the row changes).
+        if ($remote['status'] === 'running' && $session->status === LiveShoppingSession::STATUS_PENDING) {
+            LiveShoppingSession::where('id', $session->id)
+                ->where('status', LiveShoppingSession::STATUS_PENDING)
+                ->update(['status' => LiveShoppingSession::STATUS_RUNNING, 'updated_at' => now()]);
+            $session->refresh();
+
+            return;
+        }
+        if (! in_array($remote['status'], LiveShoppingSession::TERMINAL_STATUSES, true)
             || $session->latest_seq !== null && $remote['latest_seq'] <= $session->latest_seq) {
             return;
         }
