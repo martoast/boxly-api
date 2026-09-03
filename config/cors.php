@@ -56,6 +56,7 @@ return [
         // calls directly (ticket mint, status). The create runs server-to-server
         // from Nuxt and the webhook is engine-to-Laravel — neither is a browser
         // surface, so neither belongs here.
+        'live-shopping/sessions', // remote store browser: the page creates its manual session from the browser
         'live-shopping/sessions/*',
         'live-shopping/stores', // remote store browser: the cards are fetched by the browser
         'store/*',
