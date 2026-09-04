@@ -177,4 +177,8 @@ return [
         // callback_id is NOT configurable: it is the frozen literal
         // LiveShoppingEngine::CALLBACK_ID.
     ],
+
+    'catalog' => [
+        'url' => env('CATALOG_API_URL', 'https://catalog.fullstacklabs.org'),
+    ],
 ];

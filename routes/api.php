@@ -766,3 +766,6 @@ Route::fallback(function () {
         'message' => 'Endpoint not found'
     ], 404);
 });
+
+// AI-search product source — proxies the standalone catalog API on the fullstack domain.
+Route::get('/catalog/search', [\App\Http\Controllers\CatalogController::class, 'search'])->middleware('throttle:240,1');
