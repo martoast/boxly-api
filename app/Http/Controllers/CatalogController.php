@@ -17,11 +17,19 @@ class CatalogController extends Controller
         if ($base === '') {
             return response()->json(['query' => '', 'count' => 0, 'products' => [], 'error' => 'catalog_not_configured'], 200);
         }
+        // Forward the full structured-filter set the AI drives the catalog with.
+        // The catalog does the fuzzy store resolution, forgiving match and sorting;
+        // here we just pass every filter through (dropping empties).
         $params = array_filter([
             'q' => $request->query('q') ?: $request->query('query'),
             'store' => $request->query('store'),
+            'brands' => $request->query('brands'),                                 // comma-separated
+            'category' => $request->query('category'),
             'sale' => $request->boolean('sale') ? '1' : null,
+            'min' => $request->query('min') ?: $request->query('min_price'),
             'max' => $request->query('max') ?: $request->query('max_price'),
+            'min_discount' => $request->query('min_discount'),
+            'sort' => $request->query('sort'),
             'limit' => $request->query('limit', 16),
         ], fn ($v) => $v !== null && $v !== '');
 
@@ -37,6 +45,10 @@ class CatalogController extends Controller
         return response()->json([
             'query' => $data['query'] ?? ($params['q'] ?? ''),
             'count' => $data['count'] ?? count($data['products'] ?? []),
+            // broadened = the query terms didn't all match (closest, not exact); the
+            // AI reads this to phrase honestly. resolved = how store/brand inputs mapped.
+            'broadened' => $data['broadened'] ?? false,
+            'resolved' => $data['resolved'] ?? null,
             'products' => $data['products'] ?? [],
         ]);
     }
