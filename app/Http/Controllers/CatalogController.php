@@ -45,9 +45,7 @@ class CatalogController extends Controller
         return response()->json([
             'query' => $data['query'] ?? ($params['q'] ?? ''),
             'count' => $data['count'] ?? count($data['products'] ?? []),
-            // broadened = the query terms didn't all match (closest, not exact); the
-            // AI reads this to phrase honestly. resolved = how store/brand inputs mapped.
-            'broadened' => $data['broadened'] ?? false,
+            // resolved = how store/brand inputs mapped (e.g. a typo'd store name).
             'resolved' => $data['resolved'] ?? null,
             'products' => $data['products'] ?? [],
         ]);
