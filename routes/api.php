@@ -769,3 +769,6 @@ Route::fallback(function () {
 
 // AI-search product source — proxies the standalone catalog API on the fullstack domain.
 Route::get('/catalog/search', [\App\Http\Controllers\CatalogController::class, 'search'])->middleware('throttle:240,1');
+// Live-grab fallback: fetch a specific product the catalog doesn't have with the
+// computer-use agent. Heavy + serialized upstream (~7-9s), so throttled tighter.
+Route::post('/catalog/live-grab', [\App\Http\Controllers\CatalogController::class, 'liveGrab'])->middleware('throttle:30,1');

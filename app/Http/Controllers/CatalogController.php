@@ -50,4 +50,35 @@ class CatalogController extends Controller
             'products' => $data['products'] ?? [],
         ]);
     }
+
+    // Live-grab: fetch a specific product the catalog doesn't have with the computer-use
+    // agent (pasted link OR store+query). Heavy (~7-9s, spawns a headless browser) and
+    // serialized upstream, so we allow a long timeout and fail soft — the assistant treats
+    // an empty/errored result as "couldn't get it live" and offers another path.
+    public function liveGrab(Request $request)
+    {
+        $base = rtrim((string) config('services.catalog.url'), '/');
+        if ($base === '') {
+            return response()->json(['products' => [], 'error' => 'catalog_not_configured'], 200);
+        }
+        $body = array_filter([
+            'url' => $request->input('url'),
+            'store' => $request->input('store'),
+            'query' => $request->input('query'),
+        ], fn ($v) => $v !== null && $v !== '');
+        if (! isset($body['url']) && ! (isset($body['store']) && isset($body['query']))) {
+            return response()->json(['products' => [], 'error' => 'need url or store+query'], 200);
+        }
+        try {
+            // 55s: the grab itself is capped at 45s upstream; allow headroom over that.
+            $res = Http::timeout(55)->acceptJson()->post("{$base}/catalog/live-grab", $body);
+        } catch (\Throwable $e) {
+            return response()->json(['products' => [], 'error' => 'catalog_unreachable'], 200);
+        }
+        if (! $res->ok()) {
+            return response()->json(['products' => [], 'error' => 'catalog_error'], 200);
+        }
+        // Pass the upstream result through as-is (product|products|error|blocked|note…).
+        return response()->json($res->json());
+    }
 }
