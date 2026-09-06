@@ -51,6 +51,29 @@ class CatalogController extends Controller
         ]);
     }
 
+    // Curate: the dynamic "showing" over the catalog's understanding layer. The AI POSTs
+    // a structured intent (facets + a per-conversation seed + a seen list); the catalog
+    // returns a personalized, VARIED, suspect-free selection led by the best deals. Fast
+    // (a local SQL read) and never cached upstream so the rotation stays fresh.
+    public function curate(Request $request)
+    {
+        $base = rtrim((string) config('services.catalog.url'), '/');
+        if ($base === '') {
+            return response()->json(['count' => 0, 'products' => [], 'error' => 'catalog_not_configured'], 200);
+        }
+        // Pass the structured intent straight through (the catalog validates/defaults it).
+        $body = $request->all();
+        try {
+            $res = Http::timeout(12)->acceptJson()->post("{$base}/catalog/curate", $body);
+        } catch (\Throwable $e) {
+            return response()->json(['count' => 0, 'products' => [], 'error' => 'catalog_unreachable'], 200);
+        }
+        if (! $res->ok()) {
+            return response()->json(['count' => 0, 'products' => [], 'error' => 'catalog_error'], 200);
+        }
+        return response()->json($res->json());
+    }
+
     // Live-grab: fetch a specific product the catalog doesn't have with the computer-use
     // agent (pasted link OR store+query). Heavy (~7-9s, spawns a headless browser) and
     // serialized upstream, so we allow a long timeout and fail soft — the assistant treats
