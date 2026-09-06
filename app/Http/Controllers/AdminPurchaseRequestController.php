@@ -247,7 +247,7 @@ class AdminPurchaseRequestController extends Controller
 
         $validated = $request->validate([
             'product_name'      => 'required|string|max:255',
-            'product_url'       => 'required|string|max:2000',
+            'product_url'       => 'nullable|string|max:2000',
             'product_image_url' => 'nullable|string|max:2000',
             'price'             => 'required|numeric|min:0',
             'quantity'          => 'required|integer|min:1',
@@ -261,7 +261,7 @@ class AdminPurchaseRequestController extends Controller
         $item = PurchaseRequestItem::create([
             'purchase_request_id' => $purchaseRequest->id,
             'product_name'        => $validated['product_name'],
-            'product_url'         => $validated['product_url'],
+            'product_url'         => $validated['product_url'] ?? '',
             'product_image_url'   => $validated['product_image_url'] ?? null,
             'price'               => $validated['price'],
             'quantity'            => $validated['quantity'],
@@ -310,7 +310,7 @@ class AdminPurchaseRequestController extends Controller
             'currency' => 'nullable|in:usd,mxn',
             'items' => 'required|array|min:1',
             'items.*.product_name' => 'required|string|max:255',
-            'items.*.product_url' => 'required|string|max:2000',
+            'items.*.product_url' => 'nullable|string|max:2000',
             'items.*.price' => 'required|numeric|min:0',
             'items.*.quantity' => 'required|integer|min:1',
             'items.*.options' => 'nullable',
@@ -353,7 +353,7 @@ class AdminPurchaseRequestController extends Controller
                 $item = PurchaseRequestItem::create([
                     'purchase_request_id' => $pr->id,
                     'product_name' => $itemData['product_name'],
-                    'product_url' => $itemData['product_url'],
+                    'product_url' => $itemData['product_url'] ?? '',
                     'price' => $itemData['price'],
                     'quantity' => $itemData['quantity'],
                     'options' => $options,

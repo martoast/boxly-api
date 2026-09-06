@@ -17,6 +17,7 @@ class AdminPurchasedProductController extends Controller
                 $q->where('customer_name', 'like', "%{$search}%")
                     ->orWhere('contact_phone', 'like', "%{$search}%")
                     ->orWhere('order_number', 'like', "%{$search}%")
+                    ->orWhere('tracking_number', 'like', "%{$search}%")
                     ->orWhere('items', 'like', "%{$search}%");
             });
         }
@@ -44,12 +45,13 @@ class AdminPurchasedProductController extends Controller
     public function store(Request $request)
     {
         $validated = $request->validate([
-            'customer_name' => 'required|string|max:255',
-            'contact_phone' => 'nullable|string|max:50',
-            'items'         => 'nullable|string',
-            'order_number'  => 'nullable|string|max:255',
-            'status'        => 'nullable|in:pending,delivered',
-            'order_date'    => 'nullable|date',
+            'customer_name'   => 'required|string|max:255',
+            'contact_phone'   => 'nullable|string|max:50',
+            'items'           => 'nullable|string',
+            'order_number'    => 'nullable|string|max:255',
+            'tracking_number' => 'nullable|string|max:255',
+            'status'          => 'nullable|in:pending,delivered',
+            'order_date'      => 'nullable|date',
         ]);
 
         $validated['user_id'] = $request->user()->id;
@@ -61,12 +63,13 @@ class AdminPurchasedProductController extends Controller
     public function update(Request $request, PurchasedProduct $purchasedProduct)
     {
         $validated = $request->validate([
-            'customer_name' => 'sometimes|string|max:255',
-            'contact_phone' => 'nullable|string|max:50',
-            'items'         => 'nullable|string',
-            'order_number'  => 'nullable|string|max:255',
-            'status'        => 'nullable|in:pending,delivered',
-            'order_date'    => 'nullable|date',
+            'customer_name'   => 'sometimes|string|max:255',
+            'contact_phone'   => 'nullable|string|max:50',
+            'items'           => 'nullable|string',
+            'order_number'    => 'nullable|string|max:255',
+            'tracking_number' => 'nullable|string|max:255',
+            'status'          => 'nullable|in:pending,delivered',
+            'order_date'      => 'nullable|date',
         ]);
 
         $purchasedProduct->update($validated);

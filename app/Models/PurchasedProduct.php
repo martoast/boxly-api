@@ -20,6 +20,7 @@ class PurchasedProduct extends Model
         'contact_phone',
         'items',
         'order_number',
+        'tracking_number',
         'status',
         'order_date',
     ];
