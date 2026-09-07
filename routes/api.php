@@ -774,6 +774,8 @@ Route::fallback(function () {
 Route::get('/catalog/search', [\App\Http\Controllers\CatalogController::class, 'search'])->middleware('throttle:240,1');
 // Curate: dynamic personalized/varied "showing" over the catalog's understanding layer.
 Route::post('/catalog/curate', [\App\Http\Controllers\CatalogController::class, 'curate'])->middleware('throttle:240,1');
+// Collection: one curated editorial set (deal-driven or store-spotlight) by id.
+Route::post('/catalog/collection', [\App\Http\Controllers\CatalogController::class, 'collection'])->middleware('throttle:240,1');
 // Live-grab fallback: fetch a specific product the catalog doesn't have with the
 // computer-use agent. Heavy + serialized upstream (~7-9s), so throttled tighter.
 Route::post('/catalog/live-grab', [\App\Http\Controllers\CatalogController::class, 'liveGrab'])->middleware('throttle:30,1');

@@ -74,6 +74,27 @@ class CatalogController extends Controller
         return response()->json($res->json());
     }
 
+    // Collection: one curated editorial set (deal-driven or store-spotlight) by id. The AI
+    // picks a collection from the conversation and POSTs its id + a per-conversation seed +
+    // a seen list; the catalog returns that set's products, curated live. Fails soft.
+    public function collection(Request $request)
+    {
+        $base = rtrim((string) config('services.catalog.url'), '/');
+        if ($base === '') {
+            return response()->json(['count' => 0, 'products' => [], 'error' => 'catalog_not_configured'], 200);
+        }
+        $body = $request->all();
+        try {
+            $res = Http::timeout(12)->acceptJson()->post("{$base}/catalog/collection", $body);
+        } catch (\Throwable $e) {
+            return response()->json(['count' => 0, 'products' => [], 'error' => 'catalog_unreachable'], 200);
+        }
+        if (! $res->ok()) {
+            return response()->json(['count' => 0, 'products' => [], 'error' => 'catalog_error'], 200);
+        }
+        return response()->json($res->json());
+    }
+
     // Live-grab: fetch a specific product the catalog doesn't have with the computer-use
     // agent (pasted link OR store+query). Heavy (~7-9s, spawns a headless browser) and
     // serialized upstream, so we allow a long timeout and fail soft — the assistant treats
