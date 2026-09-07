@@ -779,3 +779,6 @@ Route::post('/catalog/collection', [\App\Http\Controllers\CatalogController::cla
 // Live-grab fallback: fetch a specific product the catalog doesn't have with the
 // computer-use agent. Heavy + serialized upstream (~7-9s), so throttled tighter.
 Route::post('/catalog/live-grab', [\App\Http\Controllers\CatalogController::class, 'liveGrab'])->middleware('throttle:30,1');
+// Google Shopping fallback: out-of-catalog product search via the computer-use agent.
+// Heavy + serialized + rate-limited upstream (Google walls sustained use), so throttled tight.
+Route::post('/catalog/google-shop', [\App\Http\Controllers\CatalogController::class, 'googleShop'])->middleware('throttle:20,1');

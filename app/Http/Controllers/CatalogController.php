@@ -125,4 +125,36 @@ class CatalogController extends Controller
         // Pass the upstream result through as-is (product|products|error|blocked|note…).
         return response()->json($res->json());
     }
+
+    // Google Shopping grab: the OUT-OF-CATALOG fallback. When we don't carry a product,
+    // the computer-use agent runs a Google Shopping search and extracts the result cards
+    // (title, price, merchant, image, merchant URL). Heavy (~16-32s, one headless browser,
+    // serialized upstream) and rate-limited (Google walls sustained use → the upstream
+    // returns {blocked, cooling}); fail soft so the assistant can offer another path.
+    public function googleShop(Request $request)
+    {
+        $base = rtrim((string) config('services.catalog.url'), '/');
+        if ($base === '') {
+            return response()->json(['products' => [], 'error' => 'catalog_not_configured'], 200);
+        }
+        $query = trim((string) $request->input('query'));
+        if ($query === '') {
+            return response()->json(['products' => [], 'error' => 'need query'], 200);
+        }
+        $body = ['query' => $query];
+        if ($request->filled('limit')) {
+            $body['limit'] = (int) $request->input('limit');
+        }
+        try {
+            // 55s: the grab is capped at 45s upstream; allow headroom over that.
+            $res = Http::timeout(55)->acceptJson()->post("{$base}/catalog/google-shop", $body);
+        } catch (\Throwable $e) {
+            return response()->json(['products' => [], 'error' => 'catalog_unreachable'], 200);
+        }
+        if (! $res->ok()) {
+            return response()->json(['products' => [], 'error' => 'catalog_error'], 200);
+        }
+        // Pass the upstream result through as-is (products|blocked|no_results|error…).
+        return response()->json($res->json());
+    }
 }
