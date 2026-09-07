@@ -8,10 +8,13 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Conversation extends Model
 {
-    protected $fillable = ['user_id', 'title', 'last_message_at'];
+    protected $fillable = ['user_id', 'title', 'last_message_at', 'running_summary', 'summary_upto_message_id', 'summary_version', 'summary_updated_at'];
 
     protected $casts = [
         'last_message_at' => 'datetime',
+        'summary_updated_at' => 'datetime',
+        'summary_upto_message_id' => 'integer',
+        'summary_version' => 'integer',
     ];
 
     public function user(): BelongsTo

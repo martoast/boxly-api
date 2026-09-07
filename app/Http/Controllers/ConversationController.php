@@ -12,6 +12,12 @@ use Illuminate\Http\Request;
  */
 class ConversationController extends Controller
 {
+    /** Max rows one summarizer run may fold (bounds the aux-model input). */
+    private const FOLD_CAP = 60;
+
+    /** Hard cap on the stored running summary (~400 tokens). */
+    private const SUMMARY_MAX_CHARS = 2500;
+
     public function index(Request $request)
     {
         $conversations = $request->user()->conversations()
@@ -105,11 +111,13 @@ class ConversationController extends Controller
             'messages.*.content' => 'required',
         ]);
 
+        $insertedIds = [];
         foreach ($validated['messages'] as $m) {
-            $conversation->messages()->create([
+            $row = $conversation->messages()->create([
                 'role' => $m['role'],
                 'content' => $m['content'],
             ]);
+            $insertedIds[] = $row->id;
 
             if (! $conversation->title && $m['role'] === 'user') {
                 $conversation->title = $this->titleFrom($m['content']);
@@ -119,7 +127,108 @@ class ConversationController extends Controller
         $conversation->last_message_at = now();
         $conversation->save();
 
-        return response()->json(['success' => true, 'data' => $conversation->fresh('messages')]);
+        // The caller (the chat backend's persistTurn) only needs to know the turn
+        // landed. This used to return the WHOLE thread (fresh('messages')), which
+        // grew with every turn of a long chat for nothing — no client read it.
+        return response()->json(['success' => true, 'data' => [
+            'id'              => $conversation->id,
+            'title'           => $conversation->title,
+            'last_message_at' => $conversation->last_message_at,
+            'inserted_ids'    => $insertedIds,
+            'last_message_id' => $insertedIds ? max($insertedIds) : $conversation->messages()->max('id'),
+        ]]);
+    }
+
+    /**
+     * Per-chat rolling memory, READ side. Returns the running summary plus what is
+     * still unsummarized. With ?window=N it also returns the rows the summarizer
+     * should fold next: everything after summary_upto EXCEPT the trailing N rows
+     * (those are still shown verbatim in the prompt, so they are not folded yet).
+     * Choosing the rows here, by database id, is what keeps the summary exact —
+     * the chat backend never has to map its in-flight client message ids.
+     */
+    public function context(Request $request, Conversation $conversation)
+    {
+        $this->authorizeOwner($request, $conversation);
+
+        $window = max((int) $request->query('window', 0), 0);
+        $upto = (int) ($conversation->summary_upto_message_id ?? 0);
+
+        $lastId = (int) ($conversation->messages()->max('id') ?? 0);
+        $unsummarized = $conversation->messages()->where('id', '>', $upto)->count();
+
+        $toFold = [];
+        if ($window > 0 && $unsummarized > $window) {
+            // Rows after `upto`, ascending, minus the trailing `window` rows; capped so
+            // one summarizer run never swallows an unbounded backlog.
+            $toFold = $conversation->messages()
+                ->where('id', '>', $upto)
+                ->reorder('id')
+                ->limit(min($unsummarized - $window, self::FOLD_CAP))
+                ->get(['id', 'role', 'content'])
+                ->values()
+                ->all();
+        }
+
+        return response()->json(['success' => true, 'data' => [
+            'id'                      => $conversation->id,
+            'running_summary'         => $conversation->running_summary,
+            'summary_upto_message_id' => $conversation->summary_upto_message_id,
+            'summary_version'         => (int) $conversation->summary_version,
+            'summary_updated_at'      => $conversation->summary_updated_at,
+            'last_message_id'         => $lastId ?: null,
+            'unsummarized'            => $unsummarized,
+            'to_fold'                 => $toFold,
+        ]]);
+    }
+
+    /**
+     * Per-chat rolling memory, WRITE side (the chat backend's summarizer).
+     * Optimistic: the caller sends the version it read; a stale version means a
+     * concurrent turn already advanced the summary → 409, and the caller drops its
+     * result (the next turn re-folds from the newer upto).
+     */
+    public function updateSummary(Request $request, Conversation $conversation)
+    {
+        $this->authorizeOwner($request, $conversation);
+
+        $validated = $request->validate([
+            'running_summary'         => 'required|string|max:'.self::SUMMARY_MAX_CHARS,
+            'summary_upto_message_id' => 'required|integer|min:1',
+            'base_version'            => 'required|integer|min:0',
+        ]);
+
+        $upto = (int) $validated['summary_upto_message_id'];
+        $exists = $conversation->messages()->where('id', $upto)->exists();
+        if (! $exists) {
+            return response()->json(['success' => false, 'error' => 'upto_not_in_conversation'], 422);
+        }
+        if ($upto < (int) ($conversation->summary_upto_message_id ?? 0)) {
+            return response()->json(['success' => false, 'error' => 'upto_moves_backwards'], 422);
+        }
+
+        // Atomic compare-and-set on the version column.
+        $updated = Conversation::whereKey($conversation->id)
+            ->where('summary_version', (int) $validated['base_version'])
+            ->update([
+                'running_summary'         => $validated['running_summary'],
+                'summary_upto_message_id' => $upto,
+                'summary_version'         => (int) $validated['base_version'] + 1,
+                'summary_updated_at'      => now(),
+            ]);
+
+        if (! $updated) {
+            return response()->json([
+                'success'         => false,
+                'error'           => 'version_conflict',
+                'summary_version' => (int) $conversation->fresh()->summary_version,
+            ], 409);
+        }
+
+        return response()->json(['success' => true, 'data' => [
+            'summary_version'         => (int) $validated['base_version'] + 1,
+            'summary_upto_message_id' => $upto,
+        ]]);
     }
 
     /**

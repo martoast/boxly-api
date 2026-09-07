@@ -517,6 +517,10 @@ class SearchEventController extends Controller
             'id'         => $conversation->id,
             'title'      => $conversation->title,
             'created_at' => $conversation->created_at,
+            // Per-chat rolling memory (phase 2) — visible here so summaries can be QA'd.
+            'running_summary'         => $conversation->running_summary,
+            'summary_upto_message_id' => $conversation->summary_upto_message_id,
+            'summary_updated_at'      => $conversation->summary_updated_at,
             'user'       => $conversation->user
                 ? ['id' => $conversation->user->id, 'name' => $conversation->user->name, 'email' => $conversation->user->email, 'created_at' => $conversation->user->created_at]
                 : null,

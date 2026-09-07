@@ -195,6 +195,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::patch('/{conversation}', [\App\Http\Controllers\ConversationController::class, 'update']);
         Route::delete('/{conversation}', [\App\Http\Controllers\ConversationController::class, 'destroy']);
         Route::post('/{conversation}/messages', [\App\Http\Controllers\ConversationController::class, 'addMessages']);
+        // Per-chat rolling memory (read by the chat backend each turn; written by its summarizer).
+        Route::get('/{conversation}/context', [\App\Http\Controllers\ConversationController::class, 'context']);
+        Route::patch('/{conversation}/summary', [\App\Http\Controllers\ConversationController::class, 'updateSummary']);
     });
 
     // AI shopping assistant — learned shopping profile (cross-chat memory)
