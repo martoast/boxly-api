@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Cache;
 
 // The AI search's product source. The catalog itself lives outside Laravel — a
 // standalone service on the fullstack domain that serves products harvested from
@@ -126,35 +127,93 @@ class CatalogController extends Controller
         return response()->json($res->json());
     }
 
-    // Google Shopping grab: the OUT-OF-CATALOG fallback. When we don't carry a product,
-    // the computer-use agent runs a Google Shopping search and extracts the result cards
-    // (title, price, merchant, image, merchant URL). Heavy (~16-32s, one headless browser,
-    // serialized upstream) and rate-limited (Google walls sustained use → the upstream
-    // returns {blocked, cooling}); fail soft so the assistant can offer another path.
+    // Google Shopping search: the OUT-OF-CATALOG fallback. When we don't carry a product,
+    // hit SerpAPI's google_shopping engine (US locale → USD prices, US merchants) for real
+    // cross-web options with a title/price/merchant/image/link, which Boxly buys + delivers.
+    // Fast (~1s, cached) and API-grade — no bot walls, unlike a headless-browser scrape.
+    // Fails soft: no key / SerpAPI error → empty + a reason the assistant explains.
     public function googleShop(Request $request)
     {
-        $base = rtrim((string) config('services.catalog.url'), '/');
-        if ($base === '') {
-            return response()->json(['products' => [], 'error' => 'catalog_not_configured'], 200);
-        }
         $query = trim((string) $request->input('query'));
         if ($query === '') {
             return response()->json(['products' => [], 'error' => 'need query'], 200);
         }
-        $body = ['query' => $query];
-        if ($request->filled('limit')) {
-            $body['limit'] = (int) $request->input('limit');
+        $key = (string) config('services.serpapi.key');
+        if ($key === '') {
+            return response()->json(['products' => [], 'error' => 'serpapi_not_configured'], 200);
         }
-        try {
-            // 55s: the grab is capped at 45s upstream; allow headroom over that.
-            $res = Http::timeout(55)->acceptJson()->post("{$base}/catalog/google-shop", $body);
-        } catch (\Throwable $e) {
-            return response()->json(['products' => [], 'error' => 'catalog_unreachable'], 200);
+        $limit = $request->filled('limit') ? max(1, min(40, (int) $request->input('limit'))) : 16;
+        // City-level location → simulates a shopper near the San Diego / San Ysidro warehouse
+        // where goods actually land, so prices + availability match what Boxly will receive.
+        $location = (string) config('services.serpapi.location');
+        $cacheKey = 'gshop:' . md5(mb_strtolower($query) . '|' . $location);
+
+        $products = Cache::get($cacheKey);
+        if ($products === null) {
+            try {
+                $params = [
+                    'engine' => 'google_shopping', 'q' => $query, 'gl' => 'us', 'hl' => 'en',
+                    'num' => 40, 'api_key' => $key,
+                ];
+                if ($location !== '') {
+                    $params['location'] = $location;
+                }
+                $res = Http::timeout(15)->connectTimeout(5)->get('https://serpapi.com/search.json', $params);
+            } catch (\Throwable $e) {
+                return response()->json(['products' => [], 'error' => 'serpapi_unreachable'], 200);
+            }
+            if (! $res->ok()) {
+                return response()->json(['products' => [], 'error' => 'serpapi_error'], 200);
+            }
+            $products = $this->normalizeGoogleShopping($res->json());
+            // Asymmetric TTL: a non-empty result is stable for 10 min; an empty one might be
+            // SerpAPI flakiness for the same query, so re-probe soon (60s) — see the shopping
+            // cache note in ProductExtractController.
+            Cache::put($cacheKey, $products, now()->addSeconds($products ? 600 : 60));
         }
-        if (! $res->ok()) {
-            return response()->json(['products' => [], 'error' => 'catalog_error'], 200);
+
+        // Never surface an imageless card (blank tile = broken), then cap to `limit`.
+        $products = array_slice(array_values(array_filter($products, fn ($p) => ! empty($p['image']))), 0, $limit);
+        if (empty($products)) {
+            return response()->json(['products' => [], 'no_results' => true, 'source' => 'google'], 200);
         }
-        // Pass the upstream result through as-is (products|blocked|no_results|error…).
-        return response()->json($res->json());
+        return response()->json(['products' => $products, 'count' => count($products), 'source' => 'google']);
+    }
+
+    /** SerpAPI google_shopping response → our gallery product shape (title/price/was/on_sale/
+     * discount/merchant/image/url/rating). Mirrors ProductExtractController::parseShoppingResults. */
+    private function normalizeGoogleShopping($json): array
+    {
+        $results = is_array($json) ? ($json['shopping_results'] ?? null) : null;
+        if (! is_array($results)) {
+            return [];
+        }
+        $out = [];
+        foreach ($results as $r) {
+            $title = $r['title'] ?? null;
+            if (! $title) {
+                continue;
+            }
+            $price = $r['extracted_price'] ?? (isset($r['price']) ? (float) preg_replace('/[^0-9.]/', '', (string) $r['price']) : null);
+            $old = $r['extracted_old_price'] ?? null;
+            $onSale = $old && $price && $old > $price;
+            $merchant = $r['source'] ?? null;
+            $out[] = [
+                'title'        => $title,
+                'price'        => $price ?: null,
+                'was'          => $onSale ? $old : null,
+                'on_sale'      => $onSale,
+                'discount_pct' => $onSale ? (int) round(100 * ($old - $price) / $old) : null,
+                'store'        => $merchant,
+                'merchant'     => $merchant,
+                'image'        => $r['serpapi_thumbnail'] ?? $r['thumbnail'] ?? null,
+                'url'          => $r['product_link'] ?? $r['link'] ?? ('https://www.google.com/search?tbm=shop&q=' . urlencode($title)),
+                'rating'       => $r['rating'] ?? null,
+                'reviews'      => $r['reviews'] ?? null,
+                'source'       => 'google',
+            ];
+        }
+
+        return $out;
     }
 }
