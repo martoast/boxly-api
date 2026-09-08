@@ -216,4 +216,83 @@ class CatalogController extends Controller
 
         return $out;
     }
+
+    // Amazon search: same contract as googleShop() (query → normalized products, cached,
+    // fail-soft) but against SerpAPI's `amazon` engine, so the assistant can offer Amazon
+    // the way it offers Google Shopping. Per-QUERY only — there is no "browse deals" mode.
+    public function amazon(Request $request)
+    {
+        $query = trim((string) $request->input('query'));
+        if ($query === '') {
+            return response()->json(['products' => [], 'error' => 'need query'], 200);
+        }
+        $key = (string) config('services.serpapi.key');
+        if ($key === '') {
+            return response()->json(['products' => [], 'error' => 'serpapi_not_configured'], 200);
+        }
+        $limit = $request->filled('limit') ? max(1, min(40, (int) $request->input('limit'))) : 16;
+        $cacheKey = 'amazon:' . md5(mb_strtolower($query));
+
+        $products = Cache::get($cacheKey);
+        if ($products === null) {
+            try {
+                $res = Http::timeout(15)->connectTimeout(5)->get('https://serpapi.com/search.json', [
+                    'engine' => 'amazon', 'k' => $query, 'amazon_domain' => 'amazon.com',
+                    'language' => 'en_US', 'api_key' => $key,
+                ]);
+            } catch (\Throwable $e) {
+                return response()->json(['products' => [], 'error' => 'serpapi_unreachable'], 200);
+            }
+            if (! $res->ok()) {
+                return response()->json(['products' => [], 'error' => 'serpapi_error'], 200);
+            }
+            $products = $this->normalizeAmazon($res->json());
+            Cache::put($cacheKey, $products, now()->addSeconds($products ? 600 : 60));
+        }
+
+        $products = array_slice(array_values(array_filter($products, fn ($p) => ! empty($p['image']))), 0, $limit);
+        if (empty($products)) {
+            return response()->json(['products' => [], 'no_results' => true, 'source' => 'amazon'], 200);
+        }
+        return response()->json(['products' => $products, 'count' => count($products), 'source' => 'amazon']);
+    }
+
+    /** SerpAPI amazon response (organic_results) → the same product shape googleShop returns. */
+    private function normalizeAmazon($json): array
+    {
+        $results = is_array($json) ? ($json['organic_results'] ?? null) : null;
+        if (! is_array($results)) {
+            return [];
+        }
+        $out = [];
+        foreach ($results as $r) {
+            $title = $r['title'] ?? null;
+            $asin = $r['asin'] ?? null;
+            if (! $title || ! $asin) {
+                continue;
+            }
+            $price = $r['extracted_price'] ?? null;
+            $old = $r['extracted_old_price'] ?? null;
+            $onSale = $old && $price && $old > $price;
+            $out[] = [
+                'title'        => $title,
+                'price'        => $price ?: null,
+                'was'          => $onSale ? $old : null,
+                'on_sale'      => $onSale,
+                'discount_pct' => $onSale ? (int) round(100 * ($old - $price) / $old) : null,
+                'store'        => 'Amazon',
+                'merchant'     => 'Amazon',
+                // Search thumbnails are 218px tall (._AC_UY218_) — ask for the 500px render
+                // instead so gallery cards and the PR email aren't blurry. Same CDN, same key.
+                'image'        => isset($r['thumbnail']) ? preg_replace('/\._AC_[A-Z0-9_,]+_\.(jpe?g|png)$/i', '._AC_SL500_.$1', $r['thumbnail']) : null,
+                // The canonical product page — stable, no search-session junk in the query string.
+                'url'          => $r['link_clean'] ?? ('https://www.amazon.com/dp/' . $asin),
+                'rating'       => $r['rating'] ?? null,
+                'reviews'      => $r['reviews'] ?? null,
+                'source'       => 'amazon',
+            ];
+        }
+
+        return $out;
+    }
 }

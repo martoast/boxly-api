@@ -782,3 +782,4 @@ Route::post('/catalog/live-grab', [\App\Http\Controllers\CatalogController::clas
 // Google Shopping fallback: out-of-catalog product search via the computer-use agent.
 // Heavy + serialized + rate-limited upstream (Google walls sustained use), so throttled tight.
 Route::post('/catalog/google-shop', [\App\Http\Controllers\CatalogController::class, 'googleShop'])->middleware('throttle:20,1');
+Route::post('/catalog/amazon', [\App\Http\Controllers\CatalogController::class, 'amazon'])->middleware('throttle:20,1');

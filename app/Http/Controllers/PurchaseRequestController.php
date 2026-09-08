@@ -155,6 +155,18 @@ class PurchaseRequestController extends Controller
         return $this->nameFromUrl($itemData['product_url'] ?? null);
     }
 
+    /**
+     * A product/image URL exactly as we should store and render it: trimmed,
+     * with raw spaces percent-encoded. Google Shopping links from SerpAPI carry
+     * a literal space ("...&q=Nikon Z30&prds=...") which is invalid in an href —
+     * some mail clients cut the link there, so "Ver producto" dies. Everything
+     * else is left byte-for-byte, so an already-encoded link is untouched.
+     */
+    private function cleanUrl(?string $url): string
+    {
+        return str_replace(' ', '%20', trim((string) $url));
+    }
+
     public function store(Request $request)
     {
         $request->validate([
@@ -232,8 +244,8 @@ class PurchaseRequestController extends Controller
                 $item = PurchaseRequestItem::create([
                     'purchase_request_id' => $pr->id,
                     'product_name' => $name,
-                    'product_url' => $itemData['product_url'] ?? '',
-                    'product_image_url' => $itemData['product_image_url'] ?? null,
+                    'product_url' => $this->cleanUrl($itemData['product_url'] ?? null),
+                    'product_image_url' => $this->cleanUrl($itemData['product_image_url'] ?? null) ?: null,
                     // Null until the cart is built and the REAL price is written.
                     'price' => $itemData['price'] ?? null,
                     'quantity' => $itemData['quantity'],
@@ -274,7 +286,7 @@ class PurchaseRequestController extends Controller
                 } elseif (! empty($itemData['product_image_url'])) {
                     // No uploaded file — re-host the provided image URL to our
                     // bucket so it's permanent (source thumbnails can expire).
-                    $this->rehostItemImage($item, $itemData['product_image_url'], $user, $pr);
+                    $this->rehostItemImage($item, $item->product_image_url, $user, $pr);
                 }
             }
 
@@ -766,7 +778,7 @@ class PurchaseRequestController extends Controller
                     // price may legitimately still be null — the cart step owns it.
                     $item->update([
                         'product_name' => $this->itemName($itemData) ?? $item->product_name,
-                        'product_url' => $itemData['product_url'] ?? '',
+                        'product_url' => $this->cleanUrl($itemData['product_url'] ?? null),
                         'price' => $itemData['price'] ?? null,
                         'quantity' => $itemData['quantity'],
                         'options' => $options,
@@ -781,8 +793,8 @@ class PurchaseRequestController extends Controller
                     $item = PurchaseRequestItem::create([
                         'purchase_request_id' => $purchaseRequest->id,
                         'product_name' => $name,
-                        'product_url' => $itemData['product_url'] ?? '',
-                        'product_image_url' => $itemData['product_image_url'] ?? null,
+                        'product_url' => $this->cleanUrl($itemData['product_url'] ?? null),
+                        'product_image_url' => $this->cleanUrl($itemData['product_image_url'] ?? null) ?: null,
                         'price' => $itemData['price'] ?? null,
                         'quantity' => $itemData['quantity'],
                         'options' => $options,
@@ -794,7 +806,7 @@ class PurchaseRequestController extends Controller
                     // the chat come through here, so without this they'd have no
                     // image at all.
                     if (! $request->hasFile("items.{$index}.image") && ! empty($itemData['product_image_url'])) {
-                        $this->rehostItemImage($item, $itemData['product_image_url'], $user, $purchaseRequest);
+                        $this->rehostItemImage($item, $item->product_image_url, $user, $purchaseRequest);
                     }
                 }
 
