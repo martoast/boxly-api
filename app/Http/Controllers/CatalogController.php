@@ -137,6 +137,36 @@ class CatalogController extends Controller
         return response()->json($res->json());
     }
 
+    // Product variants: sizes/colours with availability + price per variant for ONE product URL.
+    // The moment a shopper commits to a product ("quiero esos"), the app goes straight to the
+    // product's stored URL (catalog or live row) — no grid navigation — and asks the catalog
+    // service: mirror if checked within max_age_s, else a live product-page read. Heavy path
+    // (headless browser) upstream, so a long timeout; fails soft to {variants: []} + error.
+    public function productVariants(Request $request)
+    {
+        $base = rtrim((string) config('services.catalog.url'), '/');
+        if ($base === '') {
+            return response()->json(['variants' => [], 'error' => 'catalog_not_configured'], 200);
+        }
+        $url = trim((string) $request->input('url'));
+        if ($url === '' || ! preg_match('#^https?://#i', $url)) {
+            return response()->json(['variants' => [], 'error' => 'need url'], 200);
+        }
+        $body = ['url' => $url];
+        if ($request->filled('max_age_s')) {
+            $body['max_age_s'] = max(0, (int) $request->input('max_age_s'));
+        }
+        try {
+            $res = Http::timeout(55)->acceptJson()->post("{$base}/catalog/product-variants", $body);
+        } catch (\Throwable $e) {
+            return response()->json(['variants' => [], 'error' => 'catalog_unreachable'], 200);
+        }
+        if (! $res->ok()) {
+            return response()->json(['variants' => [], 'error' => 'catalog_error'], 200);
+        }
+        return response()->json($res->json());
+    }
+
     // Google Shopping search: the OUT-OF-CATALOG fallback. When we don't carry a product,
     // hit SerpAPI's google_shopping engine (US locale → USD prices, US merchants) for real
     // cross-web options with a title/price/merchant/image/link, which Boxly buys + delivers.
