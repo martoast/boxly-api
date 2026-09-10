@@ -781,5 +781,5 @@ Route::post('/catalog/collection', [\App\Http\Controllers\CatalogController::cla
 Route::post('/catalog/live-grab', [\App\Http\Controllers\CatalogController::class, 'liveGrab'])->middleware('throttle:30,1');
 // Google Shopping fallback: out-of-catalog product search via the computer-use agent.
 // Heavy + serialized + rate-limited upstream (Google walls sustained use), so throttled tight.
-Route::post('/catalog/google-shop', [\App\Http\Controllers\CatalogController::class, 'googleShop'])->middleware('throttle:20,1');
-Route::post('/catalog/amazon', [\App\Http\Controllers\CatalogController::class, 'amazon'])->middleware('throttle:20,1');
+Route::post('/catalog/google-shop', [\App\Http\Controllers\CatalogController::class, 'googleShop'])->middleware('throttle:120,1'); // all chat traffic arrives from a few Netlify egress IPs — 20/min per IP throttled real users
+Route::post('/catalog/amazon', [\App\Http\Controllers\CatalogController::class, 'amazon'])->middleware('throttle:120,1');

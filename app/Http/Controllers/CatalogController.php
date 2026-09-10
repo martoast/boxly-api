@@ -192,6 +192,31 @@ class CatalogController extends Controller
 
     /** SerpAPI google_shopping response → our gallery product shape (title/price/was/on_sale/
      * discount/merchant/image/url/rating). Mirrors ProductExtractController::parseShoppingResults. */
+    // Used / refurbished marketplaces and listings never reach the shopper (Alex, 2026-09-10): Boxly sells
+    // NEW goods, and a Poshmark/Mercari card in a deals gallery reads as "they sell second-hand". Matched on
+    // the merchant name, SerpAPI's own condition fields (second_hand_condition / tag) and the listing title.
+    private const SECOND_HAND_MERCHANTS = [
+        'poshmark', 'mercari', 'thredup', 'depop', 'vinted', 'grailed', 'offerup', 'facebook marketplace',
+        'craigslist', 'swappa', 'back market', 'backmarket', 'gazelle', 'reebelo', 'the realreal', 'therealreal',
+        'vestiaire', 'tradesy', 'kidizen', 'curtsy', 'goodwill', 'shopgoodwill', 'decluttr', 'letgo', '5miles',
+        'rebag', 'fashionphile', 'stockx', 'goat',
+    ];
+
+    private static function isSecondHand(array $r, ?string $merchant, ?string $title): bool
+    {
+        $m = mb_strtolower((string) $merchant);
+        foreach (self::SECOND_HAND_MERCHANTS as $bad) {
+            if ($m !== '' && str_contains($m, $bad)) {
+                return true;
+            }
+        }
+        if (! empty($r['second_hand_condition'])) {
+            return true;
+        }
+        $cond = mb_strtolower(trim(((string) ($r['tag'] ?? '')) . ' ' . ((string) $title)));
+        return (bool) preg_match('/\b(used|pre-?owned|refurbished|refurb|renewed|open[- ]box|second[- ]hand|reconditioned)\b/u', $cond);
+    }
+
     private function normalizeGoogleShopping($json): array
     {
         $results = is_array($json) ? ($json['shopping_results'] ?? null) : null;
@@ -208,6 +233,9 @@ class CatalogController extends Controller
             $old = $r['extracted_old_price'] ?? null;
             $onSale = $old && $price && $old > $price;
             $merchant = $r['source'] ?? null;
+            if (self::isSecondHand($r, $merchant, $title)) {
+                continue;
+            }
             $out[] = [
                 'title'        => $title,
                 'price'        => $price ?: null,
@@ -281,6 +309,9 @@ class CatalogController extends Controller
             if (! $title || ! $asin) {
                 continue;
             }
+            if (self::isSecondHand($r, 'Amazon', $title)) { // "Renewed" / "Refurbished" listings
+                continue;
+            }
             $price = $r['extracted_price'] ?? null;
             $old = $r['extracted_old_price'] ?? null;
             $onSale = $old && $price && $old > $price;
@@ -292,6 +323,9 @@ class CatalogController extends Controller
                 'discount_pct' => $onSale ? (int) round(100 * ($old - $price) / $old) : null,
                 'store'        => 'Amazon',
                 'merchant'     => 'Amazon',
+                // Amazon titles often omit the brand ("FreeSip Stainless Steel Water Bottle" is Owala);
+                // SerpAPI carries it separately — the app uses it to confirm a brand search really hit the brand.
+                'brand'        => $r['brand'] ?? null,
                 // Search thumbnails are 218px tall (._AC_UY218_) — ask for the 500px render
                 // instead so gallery cards and the PR email aren't blurry. Same CDN, same key.
                 'image'        => isset($r['thumbnail']) ? preg_replace('/\._AC_[A-Z0-9_,]+_\.(jpe?g|png)$/i', '._AC_SL500_.$1', $r['thumbnail']) : null,
