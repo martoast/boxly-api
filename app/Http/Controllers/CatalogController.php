@@ -48,6 +48,16 @@ class CatalogController extends Controller
             'count' => $data['count'] ?? count($data['products'] ?? []),
             // resolved = how store/brand inputs mapped (e.g. a typo'd store name).
             'resolved' => $data['resolved'] ?? null,
+            // Miss signals the assistant acts on (they were being dropped here, so the app
+            // never saw a search miss): no_exact_match / missing_terms = a named model is in
+            // none of the rows; query_matched=false = nothing matched the shopper's words.
+            'no_exact_match' => (bool) ($data['no_exact_match'] ?? false),
+            'missing_terms' => $data['missing_terms'] ?? [],
+            'query_matched' => $data['query_matched'] ?? true,
+            // relaxed = a named store's facets (sale / price / category) matched nothing, so
+            // the catalog dropped them (relaxed_filters says which) rather than return empty.
+            'relaxed' => (bool) ($data['relaxed'] ?? false),
+            'relaxed_filters' => $data['relaxed_filters'] ?? [],
             'products' => $data['products'] ?? [],
         ]);
     }
