@@ -318,6 +318,127 @@ class CatalogController extends Controller
         return $out;
     }
 
+    // ONE AMAZON PRODUCT, from its page — not the search row. Alex, 2026-09-11: "no matter what you search you
+    // always get the product URL so the agent can still go to the product details page and fetch the variants, so
+    // that step is NEVER skipped... even for a product with no variants the page still contains info and images we
+    // need, and it might reveal the product is not available."
+    //
+    // A search row carries one image, no sizes and no stock. SerpAPI's `amazon_product` engine takes the ASIN out
+    // of the product URL and returns the page: title, price, availability, the image gallery and the variant
+    // dimensions. Same vendor and key as the search, so no new dependency and nothing scraped by us.
+    public function amazonProduct(Request $request)
+    {
+        $asin = strtoupper(trim((string) $request->input('asin')));
+        if ($asin === '') {
+            // Accept a URL and pull the ASIN out of it — /dp/<ASIN>, /gp/product/<ASIN>, ?asin=<ASIN>.
+            $url = (string) $request->input('url');
+            if (preg_match('#/(?:dp|gp/product|gp/aw/d)/([A-Z0-9]{10})#i', $url, $m)) { $asin = strtoupper($m[1]); }
+            elseif (preg_match('#[?&]asin=([A-Z0-9]{10})#i', $url, $m)) { $asin = strtoupper($m[1]); }
+        }
+        if (! preg_match('/^[A-Z0-9]{10}$/', $asin)) {
+            return response()->json(['variants' => [], 'axes' => [], 'error' => 'need asin'], 200);
+        }
+        $key = (string) config('services.serpapi.key');
+        if ($key === '') {
+            return response()->json(['variants' => [], 'axes' => [], 'error' => 'serpapi_not_configured'], 200);
+        }
+
+        $cacheKey = 'amzprod:' . $asin;
+        $payload = Cache::get($cacheKey);
+        if ($payload === null) {
+            try {
+                $res = Http::timeout(15)->connectTimeout(5)->get('https://serpapi.com/search.json', [
+                    'engine' => 'amazon_product', 'asin' => $asin, 'amazon_domain' => 'amazon.com',
+                    'language' => 'en_US', 'api_key' => $key,
+                ]);
+            } catch (\Throwable $e) {
+                return response()->json(['variants' => [], 'axes' => [], 'error' => 'serpapi_unreachable'], 200);
+            }
+            if (! $res->ok()) {
+                return response()->json(['variants' => [], 'axes' => [], 'error' => 'serpapi_error'], 200);
+            }
+            $payload = $this->normalizeAmazonProduct($res->json(), $asin);
+            // A product page is stable for longer than a search: 30 min, and 2 min when it came back thin so a
+            // transient miss re-probes soon.
+            Cache::put($cacheKey, $payload, now()->addSeconds(($payload['variants'] ?? []) ? 1800 : 120));
+        }
+        return response()->json($payload, 200);
+    }
+
+    /** SerpAPI amazon_product -> the same shape /catalog/product-variants returns, so the modal needs no special case. */
+    private function normalizeAmazonProduct(array $json, string $asin): array
+    {
+        $pr = $json['product_results'] ?? [];
+        $title = $pr['title'] ?? null;
+        $price = $pr['price'] ?? ($pr['buybox_price'] ?? null);
+        if (is_array($price)) { $price = $price['value'] ?? $price['extracted_value'] ?? null; }
+        $price = is_numeric($price) ? (float) $price : (is_string($price) ? (float) preg_replace('/[^0-9.]/', '', $price) : null);
+
+        $images = [];
+        foreach (($pr['images'] ?? []) as $im) {
+            $u = is_string($im) ? $im : ($im['link'] ?? $im['image'] ?? null);
+            if ($u && ! in_array($u, $images, true)) { $images[] = $u; }
+            if (count($images) >= 12) { break; }
+        }
+        if (! $images && ! empty($pr['thumbnail'])) { $images[] = $pr['thumbnail']; }
+
+        // Availability: Amazon states it in words. Anything we cannot read stays UNKNOWN (null), never "sold out" —
+        // the rule the whole variant layer follows.
+        $availability = null;
+        $stock = strtolower((string) ($pr['availability'] ?? $pr['in_stock'] ?? ''));
+        if ($stock !== '') {
+            if (str_contains($stock, 'unavailable') || str_contains($stock, 'out of stock')) { $availability = false; }
+            elseif (str_contains($stock, 'in stock') || $stock === '1' || $stock === 'true') { $availability = true; }
+        }
+
+        // Variant dimensions ("Size", "Color", "Flavor Name"...). Amazon returns each as its own list of options,
+        // each option being a separate ASIN — so these are independent axes, exactly like a page read.
+        $axes = [];
+        $variants = [];
+        $dims = $pr['variations'] ?? $pr['variants'] ?? [];
+        foreach ($dims as $name => $options) {
+            if (is_int($name)) { $name = $options['dimension'] ?? $options['name'] ?? 'Opción'; $options = $options['values'] ?? $options['items'] ?? []; }
+            $values = [];
+            foreach ((array) $options as $opt) {
+                $v = is_string($opt) ? $opt : ($opt['title'] ?? $opt['value'] ?? $opt['name'] ?? null);
+                if (! $v) { continue; }
+                $values[] = $v;
+                $variants[] = [
+                    'key' => $name . ':' . $v,
+                    'options' => [ucfirst((string) $name) => $v],
+                    // Amazon does not say per-option stock on the parent page: unknown, never false.
+                    'available' => null,
+                    'price' => isset($opt['price']) && is_numeric($opt['price']) ? (float) $opt['price'] : null,
+                    'url' => isset($opt['asin']) ? 'https://www.amazon.com/dp/' . $opt['asin'] : null,
+                ];
+            }
+            if ($values) { $axes[] = ['name' => ucfirst((string) $name), 'kind' => stripos($name, 'siz') !== false ? 'size' : (stripos($name, 'col') !== false ? 'color' : 'other'), 'values' => array_values(array_unique($values))]; }
+        }
+        // No dimensions is a legitimate answer (a pack of cards, a single-SKU toy) — the page still gave us its
+        // images, its price and whether it is available, which is the point of always visiting it.
+        if (! $variants) {
+            $variants[] = ['key' => 'single', 'options' => (object) [], 'available' => $availability, 'price' => $price];
+        }
+
+        return [
+            'product' => [
+                'title' => $title,
+                'url' => 'https://www.amazon.com/dp/' . $asin,
+                'price' => $price,
+                'list_price' => null,
+                'image' => $images[0] ?? null,
+                'images' => $images,
+            ],
+            'axes' => $axes,
+            'variants' => $variants,
+            'axes_independent' => true,
+            'selected' => null,
+            'availability' => $availability,
+            'source' => 'amazon-product',
+            'checked_at' => now()->toIso8601String(),
+        ];
+    }
+
     // Amazon search: same contract as googleShop() (query → normalized products, cached,
     // fail-soft) but against SerpAPI's `amazon` engine, so the assistant can offer Amazon
     // the way it offers Google Shopping. Per-QUERY only — there is no "browse deals" mode.
