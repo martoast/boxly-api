@@ -212,6 +212,18 @@ class CatalogController extends Controller
                 // slower than the 1–3 s it takes when healthy, so an 8 s cap was cutting off good responses and
                 // re-tripping the breaker. The breaker below is what protects the worker pool now, not the cap.
                 $res = Http::timeout(12)->connectTimeout(4)->get('https://serpapi.com/search.json', $params);
+                // SECOND CHANCE, LEANER. Every failing call hit the cap exactly — the signature of a request that
+                // hangs, not one that is merely slow. The two heaviest parameters are the city-level `location`
+                // (SerpAPI resolves it server-side) and `num=40`. If the full request fails or comes back empty,
+                // retry once without them rather than declaring Google down: a plain national query is the part
+                // most likely to still be served while the engine recovers.
+                if (! $res->ok() || empty(data_get($res->json(), 'shopping_results'))) {
+                    $lean = ['engine' => 'google_shopping', 'q' => $query, 'gl' => 'us', 'hl' => 'en', 'api_key' => $key];
+                    $retry = Http::timeout(12)->connectTimeout(4)->get('https://serpapi.com/search.json', $lean);
+                    if ($retry->ok() && ! empty(data_get($retry->json(), 'shopping_results'))) {
+                        $res = $retry;
+                    }
+                }
             } catch (\Throwable $e) {
                 Cache::put($downKey, time() + 90, now()->addSeconds(95));
                 return response()->json(['products' => [], 'error' => 'serpapi_unreachable', 'cooling' => true, 'retry_after_s' => 90], 200);
