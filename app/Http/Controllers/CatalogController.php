@@ -558,6 +558,46 @@ class CatalogController extends Controller
     // Amazon search: same contract as googleShop() (query → normalized products, cached,
     // fail-soft) but against SerpAPI's `amazon` engine, so the assistant can offer Amazon
     // the way it offers Google Shopping. Per-QUERY only — there is no "browse deals" mode.
+    /** DIAGNOSTIC (2026-09-11): is Google Shopping failing on SerpAPI's side or ours? Our code catches the
+     * timeout and throws the detail away, so this runs the probes with a LONG cap and reports exactly what came
+     * back — HTTP status, elapsed seconds, SerpAPI's own error string, result count — for google_shopping beside
+     * amazon on the same host, same key, same TLS endpoint. The key itself is never echoed. Cheap: three probes.
+     * Also answers "would a bigger budget help?" — if the engine answers at 14 s, our 6 s cap is the problem; if
+     * it hangs to 30 s or returns an error, it is theirs. */
+    public function serpDiag(Request $request)
+    {
+        $key = (string) config('services.serpapi.key');
+        if ($key === '') {
+            return response()->json(['error' => 'serpapi_not_configured'], 200);
+        }
+        $q = trim((string) $request->input('q', 'soccer ball')) ?: 'soccer ball';
+        $location = (string) config('services.serpapi.location');
+        $probes = [
+            'google_shopping_lean' => ['engine' => 'google_shopping', 'q' => $q, 'gl' => 'us', 'hl' => 'en', 'num' => 40],
+            'amazon_baseline' => ['engine' => 'amazon', 'k' => $q, 'amazon_domain' => 'amazon.com', 'language' => 'en_US'],
+            'google_shopping_located' => array_filter(['engine' => 'google_shopping', 'q' => $q, 'gl' => 'us', 'hl' => 'en', 'num' => 40, 'location' => $location ?: null]),
+        ];
+        $out = [];
+        foreach ($probes as $name => $params) {
+            $t0 = microtime(true);
+            $row = ['probe' => $name];
+            try {
+                $res = Http::timeout(30)->connectTimeout(5)->get('https://serpapi.com/search.json', $params + ['api_key' => $key]);
+                $json = $res->json();
+                $row['http'] = $res->status();
+                $row['serpapi_error'] = is_array($json) ? (string) ($json['error'] ?? '') : '';
+                $row['search_status'] = is_array($json) ? (string) data_get($json, 'search_metadata.status', '') : '';
+                $row['results'] = is_array($json) ? count((array) ($json['shopping_results'] ?? $json['organic_results'] ?? [])) : 0;
+            } catch (\Throwable $e) {
+                $row['http'] = null;
+                $row['exception'] = class_basename($e) . ': ' . mb_substr($e->getMessage(), 0, 140);
+            }
+            $row['seconds'] = round(microtime(true) - $t0, 2);
+            $out[] = $row;
+        }
+        return response()->json(['query' => $q, 'probes' => $out, 'note' => 'same host, same key, same endpoint — compare google_shopping against amazon'], 200);
+    }
+
     public function amazon(Request $request)
     {
         $query = trim((string) $request->input('query'));
