@@ -576,7 +576,11 @@ class CatalogController extends Controller
      * Google looked permanently dead. We cannot make the shopper wait 20 s, but we must not throw the work away
      * either: the request keeps running after the response is sent, with a 25 s cap, and its result lands in the
      * same cache key. The next search for those words — a refinement, a repeat, another shopper — is instant.
-     * The warm lock keeps one slow query from stacking up behind itself. */
+     * The warm lock keeps one slow query from stacking up behind itself.
+     * IT MUST BE A REAL QUEUED JOB, not ->afterResponse(): this API is served by `artisan serve` (see
+     * supervisord.conf), which has no fastcgi_finish_request, so "after the response" still blocked the caller —
+     * measured 35.6 s on a cold query, holding the very worker the single-flight change had just freed. The
+     * supervisor already runs `queue:work --queue=high,default`, so the slow call belongs there. */
     private function warmGoogleAfterResponse(string $query, array $lean, string $cacheKey): void
     {
         $key = (string) config('services.serpapi.key');
@@ -603,7 +607,7 @@ class CatalogController extends Controller
             } finally {
                 Cache::forget($warmKey);
             }
-        })->afterResponse();
+        })->onQueue('default');
     }
 
     public function serpDiag(Request $request)
