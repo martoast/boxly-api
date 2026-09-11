@@ -195,9 +195,10 @@ class CatalogController extends Controller
             // until even /catalog/search calls queued past their timeout. After one timeout, Google is
             // considered DOWN for 90 s and answers instantly with a retry hint; one probe re-tests it after.
             $downKey = 'gshop:down';
+            $failKey = 'gshop:fails';
             $downUntil = Cache::get($downKey);
             if ($downUntil !== null && (int) $downUntil > time()) {
-                return response()->json(['products' => [], 'error' => 'serpapi_unreachable', 'cooling' => true, 'retry_after_s' => max(1, (int) $downUntil - time())], 200);
+                return response()->json(['products' => [], 'error' => 'serpapi_cooling', 'cooling' => true, 'retry_after_s' => max(1, (int) $downUntil - time())], 200);
             }
             $params = [
                 'engine' => 'google_shopping', 'q' => $query, 'gl' => 'us', 'hl' => 'en',
@@ -244,10 +245,22 @@ class CatalogController extends Controller
             }
             if ($res === null) {
                 Cache::forget($flight);
-                Cache::put($downKey, time() + 90, now()->addSeconds(95));
-                return response()->json(['products' => [], 'error' => 'serpapi_unreachable', 'cooling' => true, 'retry_after_s' => 90], 200);
+                // TWO STRIKES, NOT ONE (2026-09-11). SerpAPI's Google engine is INTERMITTENT, not down — the same
+                // minute serves 16 rows in 4 s and then times out. Tripping on a single failure turned "works half
+                // the time" into "off for 90 s at a time", so Alex saw Amazon-only galleries all day. The worker
+                // pool no longer depends on this: single-flight caps Google at one worker and 9 s. So we only
+                // cool after TWO failures in a row, for 60 s, and any success resets the count.
+                $fails = ((int) Cache::get($failKey, 0)) + 1;
+                if ($fails >= 2) {
+                    Cache::forget($failKey);
+                    Cache::put($downKey, time() + 60, now()->addSeconds(65));
+                    return response()->json(['products' => [], 'error' => 'serpapi_unreachable', 'cooling' => true, 'retry_after_s' => 60], 200);
+                }
+                Cache::put($failKey, $fails, now()->addSeconds(120));
+                return response()->json(['products' => [], 'error' => 'serpapi_unreachable', 'strike' => $fails], 200);
             }
             Cache::forget($downKey);
+            Cache::forget($failKey);
             if (! $res->ok()) {
                 Cache::forget($flight);
                 return response()->json(['products' => [], 'error' => 'serpapi_error'], 200);
