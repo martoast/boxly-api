@@ -206,13 +206,21 @@ class CatalogController extends Controller
             if ($location !== '') {
                 $params['location'] = $location;
             }
+            // SINGLE-FLIGHT (2026-09-11). Measured: three concurrent Google calls took 38 s each and dragged a
+            // plain Amazon call from 4.3 s to 39.5 s — the cap never even started, because the requests were
+            // QUEUING for a PHP-FPM worker. One slow engine must never cost us the fast one, so only ONE Google
+            // call may hold a worker at a time; everyone else is told instantly that Google is busy and their
+            // gallery is served by Amazon and the catalog. A cached query never reaches here at all.
+            $flight = 'gshop:inflight';
+            if (! Cache::add($flight, 1, 20)) {
+                return response()->json(['products' => [], 'error' => 'serpapi_busy', 'busy' => true, 'retry_after_s' => 10], 200);
+            }
             $res = null;
+            // TOTAL BUDGET 9 s, not 12+12. The app gives this endpoint 10 s, so a 24 s worst case was time the
+            // caller never waited for — it only burned a worker after the app had already given up.
+            $startedAt = microtime(true);
             try {
-                // 12 s. 8 s was right while Google was hard-down (fail fast, stop pinning PHP-FPM workers), but
-                // SerpAPI now reports the engine operational and recovering — and a recovering engine answers
-                // slower than the 1–3 s it takes when healthy, so an 8 s cap was cutting off good responses and
-                // re-tripping the breaker. The breaker below is what protects the worker pool now, not the cap.
-                $res = Http::timeout(12)->connectTimeout(4)->get('https://serpapi.com/search.json', $params);
+                $res = Http::timeout(6)->connectTimeout(3)->get('https://serpapi.com/search.json', $params);
             } catch (\Throwable $e) {
                 $res = null; // a TIMEOUT throws — do not give up here, the lean retry below is the whole point
             }
@@ -223,19 +231,25 @@ class CatalogController extends Controller
             // INSIDE the try block after the call, so a timeout threw straight past it and it never ran.
             if ($res === null || ! $res->ok() || empty(data_get($res->json(), 'shopping_results'))) {
                 try {
-                    $lean = ['engine' => 'google_shopping', 'q' => $query, 'gl' => 'us', 'hl' => 'en', 'api_key' => $key];
-                    $retry = Http::timeout(12)->connectTimeout(4)->get('https://serpapi.com/search.json', $lean);
-                    if ($retry->ok() && ! empty(data_get($retry->json(), 'shopping_results'))) {
-                        $res = $retry;
+                    // Only if the budget has room left — the retry must not double the worker's time.
+                    $left = 9.0 - (microtime(true) - $startedAt);
+                    if ($left >= 2.5) {
+                        $lean = ['engine' => 'google_shopping', 'q' => $query, 'gl' => 'us', 'hl' => 'en', 'api_key' => $key];
+                        $retry = Http::timeout((int) floor($left))->connectTimeout(3)->get('https://serpapi.com/search.json', $lean);
+                        if ($retry->ok() && ! empty(data_get($retry->json(), 'shopping_results'))) {
+                            $res = $retry;
+                        }
                     }
                 } catch (\Throwable $e) { /* keep whatever the first attempt gave us */ }
             }
             if ($res === null) {
+                Cache::forget($flight);
                 Cache::put($downKey, time() + 90, now()->addSeconds(95));
                 return response()->json(['products' => [], 'error' => 'serpapi_unreachable', 'cooling' => true, 'retry_after_s' => 90], 200);
             }
             Cache::forget($downKey);
             if (! $res->ok()) {
+                Cache::forget($flight);
                 return response()->json(['products' => [], 'error' => 'serpapi_error'], 200);
             }
             $products = $this->normalizeGoogleShopping($res->json());
@@ -243,6 +257,7 @@ class CatalogController extends Controller
             // SerpAPI flakiness for the same query, so re-probe soon (60s) — see the shopping
             // cache note in ProductExtractController.
             Cache::put($cacheKey, $products, now()->addSeconds($products ? 600 : 60));
+            Cache::forget($flight);
         }
 
         // Never surface an imageless card (blank tile = broken), then cap to `limit`.
