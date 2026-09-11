@@ -375,7 +375,7 @@ class CatalogController extends Controller
         $price = is_numeric($price) ? (float) $price : (is_string($price) ? (float) preg_replace('/[^0-9.]/', '', $price) : null);
 
         $images = [];
-        foreach (($pr['images'] ?? []) as $im) {
+        foreach (($pr['images'] ?? $pr['image_gallery'] ?? $pr['media'] ?? $json['product_images'] ?? []) as $im) {
             $u = is_string($im) ? $im : ($im['link'] ?? $im['image'] ?? null);
             if ($u && ! in_array($u, $images, true)) { $images[] = $u; }
             if (count($images) >= 12) { break; }
@@ -385,7 +385,7 @@ class CatalogController extends Controller
         // Availability: Amazon states it in words. Anything we cannot read stays UNKNOWN (null), never "sold out" —
         // the rule the whole variant layer follows.
         $availability = null;
-        $stock = strtolower((string) ($pr['availability'] ?? $pr['in_stock'] ?? ''));
+        $stock = strtolower((string) ($pr['stock'] ?? $pr['availability'] ?? data_get($json, 'purchase_options.0.stock') ?? $pr['in_stock'] ?? ''));
         if ($stock !== '') {
             if (str_contains($stock, 'unavailable') || str_contains($stock, 'out of stock')) { $availability = false; }
             elseif (str_contains($stock, 'in stock') || $stock === '1' || $stock === 'true') { $availability = true; }
@@ -395,24 +395,34 @@ class CatalogController extends Controller
         // each option being a separate ASIN — so these are independent axes, exactly like a page read.
         $axes = [];
         $variants = [];
-        $dims = $pr['variations'] ?? $pr['variants'] ?? [];
-        foreach ($dims as $name => $options) {
-            if (is_int($name)) { $name = $options['dimension'] ?? $options['name'] ?? 'Opción'; $options = $options['values'] ?? $options['items'] ?? []; }
+        // SerpAPI's shape: variants is an ARRAY of dimensions, each { title: "Size"|"Color"|"Flavor Name",
+        // items: [{ asin, name, selected }] }. The dimension name lives in `title`, the option label in `name`.
+        $selected = [];
+        foreach (($pr['variants'] ?? $pr['variations'] ?? []) as $dim) {
+            $name = trim((string) ($dim['title'] ?? $dim['dimension'] ?? ''));
+            $items = $dim['items'] ?? $dim['values'] ?? [];
+            if ($name === '' || ! is_array($items)) { continue; }
+            $label = ucfirst($name);
             $values = [];
-            foreach ((array) $options as $opt) {
-                $v = is_string($opt) ? $opt : ($opt['title'] ?? $opt['value'] ?? $opt['name'] ?? null);
-                if (! $v) { continue; }
+            foreach ($items as $opt) {
+                $v = is_string($opt) ? $opt : trim((string) ($opt['name'] ?? $opt['title'] ?? $opt['value'] ?? ''));
+                if ($v === '') { continue; }
                 $values[] = $v;
+                if (! empty($opt['selected'])) { $selected[$label] = $v; }
                 $variants[] = [
-                    'key' => $name . ':' . $v,
-                    'options' => [ucfirst((string) $name) => $v],
-                    // Amazon does not say per-option stock on the parent page: unknown, never false.
+                    'key' => $label . ':' . $v,
+                    'options' => [$label => $v],
+                    // Each option is its own ASIN; the parent page does not state per-option stock. Unknown, never false.
                     'available' => null,
                     'price' => isset($opt['price']) && is_numeric($opt['price']) ? (float) $opt['price'] : null,
-                    'url' => isset($opt['asin']) ? 'https://www.amazon.com/dp/' . $opt['asin'] : null,
+                    'url' => ! empty($opt['asin']) ? 'https://www.amazon.com/dp/' . $opt['asin'] : null,
                 ];
             }
-            if ($values) { $axes[] = ['name' => ucfirst((string) $name), 'kind' => stripos($name, 'siz') !== false ? 'size' : (stripos($name, 'col') !== false ? 'color' : 'other'), 'values' => array_values(array_unique($values))]; }
+            if ($values) {
+                $lower = strtolower($name);
+                $kind = str_contains($lower, 'siz') ? 'size' : (str_contains($lower, 'col') ? 'color' : 'other');
+                $axes[] = ['name' => $label, 'kind' => $kind, 'values' => array_values(array_unique($values))];
+            }
         }
         // No dimensions is a legitimate answer (a pack of cards, a single-SKU toy) — the page still gave us its
         // images, its price and whether it is available, which is the point of always visiting it.
@@ -432,7 +442,7 @@ class CatalogController extends Controller
             'axes' => $axes,
             'variants' => $variants,
             'axes_independent' => true,
-            'selected' => null,
+            'selected' => $selected ?: null,
             'availability' => $availability,
             'source' => 'amazon-product',
             'checked_at' => now()->toIso8601String(),
