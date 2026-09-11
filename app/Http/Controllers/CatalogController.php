@@ -190,6 +190,15 @@ class CatalogController extends Controller
 
         $products = Cache::get($cacheKey);
         if ($products === null) {
+            // CIRCUIT BREAKER (2026-09-11): during SerpAPI's Google outage every call hung the full 15 s, and
+            // with the assistant now firing Google beside every search those hangs pinned PHP-FPM workers
+            // until even /catalog/search calls queued past their timeout. After one timeout, Google is
+            // considered DOWN for 90 s and answers instantly with a retry hint; one probe re-tests it after.
+            $downKey = 'gshop:down';
+            $downUntil = Cache::get($downKey);
+            if ($downUntil !== null && (int) $downUntil > time()) {
+                return response()->json(['products' => [], 'error' => 'serpapi_unreachable', 'cooling' => true, 'retry_after_s' => max(1, (int) $downUntil - time())], 200);
+            }
             try {
                 $params = [
                     'engine' => 'google_shopping', 'q' => $query, 'gl' => 'us', 'hl' => 'en',
@@ -198,10 +207,13 @@ class CatalogController extends Controller
                 if ($location !== '') {
                     $params['location'] = $location;
                 }
-                $res = Http::timeout(15)->connectTimeout(5)->get('https://serpapi.com/search.json', $params);
+                // 8 s, not 15: Google Shopping answers in 1–3 s when healthy; a longer wait only pins a PHP-FPM worker.
+                $res = Http::timeout(8)->connectTimeout(4)->get('https://serpapi.com/search.json', $params);
             } catch (\Throwable $e) {
-                return response()->json(['products' => [], 'error' => 'serpapi_unreachable'], 200);
+                Cache::put($downKey, time() + 90, now()->addSeconds(95));
+                return response()->json(['products' => [], 'error' => 'serpapi_unreachable', 'cooling' => true, 'retry_after_s' => 90], 200);
             }
+            Cache::forget($downKey);
             if (! $res->ok()) {
                 return response()->json(['products' => [], 'error' => 'serpapi_error'], 200);
             }
