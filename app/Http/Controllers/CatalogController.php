@@ -221,11 +221,14 @@ class CatalogController extends Controller
                 return response()->json(['products' => [], 'error' => 'serpapi_busy', 'busy' => true, 'retry_after_s' => 10], 200);
             }
             $res = null;
-            // TOTAL BUDGET 9 s, not 12+12. The app gives this endpoint 10 s, so a 24 s worst case was time the
-            // caller never waited for — it only burned a worker after the app had already given up.
+            // TOTAL BUDGET 11 s, not 12+12. The app gives this endpoint 12 s, so a 24 s worst case was time the
+            // caller never waited for — it only burned a worker after the app had already given up. 11 s is
+            // chosen against the measured reality (serp-diag): a query SerpAPI has cached answers in 0.1–4 s and
+            // a cold one takes 6–20 s, so this catches the fast half in-turn and warmGoogleAfterResponse()
+            // finishes the slow half for the next search instead of discarding it.
             $startedAt = microtime(true);
             try {
-                $res = Http::timeout(6)->connectTimeout(3)->get('https://serpapi.com/search.json', $lean);
+                $res = Http::timeout(8)->connectTimeout(3)->get('https://serpapi.com/search.json', $lean);
             } catch (\Throwable $e) {
                 $res = null; // a TIMEOUT throws — do not give up here, the second attempt below is the whole point
             }
@@ -237,7 +240,7 @@ class CatalogController extends Controller
             if ($res === null || ! $res->ok() || empty(data_get($res->json(), 'shopping_results'))) {
                 try {
                     // Only if the budget has room left — the retry must not double the worker's time.
-                    $left = 9.0 - (microtime(true) - $startedAt);
+                    $left = 11.0 - (microtime(true) - $startedAt);
                     if ($left >= 2.5) {
                         // HOW the first attempt failed decides the second's shape. Hard failure (timeout, no
                         // response, an HTTP error) = the engine was unreachable, so try the SAME reliable lean
@@ -264,10 +267,12 @@ class CatalogController extends Controller
                 if ($fails >= 2) {
                     Cache::forget($failKey);
                     Cache::put($downKey, time() + 60, now()->addSeconds(65));
+                    $this->warmGoogleAfterResponse($query, $lean, $cacheKey);
                     return response()->json(['products' => [], 'error' => 'serpapi_unreachable', 'cooling' => true, 'retry_after_s' => 60], 200);
                 }
                 Cache::put($failKey, $fails, now()->addSeconds(120));
-                return response()->json(['products' => [], 'error' => 'serpapi_unreachable', 'strike' => $fails], 200);
+                $this->warmGoogleAfterResponse($query, $lean, $cacheKey);
+                return response()->json(['products' => [], 'error' => 'serpapi_slow', 'warming' => true, 'strike' => $fails], 200);
             }
             Cache::forget($downKey);
             Cache::forget($failKey);
@@ -564,6 +569,43 @@ class CatalogController extends Controller
      * amazon on the same host, same key, same TLS endpoint. The key itself is never echoed. Cheap: three probes.
      * Also answers "would a bigger budget help?" — if the engine answers at 14 s, our 6 s cap is the problem; if
      * it hangs to 30 s or returns an error, it is theirs. */
+    /** FINISH THE SLOW CALL AFTER THE SHOPPER HAS ALREADY BEEN ANSWERED (2026-09-11).
+     * Measured with /catalog/serp-diag: SerpAPI answers a query it has cached in 0.1–4 s, but one it must fetch
+     * live from Google takes 6–20 s — the engine is not down, it is SLOW ON COLD QUERIES since their 9/10
+     * incident. Our 9 s budget was turning those slow successes into failures and then cooling the breaker, so
+     * Google looked permanently dead. We cannot make the shopper wait 20 s, but we must not throw the work away
+     * either: the request keeps running after the response is sent, with a 25 s cap, and its result lands in the
+     * same cache key. The next search for those words — a refinement, a repeat, another shopper — is instant.
+     * The warm lock keeps one slow query from stacking up behind itself. */
+    private function warmGoogleAfterResponse(string $query, array $lean, string $cacheKey): void
+    {
+        $key = (string) config('services.serpapi.key');
+        if ($key === '') {
+            return;
+        }
+        $warmKey = 'gshop:warm:' . md5($query);
+        if (! Cache::add($warmKey, 1, 40)) {
+            return;
+        }
+        dispatch(function () use ($lean, $key, $cacheKey, $warmKey) {
+            try {
+                $res = Http::timeout(25)->connectTimeout(5)->get('https://serpapi.com/search.json', $lean + ['api_key' => $key]);
+                if ($res->ok() && ! empty(data_get($res->json(), 'shopping_results'))) {
+                    $products = $this->normalizeGoogleShopping($res->json());
+                    if ($products) {
+                        Cache::put($cacheKey, $products, now()->addSeconds(900));
+                        Cache::forget('gshop:down');
+                        Cache::forget('gshop:fails');
+                    }
+                }
+            } catch (\Throwable $e) {
+                // a warm that fails is simply a cache that stays cold — never surfaced to anyone
+            } finally {
+                Cache::forget($warmKey);
+            }
+        })->afterResponse();
+    }
+
     public function serpDiag(Request $request)
     {
         $key = (string) config('services.serpapi.key');
