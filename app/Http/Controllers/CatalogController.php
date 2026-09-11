@@ -199,32 +199,38 @@ class CatalogController extends Controller
             if ($downUntil !== null && (int) $downUntil > time()) {
                 return response()->json(['products' => [], 'error' => 'serpapi_unreachable', 'cooling' => true, 'retry_after_s' => max(1, (int) $downUntil - time())], 200);
             }
+            $params = [
+                'engine' => 'google_shopping', 'q' => $query, 'gl' => 'us', 'hl' => 'en',
+                'num' => 40, 'api_key' => $key,
+            ];
+            if ($location !== '') {
+                $params['location'] = $location;
+            }
+            $res = null;
             try {
-                $params = [
-                    'engine' => 'google_shopping', 'q' => $query, 'gl' => 'us', 'hl' => 'en',
-                    'num' => 40, 'api_key' => $key,
-                ];
-                if ($location !== '') {
-                    $params['location'] = $location;
-                }
                 // 12 s. 8 s was right while Google was hard-down (fail fast, stop pinning PHP-FPM workers), but
                 // SerpAPI now reports the engine operational and recovering — and a recovering engine answers
                 // slower than the 1–3 s it takes when healthy, so an 8 s cap was cutting off good responses and
                 // re-tripping the breaker. The breaker below is what protects the worker pool now, not the cap.
                 $res = Http::timeout(12)->connectTimeout(4)->get('https://serpapi.com/search.json', $params);
-                // SECOND CHANCE, LEANER. Every failing call hit the cap exactly — the signature of a request that
-                // hangs, not one that is merely slow. The two heaviest parameters are the city-level `location`
-                // (SerpAPI resolves it server-side) and `num=40`. If the full request fails or comes back empty,
-                // retry once without them rather than declaring Google down: a plain national query is the part
-                // most likely to still be served while the engine recovers.
-                if (! $res->ok() || empty(data_get($res->json(), 'shopping_results'))) {
+            } catch (\Throwable $e) {
+                $res = null; // a TIMEOUT throws — do not give up here, the lean retry below is the whole point
+            }
+            // SECOND CHANCE, LEANER. Every failing call hit the cap exactly, which is a request that hangs rather
+            // than one that is slow. The two heaviest parameters are the city-level `location` (SerpAPI resolves
+            // it server-side) and `num=40`. So when the full request times out, errors, or comes back empty, try
+            // once as a plain national query before declaring Google down. My first version of this retry sat
+            // INSIDE the try block after the call, so a timeout threw straight past it and it never ran.
+            if ($res === null || ! $res->ok() || empty(data_get($res->json(), 'shopping_results'))) {
+                try {
                     $lean = ['engine' => 'google_shopping', 'q' => $query, 'gl' => 'us', 'hl' => 'en', 'api_key' => $key];
                     $retry = Http::timeout(12)->connectTimeout(4)->get('https://serpapi.com/search.json', $lean);
                     if ($retry->ok() && ! empty(data_get($retry->json(), 'shopping_results'))) {
                         $res = $retry;
                     }
-                }
-            } catch (\Throwable $e) {
+                } catch (\Throwable $e) { /* keep whatever the first attempt gave us */ }
+            }
+            if ($res === null) {
                 Cache::put($downKey, time() + 90, now()->addSeconds(95));
                 return response()->json(['products' => [], 'error' => 'serpapi_unreachable', 'cooling' => true, 'retry_after_s' => 90], 200);
             }
