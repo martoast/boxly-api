@@ -207,8 +207,11 @@ class CatalogController extends Controller
                 if ($location !== '') {
                     $params['location'] = $location;
                 }
-                // 8 s, not 15: Google Shopping answers in 1–3 s when healthy; a longer wait only pins a PHP-FPM worker.
-                $res = Http::timeout(8)->connectTimeout(4)->get('https://serpapi.com/search.json', $params);
+                // 12 s. 8 s was right while Google was hard-down (fail fast, stop pinning PHP-FPM workers), but
+                // SerpAPI now reports the engine operational and recovering — and a recovering engine answers
+                // slower than the 1–3 s it takes when healthy, so an 8 s cap was cutting off good responses and
+                // re-tripping the breaker. The breaker below is what protects the worker pool now, not the cap.
+                $res = Http::timeout(12)->connectTimeout(4)->get('https://serpapi.com/search.json', $params);
             } catch (\Throwable $e) {
                 Cache::put($downKey, time() + 90, now()->addSeconds(95));
                 return response()->json(['products' => [], 'error' => 'serpapi_unreachable', 'cooling' => true, 'retry_after_s' => 90], 200);
