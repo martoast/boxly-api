@@ -785,4 +785,6 @@ Route::post('/catalog/product-variants', [\App\Http\Controllers\CatalogControlle
 Route::post('/catalog/google-shop', [\App\Http\Controllers\CatalogController::class, 'googleShop'])->middleware('throttle:120,1'); // all chat traffic arrives from a few Netlify egress IPs — 20/min per IP throttled real users
 Route::post('/catalog/amazon', [\App\Http\Controllers\CatalogController::class, 'amazon'])->middleware('throttle:120,1');
 // One Amazon PRODUCT from its page (images, availability, variant dimensions) — the modal's read for an amazon.com link.
+// A Google Shopping row -> the merchant's own product page (Google's rows only link to google.com).
+Route::post('/catalog/google-product', [\App\Http\Controllers\CatalogController::class, 'googleProduct'])->middleware('throttle:120,1');
 Route::post('/catalog/amazon-product', [\App\Http\Controllers\CatalogController::class, 'amazonProduct'])->middleware('throttle:120,1');

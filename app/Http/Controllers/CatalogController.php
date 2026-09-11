@@ -315,6 +315,9 @@ class CatalogController extends Controller
                 // Google's own catalog id. A shopping ROW's link points at Google, not the store — this id is the
                 // only way to reach the merchant's real product page (engine=google_product → sellers).
                 'product_id'   => $r['product_id'] ?? null,
+                // The handle for google_immersive_product, whose `stores` array carries the DIRECT merchant
+                // product links. Without it a Google row can never reach the store's own page.
+                'page_token'   => $r['immersive_product_page_token'] ?? null,
             ];
         }
 
@@ -450,6 +453,68 @@ class CatalogController extends Controller
             'source' => 'amazon-product',
             'checked_at' => now()->toIso8601String(),
         ];
+    }
+
+    // GOOGLE ROW -> THE MERCHANT'S OWN PRODUCT PAGE. A google_shopping result links to google.com, never to the
+    // store (confirmed in SerpAPI's own field list: product_link is "Link to the Google item page"). So a shopper
+    // tapping a Google result could never reach a product page to read variants from — the one hole in the
+    // universal pipeline. google_immersive_product takes the row's page token and returns a `stores` array whose
+    // entries DO carry direct merchant links; we hand back the best offer so the normal reader can take over.
+    public function googleProduct(Request $request)
+    {
+        $token = trim((string) $request->input('page_token'));
+        if ($token === '') {
+            return response()->json(['offers' => [], 'error' => 'need page_token'], 200);
+        }
+        $key = (string) config('services.serpapi.key');
+        if ($key === '') {
+            return response()->json(['offers' => [], 'error' => 'serpapi_not_configured'], 200);
+        }
+
+        $cacheKey = 'gprod:' . md5($token);
+        $payload = Cache::get($cacheKey);
+        if ($payload === null) {
+            try {
+                $res = Http::timeout(15)->connectTimeout(5)->get('https://serpapi.com/search.json', [
+                    'engine' => 'google_immersive_product', 'page_token' => $token,
+                    'gl' => 'us', 'hl' => 'en', 'api_key' => $key,
+                ]);
+            } catch (\Throwable $e) {
+                return response()->json(['offers' => [], 'error' => 'serpapi_unreachable'], 200);
+            }
+            if (! $res->ok()) {
+                return response()->json(['offers' => [], 'error' => 'serpapi_error'], 200);
+            }
+            $json = $res->json();
+            $pr = $json['product_results'] ?? [];
+
+            $offers = [];
+            foreach (($pr['stores'] ?? $json['stores'] ?? []) as $st) {
+                $link = $st['link'] ?? $st['product_link'] ?? null;
+                // Only a real merchant link is useful here — a google.com link is what we are trying to escape.
+                if (! $link || str_contains(parse_url($link, PHP_URL_HOST) ?? '', 'google.')) { continue; }
+                $price = $st['extracted_price'] ?? null;
+                if (! is_numeric($price) && ! empty($st['price'])) { $price = (float) preg_replace('/[^0-9.]/', '', (string) $st['price']); }
+                $offers[] = [
+                    'merchant' => $st['name'] ?? null,
+                    'url'      => $link,
+                    'price'    => is_numeric($price) ? (float) $price : null,
+                    'shipping' => $st['shipping'] ?? null,
+                ];
+                if (count($offers) >= 8) { break; }
+            }
+
+            $images = [];
+            foreach (($pr['thumbnails'] ?? []) as $t) {
+                $u = is_string($t) ? $t : ($t['link'] ?? null);
+                if ($u && ! in_array($u, $images, true)) { $images[] = $u; }
+                if (count($images) >= 12) { break; }
+            }
+
+            $payload = ['offers' => $offers, 'images' => $images, 'title' => $pr['title'] ?? null];
+            Cache::put($cacheKey, $payload, now()->addSeconds($offers ? 1800 : 120));
+        }
+        return response()->json($payload, 200);
     }
 
     // Amazon search: same contract as googleShop() (query → normalized products, cached,
