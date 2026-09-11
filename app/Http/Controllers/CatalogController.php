@@ -200,10 +200,14 @@ class CatalogController extends Controller
             if ($downUntil !== null && (int) $downUntil > time()) {
                 return response()->json(['products' => [], 'error' => 'serpapi_cooling', 'cooling' => true, 'retry_after_s' => max(1, (int) $downUntil - time())], 200);
             }
-            $params = [
-                'engine' => 'google_shopping', 'q' => $query, 'gl' => 'us', 'hl' => 'en',
-                'num' => 40, 'api_key' => $key,
-            ];
+            // LEAN FIRST (2026-09-11). The heavy shape — city-level `location`, which SerpAPI resolves server
+            // side, plus num=40 — is the one that times out: every real attempt today failed on it while the
+            // plain national query answered in 1.7–4.5 s. `location` only sharpened prices toward the San Diego
+            // warehouse, and merchant prices come from /catalog/google-product anyway, so it is no longer worth
+            // trading every Google result for. It becomes the SECOND attempt: the lean answer wins the race, and
+            // the richer one is tried only when we still have budget and nothing came back.
+            $lean = ['engine' => 'google_shopping', 'q' => $query, 'gl' => 'us', 'hl' => 'en', 'num' => 40, 'api_key' => $key];
+            $params = $lean;
             if ($location !== '') {
                 $params['location'] = $location;
             }
@@ -221,9 +225,9 @@ class CatalogController extends Controller
             // caller never waited for — it only burned a worker after the app had already given up.
             $startedAt = microtime(true);
             try {
-                $res = Http::timeout(6)->connectTimeout(3)->get('https://serpapi.com/search.json', $params);
+                $res = Http::timeout(6)->connectTimeout(3)->get('https://serpapi.com/search.json', $lean);
             } catch (\Throwable $e) {
-                $res = null; // a TIMEOUT throws — do not give up here, the lean retry below is the whole point
+                $res = null; // a TIMEOUT throws — do not give up here, the second attempt below is the whole point
             }
             // SECOND CHANCE, LEANER. Every failing call hit the cap exactly, which is a request that hangs rather
             // than one that is slow. The two heaviest parameters are the city-level `location` (SerpAPI resolves
@@ -235,8 +239,14 @@ class CatalogController extends Controller
                     // Only if the budget has room left — the retry must not double the worker's time.
                     $left = 9.0 - (microtime(true) - $startedAt);
                     if ($left >= 2.5) {
-                        $lean = ['engine' => 'google_shopping', 'q' => $query, 'gl' => 'us', 'hl' => 'en', 'api_key' => $key];
-                        $retry = Http::timeout((int) floor($left))->connectTimeout(3)->get('https://serpapi.com/search.json', $lean);
+                        // HOW the first attempt failed decides the second's shape. Hard failure (timeout, no
+                        // response, an HTTP error) = the engine was unreachable, so try the SAME reliable lean
+                        // shape again — transient timeouts are most of what we see. Answered-but-empty = the
+                        // engine works and simply had nothing for this shape, so the richer localized query is
+                        // the one worth spending the rest of the budget on.
+                        $answered = $res !== null && $res->ok();
+                        $second = $answered ? $params : $lean;
+                        $retry = Http::timeout((int) floor($left))->connectTimeout(3)->get('https://serpapi.com/search.json', $second);
                         if ($retry->ok() && ! empty(data_get($retry->json(), 'shopping_results'))) {
                             $res = $retry;
                         }
