@@ -312,6 +312,9 @@ class CatalogController extends Controller
                 'rating'       => $r['rating'] ?? null,
                 'reviews'      => $r['reviews'] ?? null,
                 'source'       => 'google',
+                // Google's own catalog id. A shopping ROW's link points at Google, not the store — this id is the
+                // only way to reach the merchant's real product page (engine=google_product → sellers).
+                'product_id'   => $r['product_id'] ?? null,
             ];
         }
 
