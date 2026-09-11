@@ -618,11 +618,15 @@ class CatalogController extends Controller
         }
         $q = trim((string) $request->input('q', 'soccer ball')) ?: 'soccer ball';
         $location = (string) config('services.serpapi.location');
+        // Every probe is a paid SerpAPI search, so the default run is the two that answer the question — is
+        // Google slow while Amazon is fine — and the slow localized shape costs a credit only on ?full=1.
         $probes = [
             'google_shopping_lean' => ['engine' => 'google_shopping', 'q' => $q, 'gl' => 'us', 'hl' => 'en', 'num' => 40],
             'amazon_baseline' => ['engine' => 'amazon', 'k' => $q, 'amazon_domain' => 'amazon.com', 'language' => 'en_US'],
-            'google_shopping_located' => array_filter(['engine' => 'google_shopping', 'q' => $q, 'gl' => 'us', 'hl' => 'en', 'num' => 40, 'location' => $location ?: null]),
         ];
+        if ($request->boolean('full')) {
+            $probes['google_shopping_located'] = array_filter(['engine' => 'google_shopping', 'q' => $q, 'gl' => 'us', 'hl' => 'en', 'num' => 40, 'location' => $location ?: null]);
+        }
         $out = [];
         foreach ($probes as $name => $params) {
             $t0 = microtime(true);

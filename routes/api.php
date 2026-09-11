@@ -785,7 +785,7 @@ Route::post('/catalog/product-variants', [\App\Http\Controllers\CatalogControlle
 Route::post('/catalog/google-shop', [\App\Http\Controllers\CatalogController::class, 'googleShop'])->middleware('throttle:120,1'); // all chat traffic arrives from a few Netlify egress IPs — 20/min per IP throttled real users
 Route::post('/catalog/amazon', [\App\Http\Controllers\CatalogController::class, 'amazon'])->middleware('throttle:120,1');
 // Is Google failing on SerpAPI's side or ours? Raw status/timing for google_shopping beside amazon (2026-09-11).
-Route::get('/catalog/serp-diag', [\App\Http\Controllers\CatalogController::class, 'serpDiag'])->middleware('throttle:10,1');
+Route::get('/catalog/serp-diag', [\App\Http\Controllers\CatalogController::class, 'serpDiag'])->middleware('throttle:3,1'); // each probe is a paid search — keep it rare
 // One Amazon PRODUCT from its page (images, availability, variant dimensions) — the modal's read for an amazon.com link.
 // A Google Shopping row -> the merchant's own product page (Google's rows only link to google.com).
 Route::post('/catalog/google-product', [\App\Http\Controllers\CatalogController::class, 'googleProduct'])->middleware('throttle:120,1');
