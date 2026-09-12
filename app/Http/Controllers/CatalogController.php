@@ -637,7 +637,7 @@ class CatalogController extends Controller
         // this search and marked sick for a minute, which is exactly "ignore the endpoints that take too long
         // and use the ones that are healthy" (Alex, 2026-09-11). Nothing is lost when that engine is Google:
         // the warm below finishes its query on the queue so the next search has it instantly.
-        $budget = max(3, min(15, (int) $request->input('budget_s', 6)));
+        $budget = max(3, min(15, (int) $request->input('budget_s', 5)));
         $want = array_values(array_filter(array_map('strval', (array) $request->input('engines', []))));
         $engines = $want ?: self::defaultEngines($query);
         // Google costs nothing when it is already cached, so take it; when it is not, ask the queue to fetch it
@@ -670,7 +670,7 @@ class CatalogController extends Controller
                 $sources[$name] = ['rows' => 0, 'status' => 'cooling'];
                 continue;
             }
-            $pending[$name] = ['params' => $spec['params']($query) + ['engine' => $spec['engine'], 'api_key' => $key], 'cache' => $cacheKey];
+            $pending[$name] = ['params' => $spec['params']($query) + ['engine' => $spec['engine'], 'api_key' => $key], 'cache' => $cacheKey, 'timeout' => $spec['timeout'] ?? 5];
         }
 
         // A GALLERY WITH A WAIT BEATS NO GALLERY. One slow minute had every engine cooling at once and a search
@@ -680,7 +680,7 @@ class CatalogController extends Controller
             foreach ($sick as $name) {
                 Cache::forget('web:sick:' . $name);
                 $spec = self::ENGINE_SPECS[$name];
-                $pending[$name] = ['params' => $spec['params']($query) + ['engine' => $spec['engine'], 'api_key' => $key], 'cache' => 'web:' . $name . ':' . md5(mb_strtolower($query))];
+                $pending[$name] = ['params' => $spec['params']($query) + ['engine' => $spec['engine'], 'api_key' => $key], 'cache' => 'web:' . $name . ':' . md5(mb_strtolower($query)), 'timeout' => $spec['timeout'] ?? 5];
                 $sources[$name] = ['rows' => 0, 'status' => 'retried'];
             }
         }
@@ -689,7 +689,7 @@ class CatalogController extends Controller
             $responses = Http::pool(function (Pool $pool) use ($pending, $budget) {
                 $calls = [];
                 foreach ($pending as $name => $p) {
-                    $calls[] = $pool->as($name)->timeout($budget)->connectTimeout(4)->get('https://serpapi.com/search.json', $p['params']);
+                    $calls[] = $pool->as($name)->timeout(min($budget, $p['timeout']))->connectTimeout(3)->get('https://serpapi.com/search.json', $p['params']);
                 }
                 return $calls;
             });
@@ -792,34 +792,43 @@ class CatalogController extends Controller
 
     /** One row per SerpAPI engine: how to ask it, and how to turn its answer into a gallery row. Adding an engine
      * is adding an entry here — nothing else in the fan-out knows their names. */
+    /** `timeout` is that engine's own ceiling, measured on 2026-09-11: Bing 1.9-2.2 s, Amazon 1.6-3.2 s, eBay
+     * 3.0-3.5 s, Walmart 3.9-8.2 s. One global budget meant Walmart's bad days cost every shopper six seconds
+     * even though three engines had answered in two, so the slow ones are cut sooner than the fast ones. */
     private const ENGINE_SPECS = [
         'google_shopping' => [
             'engine' => 'google_shopping',
+            'timeout' => 6,
             'params' => [self::class, 'paramsGoogleShopping'],
             'normalize' => [self::class, 'rowsGoogleShopping'],
         ],
         'amazon' => [
             'engine' => 'amazon',
+            'timeout' => 5,
             'params' => [self::class, 'paramsAmazon'],
             'normalize' => [self::class, 'rowsAmazon'],
         ],
         'ebay' => [
             'engine' => 'ebay',
+            'timeout' => 5,
             'params' => [self::class, 'paramsEbay'],
             'normalize' => [self::class, 'rowsEbay'],
         ],
         'bing_shopping' => [
             'engine' => 'bing_shopping',
+            'timeout' => 5,
             'params' => [self::class, 'paramsBing'],
             'normalize' => [self::class, 'rowsBing'],
         ],
         'walmart' => [
             'engine' => 'walmart',
+            'timeout' => 4,
             'params' => [self::class, 'paramsWalmart'],
             'normalize' => [self::class, 'rowsWalmart'],
         ],
         'home_depot' => [
             'engine' => 'home_depot',
+            'timeout' => 4,
             'params' => [self::class, 'paramsHomeDepot'],
             'normalize' => [self::class, 'rowsHomeDepot'],
         ],
