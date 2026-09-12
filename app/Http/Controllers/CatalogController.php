@@ -696,20 +696,32 @@ class CatalogController extends Controller
             $seen[$k] = true;
             return ! empty($r['image']);   // a blank tile is never shown
         };
-        $deals = [];
-        foreach ($all as $r) { if (! empty($r['on_sale']) && ! empty($r['discount_pct']) && $keep($r)) { $deals[] = $r; } }
-        usort($deals, fn ($a, $b) => ($b['discount_pct'] ?? 0) <=> ($a['discount_pct'] ?? 0));
-        $queues = [];
-        foreach ($out as $name => $rows) { $queues[$name] = array_values(array_filter($rows, $keep)); }
-        $rest = [];
-        for ($i = 0; $i < 60; $i++) {
-            $any = false;
-            foreach ($queues as $name => $rows) {
-                if (isset($rows[$i])) { $rest[] = $rows[$i] + ['engine' => $name]; $any = true; }
-            }
-            if (! $any) { break; }
+        // The DEALS are interleaved by engine too. Sorting them by discount alone put five Amazon rows at the
+        // top of a five-engine gallery, which is the burying this whole change exists to prevent: each engine's
+        // deals are ranked by depth, then we take one from each in turn.
+        $dealQ = [];
+        foreach ($out as $name => $rows) {
+            $mine = [];
+            foreach ($rows as $r) { if (! empty($r['on_sale']) && ! empty($r['discount_pct']) && $keep($r)) { $mine[] = $r + ['engine' => $name]; } }
+            usort($mine, fn ($a, $b) => ($b['discount_pct'] ?? 0) <=> ($a['discount_pct'] ?? 0));
+            if ($mine) { $dealQ[$name] = $mine; }
         }
-        $products = array_slice(array_merge($deals, $rest), 0, $limit);
+        $restQ = [];
+        foreach ($out as $name => $rows) {
+            $mine = [];
+            foreach ($rows as $r) { if ($keep($r)) { $mine[] = $r + ['engine' => $name]; } }
+            if ($mine) { $restQ[$name] = $mine; }
+        }
+        $roundRobin = function (array $queues): array {
+            $merged = [];
+            for ($i = 0; ; $i++) {
+                $any = false;
+                foreach ($queues as $rows) { if (isset($rows[$i])) { $merged[] = $rows[$i]; $any = true; } }
+                if (! $any) { break; }
+            }
+            return $merged;
+        };
+        $products = array_slice(array_merge($roundRobin($dealQ), $roundRobin($restQ)), 0, $limit);
 
         return response()->json([
             'products' => $products,
