@@ -784,6 +784,9 @@ Route::post('/catalog/product-variants', [\App\Http\Controllers\CatalogControlle
 // Heavy + serialized + rate-limited upstream (Google walls sustained use), so throttled tight.
 Route::post('/catalog/google-shop', [\App\Http\Controllers\CatalogController::class, 'googleShop'])->middleware('throttle:120,1'); // all chat traffic arrives from a few Netlify egress IPs — 20/min per IP throttled real users
 Route::post('/catalog/amazon', [\App\Http\Controllers\CatalogController::class, 'amazon'])->middleware('throttle:120,1');
+// EVERY healthy engine at once — google shopping + amazon + ebay + bing + walmart (+ home depot for tool words),
+// fanned out in parallel with Http::pool so one slow engine never decides whether the shopper sees a gallery.
+Route::post('/catalog/web-search', [\App\Http\Controllers\CatalogController::class, 'webSearch'])->middleware('throttle:120,1');
 // Is Google failing on SerpAPI's side or ours? Raw status/timing for google_shopping beside amazon (2026-09-11).
 Route::get('/catalog/serp-diag', [\App\Http\Controllers\CatalogController::class, 'serpDiag'])->middleware('throttle:3,1'); // each probe is a paid search — keep it rare
 // One Amazon PRODUCT from its page (images, availability, variant dimensions) — the modal's read for an amazon.com link.

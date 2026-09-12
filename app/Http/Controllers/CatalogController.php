@@ -3,6 +3,8 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
+use Illuminate\Http\Client\Pool;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Cache;
 
@@ -608,6 +610,274 @@ class CatalogController extends Controller
                 Cache::forget($warmKey);
             }
         })->onQueue('default');
+    }
+
+    /** EVERY HEALTHY ENGINE AT ONCE (Alex, 2026-09-11: "we can have ebay and bing help supplement to get more
+     * results, and in the case where say google api is down the others can help supplement... can we have these
+     * calls be in parallel and not really take time at all, and just ignore the endpoints that take too long to
+     * return and use the ones that are healthy").
+     *
+     * One request, one PHP worker, N SerpAPI engines IN FLIGHT TOGETHER via Http::pool (Guzzle async), so the
+     * wall clock is the SLOWEST engine, not their sum. Whoever answers inside the budget contributes rows;
+     * whoever does not is simply absent and is marked unhealthy for a minute so it stops costing us latency.
+     * This is also the answer to Google's cold-query slowness: the gallery no longer depends on any one engine. */
+    public function webSearch(Request $request)
+    {
+        $query = trim((string) $request->input('query'));
+        if ($query === '') {
+            return response()->json(['products' => [], 'error' => 'need query'], 200);
+        }
+        $key = (string) config('services.serpapi.key');
+        if ($key === '') {
+            return response()->json(['products' => [], 'error' => 'serpapi_not_configured'], 200);
+        }
+        $limit = $request->filled('limit') ? max(1, min(60, (int) $request->input('limit'))) : 48;
+        // 9 s: the pool returns when the slowest engine inside the budget does. The app allows 12 s.
+        $budget = max(3, min(15, (int) $request->input('budget_s', 9)));
+        $want = array_values(array_filter(array_map('strval', (array) $request->input('engines', []))));
+        $engines = $want ?: self::defaultEngines($query);
+
+        $out = [];
+        $sources = [];
+        $pending = [];
+        foreach ($engines as $name) {
+            $spec = self::ENGINE_SPECS[$name] ?? null;
+            if (! $spec) { continue; }
+            $cacheKey = 'web:' . $name . ':' . md5(mb_strtolower($query));
+            $hit = Cache::get($cacheKey);
+            if ($hit !== null) {
+                $out[$name] = $hit;
+                $sources[$name] = ['rows' => count($hit), 'status' => 'cached'];
+                continue;
+            }
+            if (Cache::get('web:sick:' . $name) !== null) {
+                $sources[$name] = ['rows' => 0, 'status' => 'cooling'];
+                continue;
+            }
+            $pending[$name] = ['params' => $spec['params']($query) + ['engine' => $spec['engine'], 'api_key' => $key], 'cache' => $cacheKey];
+        }
+
+        if ($pending) {
+            $responses = Http::pool(function (Pool $pool) use ($pending, $budget) {
+                $calls = [];
+                foreach ($pending as $name => $p) {
+                    $calls[] = $pool->as($name)->timeout($budget)->connectTimeout(4)->get('https://serpapi.com/search.json', $p['params']);
+                }
+                return $calls;
+            });
+            foreach ($pending as $name => $p) {
+                $res = $responses[$name] ?? null;
+                if (! $res instanceof Response) {           // a throwable lands here instead of a response
+                    Cache::put('web:sick:' . $name, 1, now()->addSeconds(60));
+                    $sources[$name] = ['rows' => 0, 'status' => 'timeout'];
+                    continue;
+                }
+                if (! $res->ok()) {
+                    $sources[$name] = ['rows' => 0, 'status' => 'http_' . $res->status()];
+                    continue;
+                }
+                $rows = self::ENGINE_SPECS[$name]['normalize']($this, $res->json());
+                // An engine that answered but found nothing is HEALTHY — cache the empty briefly so we do not
+                // pay for the same miss twice, and never mark it sick.
+                Cache::put($p['cache'], $rows, now()->addSeconds($rows ? 600 : 90));
+                $out[$name] = $rows;
+                $sources[$name] = ['rows' => count($rows), 'status' => 'ok'];
+            }
+        }
+
+        // INTERLEAVE, never concatenate: one engine with 40 rows must not bury the other five. Deals lead
+        // (that is the product's promise), then round-robin so every engine is represented near the top.
+        $all = [];
+        foreach ($out as $name => $rows) { foreach ($rows as $r) { $all[] = $r + ['engine' => $name]; } }
+        $seen = [];
+        $keep = function (array $r) use (&$seen): bool {
+            $k = mb_substr(preg_replace('/[^a-z0-9]+/', ' ', mb_strtolower((string) ($r['title'] ?? ''))), 0, 60);
+            if ($k === '' || isset($seen[$k])) { return false; }
+            $seen[$k] = true;
+            return ! empty($r['image']);   // a blank tile is never shown
+        };
+        $deals = [];
+        foreach ($all as $r) { if (! empty($r['on_sale']) && ! empty($r['discount_pct']) && $keep($r)) { $deals[] = $r; } }
+        usort($deals, fn ($a, $b) => ($b['discount_pct'] ?? 0) <=> ($a['discount_pct'] ?? 0));
+        $queues = [];
+        foreach ($out as $name => $rows) { $queues[$name] = array_values(array_filter($rows, $keep)); }
+        $rest = [];
+        for ($i = 0; $i < 60; $i++) {
+            $any = false;
+            foreach ($queues as $name => $rows) {
+                if (isset($rows[$i])) { $rest[] = $rows[$i] + ['engine' => $name]; $any = true; }
+            }
+            if (! $any) { break; }
+        }
+        $products = array_slice(array_merge($deals, $rest), 0, $limit);
+
+        return response()->json([
+            'products' => $products,
+            'count' => count($products),
+            'sources' => $sources,
+            'engines' => array_keys($sources),
+            'source' => 'web',
+        ], 200);
+    }
+
+    /** Which engines to ask for THIS query. The broad five always; the specialists only when the words call for
+     * them, because every engine is a paid search. */
+    private static function defaultEngines(string $query): array
+    {
+        $base = ['google_shopping', 'amazon', 'ebay', 'bing_shopping', 'walmart'];
+        if (preg_match('/\b(tool|tools|drill|saw|hammer|wrench|screwdriver|ladder|paint|lumber|plywood|faucet|toilet|sink|tile|grout|caulk|hose|mower|trimmer|generator|insulation|drywall|plumbing|electrical|garage|shed|fence|deck|herramienta|taladro|sierra|martillo|llave|pintura|manguera|podadora|plomer|jardin|jardín)\b/iu', $query)) {
+            $base[] = 'home_depot';
+        }
+        return $base;
+    }
+
+    /** One row per SerpAPI engine: how to ask it, and how to turn its answer into a gallery row. Adding an engine
+     * is adding an entry here — nothing else in the fan-out knows their names. */
+    private const ENGINE_SPECS = [
+        'google_shopping' => [
+            'engine' => 'google_shopping',
+            'params' => [self::class, 'paramsGoogleShopping'],
+            'normalize' => [self::class, 'rowsGoogleShopping'],
+        ],
+        'amazon' => [
+            'engine' => 'amazon',
+            'params' => [self::class, 'paramsAmazon'],
+            'normalize' => [self::class, 'rowsAmazon'],
+        ],
+        'ebay' => [
+            'engine' => 'ebay',
+            'params' => [self::class, 'paramsEbay'],
+            'normalize' => [self::class, 'rowsEbay'],
+        ],
+        'bing_shopping' => [
+            'engine' => 'bing_shopping',
+            'params' => [self::class, 'paramsBing'],
+            'normalize' => [self::class, 'rowsBing'],
+        ],
+        'walmart' => [
+            'engine' => 'walmart',
+            'params' => [self::class, 'paramsWalmart'],
+            'normalize' => [self::class, 'rowsWalmart'],
+        ],
+        'home_depot' => [
+            'engine' => 'home_depot',
+            'params' => [self::class, 'paramsHomeDepot'],
+            'normalize' => [self::class, 'rowsHomeDepot'],
+        ],
+    ];
+
+    public static function paramsGoogleShopping(string $q): array { return ['q' => $q, 'gl' => 'us', 'hl' => 'en', 'num' => 40]; }
+    public static function paramsAmazon(string $q): array { return ['k' => $q, 'amazon_domain' => 'amazon.com', 'language' => 'en_US']; }
+    public static function paramsEbay(string $q): array { return ['_nkw' => $q, 'ebay_domain' => 'ebay.com', '_ipg' => 50, 'LH_ItemCondition' => 1000, 'LH_BIN' => 1]; }
+    public static function paramsBing(string $q): array { return ['q' => $q]; }
+    public static function paramsWalmart(string $q): array { return ['query' => $q]; }
+    public static function paramsHomeDepot(string $q): array { return ['q' => $q]; }
+
+    public static function rowsGoogleShopping($self, $json): array { return $self->normalizeGoogleShopping($json); }
+    public static function rowsAmazon($self, $json): array { return $self->normalizeAmazon($json); }
+
+    /** eBay. `LH_ItemCondition=1000` + `LH_BIN=1` already ask for NEW, Buy-It-Now only — auctions and used goods
+     * are not something Boxly can promise a delivery date on — and isSecondHand() catches whatever slips past.
+     * Its price is a from/to range object, so a range takes its low end. */
+    public static function rowsEbay($self, $json): array
+    {
+        $results = is_array($json) ? ($json['organic_results'] ?? null) : null;
+        if (! is_array($results)) { return []; }
+        $out = [];
+        foreach ($results as $r) {
+            $title = $r['title'] ?? null;
+            $link = $r['link'] ?? null;
+            if (! $title || ! $link) { continue; }
+            $cond = (string) ($r['condition'] ?? '');
+            if ($cond !== '' && ! preg_match('/\bnew\b/i', $cond)) { continue; }
+            if (self::isSecondHand($r + ['tag' => $cond], 'eBay', $title)) { continue; }
+            $price = data_get($r, 'price.extracted') ?? data_get($r, 'price.from.extracted') ?? data_get($r, 'price.extracted_value');
+            if (! is_numeric($price)) { continue; }
+            $out[] = [
+                'title' => $title, 'price' => (float) $price, 'was' => null, 'on_sale' => false, 'discount_pct' => null,
+                'store' => 'eBay', 'merchant' => data_get($r, 'seller.username') ?: 'eBay', 'brand' => null,
+                'image' => $r['thumbnail'] ?? null, 'url' => $link,
+                'rating' => null, 'reviews' => null, 'source' => 'ebay',
+            ];
+        }
+        return $out;
+    }
+
+    /** Bing Shopping. `external_link` is the merchant's own page; `link` is a Bing redirect, which our product
+     * reader cannot follow to variants — so a row without an external link is not worth showing. */
+    public static function rowsBing($self, $json): array
+    {
+        $results = is_array($json) ? ($json['shopping_results'] ?? null) : null;
+        if (! is_array($results)) { return []; }
+        $out = [];
+        foreach ($results as $r) {
+            $title = $r['title'] ?? null;
+            $url = $r['external_link'] ?? $r['link'] ?? null;
+            $price = $r['extracted_price'] ?? null;
+            if (! $title || ! $url || ! is_numeric($price)) { continue; }
+            $seller = (string) ($r['seller'] ?? $r['source'] ?? '');
+            if (self::isSecondHand($r, $seller, $title)) { continue; }
+            $img = $r['thumbnail'] ?? (is_array($r['thumbnails'] ?? null) ? ($r['thumbnails'][0] ?? null) : null);
+            $out[] = [
+                'title' => $title, 'price' => (float) $price, 'was' => null, 'on_sale' => false, 'discount_pct' => null,
+                'store' => $seller ?: 'Bing Shopping', 'merchant' => $seller ?: null, 'brand' => null,
+                'image' => $img, 'url' => $url, 'rating' => $r['rating'] ?? null, 'reviews' => $r['reviews'] ?? null,
+                'source' => 'bing',
+            ];
+        }
+        return $out;
+    }
+
+    /** Walmart. Carries real stock truth (`out_of_stock`) and a real was-price, so its rows can be honest about
+     * both — we drop what it says is out of stock rather than show a tile nobody can buy. */
+    public static function rowsWalmart($self, $json): array
+    {
+        $results = is_array($json) ? ($json['organic_results'] ?? null) : null;
+        if (! is_array($results)) { return []; }
+        $out = [];
+        foreach ($results as $r) {
+            $title = $r['title'] ?? null;
+            $url = $r['product_page_url'] ?? $r['link'] ?? null;
+            $price = data_get($r, 'primary_offer.offer_price');
+            if (! $title || ! $url || ! is_numeric($price)) { continue; }
+            if (! empty($r['out_of_stock'])) { continue; }
+            if (self::isSecondHand($r, 'Walmart', $title)) { continue; }
+            $was = data_get($r, 'primary_offer.min_price') ?: data_get($r, 'primary_offer.list_price');
+            $onSale = is_numeric($was) && $was > $price;
+            $out[] = [
+                'title' => $title, 'price' => (float) $price, 'was' => $onSale ? (float) $was : null,
+                'on_sale' => $onSale, 'discount_pct' => $onSale ? (int) round(100 * ($was - $price) / $was) : null,
+                'store' => 'Walmart', 'merchant' => $r['seller_name'] ?? 'Walmart', 'brand' => null,
+                'image' => $r['thumbnail'] ?? null, 'url' => $url,
+                'rating' => $r['rating'] ?? null, 'reviews' => $r['reviews'] ?? null, 'source' => 'walmart',
+            ];
+        }
+        return $out;
+    }
+
+    /** Home Depot, asked only for tool and home-improvement words (see defaultEngines). */
+    public static function rowsHomeDepot($self, $json): array
+    {
+        $results = is_array($json) ? ($json['products'] ?? null) : null;
+        if (! is_array($results)) { return []; }
+        $out = [];
+        foreach ($results as $r) {
+            $title = $r['title'] ?? null;
+            $url = $r['link'] ?? null;
+            $price = $r['price'] ?? null;
+            if (! $title || ! $url || ! is_numeric($price)) { continue; }
+            $was = $r['price_was'] ?? null;
+            $onSale = is_numeric($was) && $was > $price;
+            $img = is_array($r['thumbnails'] ?? null) ? (is_array($r['thumbnails'][0] ?? null) ? ($r['thumbnails'][0][0] ?? null) : ($r['thumbnails'][0] ?? null)) : ($r['thumbnail'] ?? null);
+            $out[] = [
+                'title' => $title, 'price' => (float) $price, 'was' => $onSale ? (float) $was : null,
+                'on_sale' => $onSale, 'discount_pct' => $onSale ? (int) round(100 * ($was - $price) / $was) : null,
+                'store' => 'The Home Depot', 'merchant' => 'The Home Depot', 'brand' => $r['brand'] ?? null,
+                'image' => $img, 'url' => $url, 'rating' => $r['rating'] ?? null, 'reviews' => $r['reviews'] ?? null,
+                'source' => 'home_depot',
+            ];
+        }
+        return $out;
     }
 
     public function serpDiag(Request $request)
