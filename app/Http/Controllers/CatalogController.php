@@ -640,6 +640,16 @@ class CatalogController extends Controller
         $budget = max(3, min(15, (int) $request->input('budget_s', 6)));
         $want = array_values(array_filter(array_map('strval', (array) $request->input('engines', []))));
         $engines = $want ?: self::defaultEngines($query);
+        // Google costs nothing when it is already cached, so take it; when it is not, ask the queue to fetch it
+        // (its slow cold query runs off the shopper's clock) and leave it out of this search entirely.
+        if (! $want && ! in_array('google_shopping', $engines, true)) {
+            $gKey = 'web:google_shopping:' . md5(mb_strtolower($query));
+            if (Cache::get($gKey) !== null) {
+                array_unshift($engines, 'google_shopping');
+            } elseif ($key !== '') {
+                $this->warmGoogleAfterResponse($query, self::paramsGoogleShopping($query) + ['engine' => 'google_shopping'], $gKey);
+            }
+        }
 
         $out = [];
         $sources = [];
@@ -747,7 +757,12 @@ class CatalogController extends Controller
      * them, because every engine is a paid search. */
     private static function defaultEngines(string $query): array
     {
-        $base = ['google_shopping', 'amazon', 'ebay', 'bing_shopping', 'walmart'];
+        // GOOGLE IS NOT IN THE LIVE PATH (Alex, 2026-09-11: "google is slow as hell right now, we might want to
+        // just have bing shopping for now because I can't accept 20 s loading times"). Bing Shopping covers the
+        // same ground — every US merchant, not one store — and answers in 1-2 s. Google is still used, but only
+        // when its answer is ALREADY CACHED: webSearch() adds it back for free in that case and otherwise sends
+        // the query to the queue to be warmed, so it shows up on the next search at no cost to this one.
+        $base = ['amazon', 'ebay', 'bing_shopping', 'walmart'];
         if (preg_match('/\b(tool|tools|drill|saw|hammer|wrench|screwdriver|ladder|paint|lumber|plywood|faucet|toilet|sink|tile|grout|caulk|hose|mower|trimmer|generator|insulation|drywall|plumbing|electrical|garage|shed|fence|deck|herramienta|taladro|sierra|martillo|llave|pintura|manguera|podadora|plomer|jardin|jardín)\b/iu', $query)) {
             $base[] = 'home_depot';
         }
