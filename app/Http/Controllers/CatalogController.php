@@ -635,22 +635,10 @@ class CatalogController extends Controller
         // 6 s: the pool returns when the SLOWEST engine inside the budget does, so the budget is the shopper's
         // wait. Amazon, eBay, Bing and Walmart all answer in 1-4 s; the one that cannot keep up is dropped for
         // this search and marked sick for a minute, which is exactly "ignore the endpoints that take too long
-        // and use the ones that are healthy" (Alex, 2026-09-11). Nothing is lost when that engine is Google:
-        // the warm below finishes its query on the queue so the next search has it instantly.
+        // and use the ones that are healthy" (Alex, 2026-09-11).
         $budget = max(3, min(20, (int) $request->input('budget_s', 10)));
         $want = array_values(array_filter(array_map('strval', (array) $request->input('engines', []))));
         $engines = $want ?: self::defaultEngines($query);
-        // Google costs nothing when it is already cached, so take it; when it is not, ask the queue to fetch it
-        // (its slow cold query runs off the shopper's clock) and leave it out of this search entirely.
-        if (! $want && ! in_array('google_shopping', $engines, true)) {
-            $gKey = 'web:google_shopping:' . md5(mb_strtolower($query));
-            if (Cache::get($gKey) !== null) {
-                array_unshift($engines, 'google_shopping');
-            } elseif ($key !== '') {
-                $this->warmGoogleAfterResponse($query, self::paramsGoogleShopping($query) + ['engine' => 'google_shopping'], $gKey);
-            }
-        }
-
         $out = [];
         $sources = [];
         $pending = [];
@@ -704,13 +692,6 @@ class CatalogController extends Controller
                     if ($strikes >= 2) { Cache::forget($strikeKey); Cache::put('web:sick:' . $name, 1, now()->addSeconds(30)); }
                     else { Cache::put($strikeKey, $strikes, now()->addSeconds(120)); }
                     $sources[$name] = ['rows' => 0, 'status' => 'timeout'];
-                    // Google is slow on a query it has not cached, never broken — finish it on the queue so the
-                    // next shopper who asks for these words gets it in a tenth of a second.
-                    if ($name === 'google_shopping') {
-                        // into THIS endpoint's cache key — the fan-out reads 'web:<engine>:<query>', not the
-                        // single-engine endpoint's 'gshop:' key, and the warm stores the same normalized rows.
-                        $this->warmGoogleAfterResponse($query, self::paramsGoogleShopping($query) + ['engine' => 'google_shopping'], 'web:google_shopping:' . md5(mb_strtolower($query)));
-                    }
                     continue;
                 }
                 if (! $res->ok()) {
@@ -778,11 +759,11 @@ class CatalogController extends Controller
      * them, because every engine is a paid search. */
     private static function defaultEngines(string $query): array
     {
-        // ALL SIX ENGINES (Alex, 2026-09-11, after a day of Google being the slow one: "keep all the engines,
-        // I want the best results"). Google is back in the live list with a 9 s ceiling — when its answer is
-        // cached it lands instantly, when it is cold it usually misses the ceiling and the queue warms it for
-        // the next search, so it contributes either way and never holds the gallery past the budget.
-        $base = ['google_shopping', 'amazon', 'ebay', 'bing_shopping', 'walmart'];
+        // NO GOOGLE (Alex, 2026-09-11, twice: "google is slow as hell", then "just remove google, I already
+        // told you that one is too slow"). It is out of the web fan-out entirely — not cached, not warmed, not
+        // asked. Bing Shopping covers the same ground, every US merchant rather than one store, in 1.9-2.2 s.
+        // The /catalog/google-shop endpoint stays for the merchant-resolution path, but nothing here calls it.
+        $base = ['amazon', 'ebay', 'bing_shopping', 'walmart'];
         if (preg_match('/\b(tool|tools|drill|saw|hammer|wrench|screwdriver|ladder|paint|lumber|plywood|faucet|toilet|sink|tile|grout|caulk|hose|mower|trimmer|generator|insulation|drywall|plumbing|electrical|garage|shed|fence|deck|herramienta|taladro|sierra|martillo|llave|pintura|manguera|podadora|plomer|jardin|jardín)\b/iu', $query)) {
             $base[] = 'home_depot';
         }
