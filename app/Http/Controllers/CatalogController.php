@@ -654,6 +654,7 @@ class CatalogController extends Controller
         $out = [];
         $sources = [];
         $pending = [];
+        $sick = [];
         foreach ($engines as $name) {
             $spec = self::ENGINE_SPECS[$name] ?? null;
             if (! $spec) { continue; }
@@ -665,10 +666,23 @@ class CatalogController extends Controller
                 continue;
             }
             if (Cache::get('web:sick:' . $name) !== null) {
+                $sick[] = $name;
                 $sources[$name] = ['rows' => 0, 'status' => 'cooling'];
                 continue;
             }
             $pending[$name] = ['params' => $spec['params']($query) + ['engine' => $spec['engine'], 'api_key' => $key], 'cache' => $cacheKey];
+        }
+
+        // A GALLERY WITH A WAIT BEATS NO GALLERY. One slow minute had every engine cooling at once and a search
+        // for "leggings women" came back with zero rows — the protection eating the product. When nothing is
+        // left to ask, we ask the sick ones anyway and let the budget decide.
+        if (! $pending && ! $out && $sick) {
+            foreach ($sick as $name) {
+                Cache::forget('web:sick:' . $name);
+                $spec = self::ENGINE_SPECS[$name];
+                $pending[$name] = ['params' => $spec['params']($query) + ['engine' => $spec['engine'], 'api_key' => $key], 'cache' => 'web:' . $name . ':' . md5(mb_strtolower($query))];
+                $sources[$name] = ['rows' => 0, 'status' => 'retried'];
+            }
         }
 
         if ($pending) {
@@ -682,7 +696,13 @@ class CatalogController extends Controller
             foreach ($pending as $name => $p) {
                 $res = $responses[$name] ?? null;
                 if (! $res instanceof Response) {           // a throwable lands here instead of a response
-                    Cache::put('web:sick:' . $name, 1, now()->addSeconds(60));
+                    // TWO STRIKES, like the Google breaker: one slow query must not blacklist an engine for a
+                    // whole minute of other shoppers' searches. A single timeout is remembered for 2 min; only
+                    // a second one inside that window benches the engine, and then only for 30 s.
+                    $strikeKey = 'web:strike:' . $name;
+                    $strikes = ((int) Cache::get($strikeKey, 0)) + 1;
+                    if ($strikes >= 2) { Cache::forget($strikeKey); Cache::put('web:sick:' . $name, 1, now()->addSeconds(30)); }
+                    else { Cache::put($strikeKey, $strikes, now()->addSeconds(120)); }
                     $sources[$name] = ['rows' => 0, 'status' => 'timeout'];
                     // Google is slow on a query it has not cached, never broken — finish it on the queue so the
                     // next shopper who asks for these words gets it in a tenth of a second.
@@ -701,6 +721,7 @@ class CatalogController extends Controller
                 // An engine that answered but found nothing is HEALTHY — cache the empty briefly so we do not
                 // pay for the same miss twice, and never mark it sick.
                 Cache::put($p['cache'], $rows, now()->addSeconds($rows ? 600 : 90));
+                Cache::forget('web:strike:' . $name);
                 $out[$name] = $rows;
                 $sources[$name] = ['rows' => count($rows), 'status' => 'ok'];
             }
