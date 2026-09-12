@@ -795,9 +795,14 @@ class CatalogController extends Controller
      * 3.0-3.5 s, Walmart 3.9-8.2 s. One global budget meant Walmart's bad days cost every shopper six seconds
      * even though three engines had answered in two, so the slow ones are cut sooner than the fast ones. */
     private const ENGINE_SPECS = [
+        // GOOGLE HAS ONLY TWO SPEEDS and no middle: 0.1-4 s when SerpAPI has the query cached, and 6-20 s when it
+        // must fetch it live. A generous ceiling therefore buys nothing — the cold case would not have landed at
+        // 9 s either, it just made every shopper wait for the disappointment (measured 9.7 s for a Google that
+        // contributed zero rows). 4 s takes every answer Google can actually give in time; the cold ones are
+        // warmed on the queue and arrive for the next search.
         'google_shopping' => [
             'engine' => 'google_shopping',
-            'timeout' => 9,
+            'timeout' => 4,
             'params' => [self::class, 'paramsGoogleShopping'],
             'normalize' => [self::class, 'rowsGoogleShopping'],
         ],
