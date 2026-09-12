@@ -632,8 +632,12 @@ class CatalogController extends Controller
             return response()->json(['products' => [], 'error' => 'serpapi_not_configured'], 200);
         }
         $limit = $request->filled('limit') ? max(1, min(60, (int) $request->input('limit'))) : 48;
-        // 9 s: the pool returns when the slowest engine inside the budget does. The app allows 12 s.
-        $budget = max(3, min(15, (int) $request->input('budget_s', 9)));
+        // 6 s: the pool returns when the SLOWEST engine inside the budget does, so the budget is the shopper's
+        // wait. Amazon, eBay, Bing and Walmart all answer in 1-4 s; the one that cannot keep up is dropped for
+        // this search and marked sick for a minute, which is exactly "ignore the endpoints that take too long
+        // and use the ones that are healthy" (Alex, 2026-09-11). Nothing is lost when that engine is Google:
+        // the warm below finishes its query on the queue so the next search has it instantly.
+        $budget = max(3, min(15, (int) $request->input('budget_s', 6)));
         $want = array_values(array_filter(array_map('strval', (array) $request->input('engines', []))));
         $engines = $want ?: self::defaultEngines($query);
 
@@ -670,6 +674,13 @@ class CatalogController extends Controller
                 if (! $res instanceof Response) {           // a throwable lands here instead of a response
                     Cache::put('web:sick:' . $name, 1, now()->addSeconds(60));
                     $sources[$name] = ['rows' => 0, 'status' => 'timeout'];
+                    // Google is slow on a query it has not cached, never broken — finish it on the queue so the
+                    // next shopper who asks for these words gets it in a tenth of a second.
+                    if ($name === 'google_shopping') {
+                        // into THIS endpoint's cache key — the fan-out reads 'web:<engine>:<query>', not the
+                        // single-engine endpoint's 'gshop:' key, and the warm stores the same normalized rows.
+                        $this->warmGoogleAfterResponse($query, self::paramsGoogleShopping($query) + ['engine' => 'google_shopping'], 'web:google_shopping:' . md5(mb_strtolower($query)));
+                    }
                     continue;
                 }
                 if (! $res->ok()) {
