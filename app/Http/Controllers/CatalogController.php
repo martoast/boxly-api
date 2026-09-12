@@ -719,32 +719,28 @@ class CatalogController extends Controller
             $seen[$k] = true;
             return ! empty($r['image']);   // a blank tile is never shown
         };
-        // The DEALS are interleaved by engine too. Sorting them by discount alone put five Amazon rows at the
-        // top of a five-engine gallery, which is the burying this whole change exists to prevent: each engine's
-        // deals are ranked by depth, then we take one from each in turn.
-        $dealQ = [];
-        foreach ($out as $name => $rows) {
-            $mine = [];
-            foreach ($rows as $r) { if (! empty($r['on_sale']) && ! empty($r['discount_pct']) && $keep($r)) { $mine[] = $r + ['engine' => $name]; } }
-            usort($mine, fn ($a, $b) => ($b['discount_pct'] ?? 0) <=> ($a['discount_pct'] ?? 0));
-            if ($mine) { $dealQ[$name] = $mine; }
-        }
-        $restQ = [];
+        // VARIETY FIRST, DEALS WITHIN IT (Alex, 2026-09-12: "our job is to join it from different stores").
+        // Putting every deal at the top sounded right and was not: only Amazon flags its markdowns, so a search
+        // for a coffee maker came back 33 Amazon rows out of 48 and the other three engines were buried. Each
+        // engine's own rows are ordered deals-first, then we take one engine at a time in turn — so the gallery
+        // opens with the best markdown from each store rather than one store's entire sale.
+        $queues = [];
         foreach ($out as $name => $rows) {
             $mine = [];
             foreach ($rows as $r) { if ($keep($r)) { $mine[] = $r + ['engine' => $name]; } }
-            if ($mine) { $restQ[$name] = $mine; }
+            usort($mine, function ($a, $b) {
+                $da = ! empty($a['on_sale']) && ! empty($a['discount_pct']) ? (int) $a['discount_pct'] : -1;
+                $db = ! empty($b['on_sale']) && ! empty($b['discount_pct']) ? (int) $b['discount_pct'] : -1;
+                return $db <=> $da;
+            });
+            if ($mine) { $queues[$name] = $mine; }
         }
-        $roundRobin = function (array $queues): array {
-            $merged = [];
-            for ($i = 0; ; $i++) {
-                $any = false;
-                foreach ($queues as $rows) { if (isset($rows[$i])) { $merged[] = $rows[$i]; $any = true; } }
-                if (! $any) { break; }
-            }
-            return $merged;
-        };
-        $products = array_slice(array_merge($roundRobin($dealQ), $roundRobin($restQ)), 0, $limit);
+        $products = [];
+        for ($i = 0; count($products) < $limit; $i++) {
+            $any = false;
+            foreach ($queues as $rows) { if (isset($rows[$i])) { $products[] = $rows[$i]; $any = true; if (count($products) >= $limit) { break; } } }
+            if (! $any) { break; }
+        }
 
         return response()->json([
             'products' => $products,
