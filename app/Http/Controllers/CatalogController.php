@@ -637,7 +637,7 @@ class CatalogController extends Controller
         // this search and marked sick for a minute, which is exactly "ignore the endpoints that take too long
         // and use the ones that are healthy" (Alex, 2026-09-11). Nothing is lost when that engine is Google:
         // the warm below finishes its query on the queue so the next search has it instantly.
-        $budget = max(3, min(15, (int) $request->input('budget_s', 5)));
+        $budget = max(3, min(20, (int) $request->input('budget_s', 10)));
         $want = array_values(array_filter(array_map('strval', (array) $request->input('engines', []))));
         $engines = $want ?: self::defaultEngines($query);
         // Google costs nothing when it is already cached, so take it; when it is not, ask the queue to fetch it
@@ -778,12 +778,11 @@ class CatalogController extends Controller
      * them, because every engine is a paid search. */
     private static function defaultEngines(string $query): array
     {
-        // GOOGLE IS NOT IN THE LIVE PATH (Alex, 2026-09-11: "google is slow as hell right now, we might want to
-        // just have bing shopping for now because I can't accept 20 s loading times"). Bing Shopping covers the
-        // same ground — every US merchant, not one store — and answers in 1-2 s. Google is still used, but only
-        // when its answer is ALREADY CACHED: webSearch() adds it back for free in that case and otherwise sends
-        // the query to the queue to be warmed, so it shows up on the next search at no cost to this one.
-        $base = ['amazon', 'ebay', 'bing_shopping', 'walmart'];
+        // ALL SIX ENGINES (Alex, 2026-09-11, after a day of Google being the slow one: "keep all the engines,
+        // I want the best results"). Google is back in the live list with a 9 s ceiling — when its answer is
+        // cached it lands instantly, when it is cold it usually misses the ceiling and the queue warms it for
+        // the next search, so it contributes either way and never holds the gallery past the budget.
+        $base = ['google_shopping', 'amazon', 'ebay', 'bing_shopping', 'walmart'];
         if (preg_match('/\b(tool|tools|drill|saw|hammer|wrench|screwdriver|ladder|paint|lumber|plywood|faucet|toilet|sink|tile|grout|caulk|hose|mower|trimmer|generator|insulation|drywall|plumbing|electrical|garage|shed|fence|deck|herramienta|taladro|sierra|martillo|llave|pintura|manguera|podadora|plomer|jardin|jardín)\b/iu', $query)) {
             $base[] = 'home_depot';
         }
@@ -798,37 +797,37 @@ class CatalogController extends Controller
     private const ENGINE_SPECS = [
         'google_shopping' => [
             'engine' => 'google_shopping',
-            'timeout' => 6,
+            'timeout' => 9,
             'params' => [self::class, 'paramsGoogleShopping'],
             'normalize' => [self::class, 'rowsGoogleShopping'],
         ],
         'amazon' => [
             'engine' => 'amazon',
-            'timeout' => 5,
+            'timeout' => 7,
             'params' => [self::class, 'paramsAmazon'],
             'normalize' => [self::class, 'rowsAmazon'],
         ],
         'ebay' => [
             'engine' => 'ebay',
-            'timeout' => 5,
+            'timeout' => 7,
             'params' => [self::class, 'paramsEbay'],
             'normalize' => [self::class, 'rowsEbay'],
         ],
         'bing_shopping' => [
             'engine' => 'bing_shopping',
-            'timeout' => 5,
+            'timeout' => 7,
             'params' => [self::class, 'paramsBing'],
             'normalize' => [self::class, 'rowsBing'],
         ],
         'walmart' => [
             'engine' => 'walmart',
-            'timeout' => 4,
+            'timeout' => 8,
             'params' => [self::class, 'paramsWalmart'],
             'normalize' => [self::class, 'rowsWalmart'],
         ],
         'home_depot' => [
             'engine' => 'home_depot',
-            'timeout' => 4,
+            'timeout' => 8,
             'params' => [self::class, 'paramsHomeDepot'],
             'normalize' => [self::class, 'rowsHomeDepot'],
         ],
