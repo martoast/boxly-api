@@ -717,7 +717,11 @@ class CatalogController extends Controller
             $k = mb_substr(preg_replace('/[^a-z0-9]+/', ' ', mb_strtolower((string) ($r['title'] ?? ''))), 0, 60);
             if ($k === '' || isset($seen[$k])) { return false; }
             $seen[$k] = true;
-            return ! empty($r['image']);   // a blank tile is never shown
+            // A blank tile is never shown, and neither is a row we cannot price: Boxly buys the item FOR the
+            // shopper, so a card with no price is not something they can decide on and not something we can put
+            // in a purchase request. SerpAPI omits the price on a few Amazon rows (Apple Watch SE 3, Series 11 —
+            // "see price in cart" listings), which is exactly the case this drops (2026-09-12).
+            return ! empty($r['image']) && isset($r['price']) && is_numeric($r['price']) && $r['price'] > 0;
         };
         // VARIETY FIRST, DEALS WITHIN IT (Alex, 2026-09-12: "our job is to join it from different stores").
         // Putting every deal at the top sounded right and was not: only Amazon flags its markdowns, so a search
