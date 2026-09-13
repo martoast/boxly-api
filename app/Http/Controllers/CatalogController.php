@@ -721,7 +721,13 @@ class CatalogController extends Controller
             // shopper, so a card with no price is not something they can decide on and not something we can put
             // in a purchase request. SerpAPI omits the price on a few Amazon rows (Apple Watch SE 3, Series 11 —
             // "see price in cart" listings), which is exactly the case this drops (2026-09-12).
-            return ! empty($r['image']) && isset($r['price']) && is_numeric($r['price']) && $r['price'] > 0;
+            if (empty($r['image']) || ! isset($r['price']) || ! is_numeric($r['price']) || $r['price'] <= 0) { return false; }
+            // A MERCHANT BOXLY CANNOT ACTUALLY BUY FROM IS WORSE THAN NO ROW. A search for nappies came back with
+            // DoorDash, Instacart and Shipt listings: those are LOCAL delivery services, not shops that will send
+            // a parcel to our US warehouse, and the first thing anyone watching a demo asks is "can you really get
+            // that?" Overseas marketplaces are out for the same reason — the whole promise is US to Mexico.
+            $where = mb_strtolower(((string) ($r['store'] ?? '')) . ' ' . ((string) ($r['merchant'] ?? '')) . ' ' . ((string) ($r['url'] ?? '')));
+            return ! preg_match('~doordash|instacart|shipt\.com|ubereats|uber ?eats|gopuff|getir|drizly|favor ?delivery|aliexpress|\btemu\b|wish\.com|alibaba|dhgate|banggood|shein|joom\b~', $where);
         };
         // VARIETY FIRST, DEALS WITHIN IT (Alex, 2026-09-12: "our job is to join it from different stores").
         // Putting every deal at the top sounded right and was not: only Amazon flags its markdowns, so a search
