@@ -416,6 +416,17 @@ class CatalogController extends Controller
         return response()->json($payload, 200);
     }
 
+    /**
+     * Amazon serves every size of an image from the same url through its size token
+     * (…/51VNUN-QuhL._SS64_.jpg). The variant thumbnails come back at 64px, which is 2KB
+     * and unusable as a hero photo; the same url at SL800 is a real picture. Measured:
+     * _SS64_ 2,125 B, _SL500_ 49,099 B, _SS600_ 44,953 B, all HTTP 200.
+     */
+    private static function amazonImageAtSize(string $url, string $token): string
+    {
+        return preg_replace('#\._[A-Z]{2}[0-9]+_\.#', '._' . $token . '_.', $url, 1) ?: $url;
+    }
+
     /** SerpAPI amazon_product -> the same shape /catalog/product-variants returns, so the modal needs no special case. */
     private function normalizeAmazonProduct(array $json, string $asin): array
     {
@@ -446,6 +457,7 @@ class CatalogController extends Controller
         // each option being a separate ASIN — so these are independent axes, exactly like a page read.
         $axes = [];
         $variants = [];
+        $swatchImages = [];
         // SerpAPI's shape: variants is an ARRAY of dimensions, each { title: "Size"|"Color"|"Flavor Name",
         // items: [{ asin, name, selected }] }. The dimension name lives in `title`, the option label in `name`.
         $selected = [];
@@ -460,6 +472,16 @@ class CatalogController extends Controller
                 if ($v === '') { continue; }
                 $values[] = $v;
                 if (! empty($opt['selected'])) { $selected[$label] = $v; }
+                // PICKING A COLOUR HAS TO CHANGE THE PICTURE. SerpAPI hands us a per-option
+                // image and we were throwing it away, so "Black Orange" and "Black Yellow"
+                // both showed the same photo and the shopper could not tell what they were
+                // choosing (Alex, 2026-09-13: "you select the variant, you see it reflected
+                // in the image"). The thumbnail it gives is 64px — fine for the chip, far
+                // too small for the hero — and Amazon serves any size from the same url via
+                // its size token, so keep the small one for the swatch and a big one for the
+                // photo.
+                $thumb = is_string($opt['image'] ?? null) ? $opt['image'] : null;
+                if ($thumb) { $swatchImages[$label][$v] = $thumb; }
                 $variants[] = [
                     'key' => $label . ':' . $v,
                     'options' => [$label => $v],
@@ -467,12 +489,17 @@ class CatalogController extends Controller
                     'available' => null,
                     'price' => isset($opt['price']) && is_numeric($opt['price']) ? (float) $opt['price'] : null,
                     'url' => ! empty($opt['asin']) ? 'https://www.amazon.com/dp/' . $opt['asin'] : null,
+                    'image' => $thumb ? self::amazonImageAtSize($thumb, 'SL800') : null,
                 ];
             }
             if ($values) {
                 $lower = strtolower($name);
                 $kind = str_contains($lower, 'siz') ? 'size' : (str_contains($lower, 'col') ? 'color' : 'other');
-                $axes[] = ['name' => $label, 'kind' => $kind, 'values' => array_values(array_unique($values))];
+                $axis = ['name' => $label, 'kind' => $kind, 'values' => array_values(array_unique($values))];
+                // The picker reads swatches off the axis first, then falls back to the
+                // variant row — give it both so a colour chip shows the colour.
+                if ($kind === 'color' && ! empty($swatchImages[$label])) { $axis['swatches'] = $swatchImages[$label]; }
+                $axes[] = $axis;
             }
         }
         // No dimensions is a legitimate answer (a pack of cards, a single-SKU toy) — the page still gave us its
