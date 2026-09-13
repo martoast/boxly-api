@@ -377,6 +377,171 @@ class CatalogController extends Controller
     // A search row carries one image, no sizes and no stock. SerpAPI's `amazon_product` engine takes the ASIN out
     // of the product URL and returns the page: title, price, availability, the image gallery and the variant
     // dimensions. Same vendor and key as the search, so no new dependency and nothing scraped by us.
+    /**
+     * VARIANTS FOR A STORE WHOSE OWN PAGE WE CANNOT READ.
+     *
+     * New Balance answers every server-side fetch with 403 (edge bot protection, not the
+     * user agent — a full browser header set is refused too), and in the headless browser
+     * the page loads but exposes an EMPTY accessibility tree: three reads on 2026-09-13,
+     * at 7s, +3s and +8s, all returned "this page exposes no content". So there is no
+     * amount of retrying that reads it, and the modal fell back to a mirror whose colours
+     * carry no photos — pick a colour, nothing moves.
+     *
+     * Google's own product feed knows the product. google_product is dead ("no longer
+     * offered by Google"), but google_immersive_product carries the colour and size axes
+     * WITH per-option availability, and each colour links to itself so its photo can be
+     * fetched. That costs a call per colour, which is why the whole answer is cached for
+     * six hours rather than assembled while a shopper waits twice.
+     */
+    public function feedProduct(Request $request)
+    {
+        $query = trim((string) $request->input('query'));
+        $brand = trim((string) $request->input('brand'));
+        $withImages = $request->boolean('with_images', true);
+        if ($query === '') {
+            return response()->json(['variants' => [], 'axes' => [], 'error' => 'need query'], 200);
+        }
+        $key = (string) config('services.serpapi.key');
+        if ($key === '') {
+            return response()->json(['variants' => [], 'axes' => [], 'error' => 'serpapi_not_configured'], 200);
+        }
+
+        $cacheKey = 'feedprod:' . md5(mb_strtolower($query . '|' . $brand . '|' . ($withImages ? '1' : '0')));
+        if ($hit = Cache::get($cacheKey)) { return response()->json($hit, 200); }
+
+        try {
+            $search = Http::timeout(20)->get('https://serpapi.com/search.json', [
+                'engine' => 'google_shopping', 'q' => $query, 'gl' => 'us', 'hl' => 'en', 'api_key' => $key,
+            ]);
+            if (! $search->ok()) { return response()->json(['variants' => [], 'axes' => [], 'error' => 'serpapi_error'], 200); }
+            $rows = $search->json('shopping_results') ?? [];
+            // Prefer the brand's OWN listing: its colour names are the ones the shopper
+            // sees on the store, and a reseller's row names them differently.
+            $pick = null;
+            foreach ($rows as $r) {
+                if (empty($r['immersive_product_page_token'])) { continue; }
+                $src = mb_strtolower((string) ($r['source'] ?? ''));
+                if ($brand !== '' && str_contains($src, mb_strtolower($brand))) { $pick = $r; break; }
+                $pick = $pick ?: $r;
+            }
+            if (! $pick) { return response()->json(['variants' => [], 'axes' => [], 'error' => 'no_feed_match'], 200); }
+
+            $imm = Http::timeout(25)->get('https://serpapi.com/search.json', [
+                'engine' => 'google_immersive_product', 'page_token' => $pick['immersive_product_page_token'], 'api_key' => $key,
+            ]);
+            if (! $imm->ok()) { return response()->json(['variants' => [], 'axes' => [], 'error' => 'serpapi_error'], 200); }
+            $payload = $this->normalizeFeedProduct($imm->json(), $pick, $key, $withImages);
+            Cache::put($cacheKey, $payload, now()->addHours(6));
+            return response()->json($payload, 200);
+        } catch (\Throwable $e) {
+            return response()->json(['variants' => [], 'axes' => [], 'error' => 'serpapi_unreachable'], 200);
+        }
+    }
+
+    /** google_immersive_product -> the shape /catalog/product-variants returns. */
+    private function normalizeFeedProduct(array $json, array $row, string $key, bool $withImages): array
+    {
+        $pr = $json['product_results'] ?? [];
+        $axes = [];
+        $variants = [];
+        $selected = [];
+        $swatches = [];
+        $colourLinks = [];
+        foreach (($pr['variants'] ?? []) as $dim) {
+            $name = trim((string) ($dim['title'] ?? ''));
+            if ($name === '') { continue; }
+            $values = [];
+            foreach (($dim['items'] ?? []) as $opt) {
+                $v = trim((string) ($opt['name'] ?? ''));
+                // Google prepends an "Any Color" / "Any Size" pseudo-option. It is not a
+                // thing anyone can buy, and offering it as a chip would let a shopper
+                // "choose" without choosing.
+                if ($v === '' || preg_match('/^any\s/i', $v)) { continue; }
+                $values[] = $v;
+                if (! empty($opt['selected'])) { $selected[$name] = $v; }
+                // Availability is per option here, which the mirror never knew.
+                $available = array_key_exists('available', $opt) ? filter_var($opt['available'], FILTER_VALIDATE_BOOLEAN) : null;
+                $variants[] = [
+                    'key' => $name . ':' . $v,
+                    'options' => [$name => $v],
+                    'available' => $available,
+                    'price' => null,
+                ];
+                if ($withImages && stripos($name, 'col') !== false && count($colourLinks) < 6 && ! empty($opt['serpapi_link'])) {
+                    $colourLinks[$v] = (string) $opt['serpapi_link'];
+                }
+            }
+            if ($values) {
+                $lower = mb_strtolower($name);
+                $kind = str_contains($lower, 'siz') ? 'size' : (str_contains($lower, 'col') ? 'color' : 'other');
+                $axis = ['name' => $name, 'kind' => $kind, 'values' => array_values(array_unique($values))];
+                $axes[] = $axis;
+            }
+        }
+        // ONE COLOUR AT A TIME WAS TOO SLOW TO SURVIVE. Six colours fetched serially, on top
+        // of the search and the immersive call, ran the request past its own timeout and the
+        // whole answer came back as serpapi_unreachable — so the shopper got nothing rather
+        // than a slow something. Ask for them together; the pool costs about what one does.
+        if ($colourLinks) {
+            $swatches = $this->feedColourImages($colourLinks, $key);
+            foreach ($axes as $i => $ax) {
+                if (($ax['kind'] ?? '') === 'color' && $swatches) { $axes[$i]['swatches'] = $swatches; }
+            }
+        }
+
+        // Hang each colour's photo on its variant row too, so the mirror can remember it
+        // and the hero can swap without another feed call.
+        foreach ($variants as $i => $v) {
+            $c = $v['options']['Color'] ?? $v['options']['color'] ?? null;
+            if ($c && isset($swatches[$c])) { $variants[$i]['image'] = $swatches[$c]; }
+        }
+        $images = array_values(array_filter(array_slice($pr['thumbnails'] ?? [], 0, 8), 'is_string'));
+        return [
+            'product' => [
+                'title' => $pr['title'] ?? ($row['title'] ?? null),
+                'url' => $row['link'] ?? ($row['product_link'] ?? null),
+                'price' => isset($row['extracted_price']) ? (float) $row['extracted_price'] : null,
+                'list_price' => null,
+                'image' => $images[0] ?? ($row['thumbnail'] ?? null),
+                'images' => $images,
+            ],
+            // Google lists each axis independently — a colour row carries no size — which
+            // is exactly what axes_independent means to the picker.
+            'axes_independent' => true,
+            'axes' => $axes,
+            'variants' => $variants,
+            'selected' => $selected ?: null,
+            'checked_at' => now()->toIso8601String(),
+            'source' => 'feed-immersive',
+        ];
+    }
+
+    /**
+     * Every colour's own photo, fetched together. Each link re-runs the immersive query
+     * with that colour selected, so its first thumbnail is that colour. A colour that does
+     * not answer is simply left without one — the chip still works, it just shows no photo,
+     * which is what the whole product looked like before.
+     */
+    private function feedColourImages(array $links, string $key): array
+    {
+        $names = array_keys($links);
+        try {
+            $responses = Http::pool(fn ($pool) => array_map(
+                fn ($l) => $pool->timeout(15)->get($l . '&api_key=' . urlencode($key)),
+                array_values($links),
+            ));
+        } catch (\Throwable $e) {
+            return [];
+        }
+        $out = [];
+        foreach ($responses as $i => $res) {
+            if (! ($res instanceof \Illuminate\Http\Client\Response) || ! $res->ok()) { continue; }
+            $th = $res->json('product_results.thumbnails') ?? [];
+            if (is_array($th) && isset($th[0]) && is_string($th[0])) { $out[$names[$i]] = $th[0]; }
+        }
+        return $out;
+    }
+
     public function amazonProduct(Request $request)
     {
         $asin = strtoupper(trim((string) $request->input('asin')));

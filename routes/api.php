@@ -793,3 +793,6 @@ Route::get('/catalog/serp-diag', [\App\Http\Controllers\CatalogController::class
 // A Google Shopping row -> the merchant's own product page (Google's rows only link to google.com).
 Route::post('/catalog/google-product', [\App\Http\Controllers\CatalogController::class, 'googleProduct'])->middleware('throttle:120,1');
 Route::post('/catalog/amazon-product', [\App\Http\Controllers\CatalogController::class, 'amazonProduct'])->middleware('throttle:120,1');
+// Variants for a store whose own page we cannot read (New Balance answers every
+// server fetch with 403 and exposes no accessibility tree to the browser).
+Route::post('/catalog/feed-product', [\App\Http\Controllers\CatalogController::class, 'feedProduct'])->middleware('throttle:60,1');
