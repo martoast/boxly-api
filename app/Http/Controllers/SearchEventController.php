@@ -32,6 +32,18 @@ class SearchEventController extends Controller
                 'results' => 'nullable|integer|min:0',
                 'answer'  => 'nullable|string', // for questions: what the assistant replied
                 'conversation_id' => 'nullable|integer', // the chat thread this happened in
+                // A SEARCH used to be logged inside /products/search, which saw the served rows
+                // first-hand. The AI now reads the catalog directly (boxly f436374, 2026-09-03),
+                // so that write stopped firing and search telemetry went dark for ten days while
+                // questions kept flowing. The caller reports the search instead, and it must be
+                // able to say everything the old write did or the dashboard stays half-blind:
+                // `broadened` is what keeps a generic store fill from reading as a real hit.
+                'broadened'      => 'nullable|boolean',
+                'served_query'   => 'nullable|string|max:255',
+                'results_sample' => 'nullable|array|max:12',
+                'results_sample.*.store' => 'nullable|string|max:120',
+                'results_sample.*.title' => 'nullable|string|max:140',
+                'results_sample.*.price' => 'nullable|numeric',
             ]);
 
             $userId = optional(auth('sanctum')->user())->id ?? optional($request->user())->id;
@@ -42,6 +54,13 @@ class SearchEventController extends Controller
             $sample = null;
             if (! empty($data['answer'])) {
                 $sample = [['answer' => mb_substr(trim($data['answer']), 0, 4000)]];
+            } elseif (! empty($data['results_sample'])) {
+                // A search keeps the rows it served, so the export can answer query→results.
+                $sample = array_map(fn ($r) => [
+                    'store' => isset($r['store']) ? mb_substr((string) $r['store'], 0, 120) : null,
+                    'title' => isset($r['title']) ? mb_substr((string) $r['title'], 0, 140) : null,
+                    'price' => $r['price'] ?? null,
+                ], array_slice($data['results_sample'], 0, 12));
             }
 
             SearchEvent::create([
@@ -53,6 +72,8 @@ class SearchEventController extends Controller
                 'title'          => $data['title'] ?? null,
                 'url'            => $data['url'] ?? null,
                 'results'        => $data['results'] ?? null,
+                'broadened'      => $data['broadened'] ?? false,
+                'served_query'   => $data['served_query'] ?? null,
                 'results_sample' => $sample,
             ]);
         } catch (\Throwable $e) {
