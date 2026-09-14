@@ -186,6 +186,16 @@ Route::middleware('auth:sanctum')->group(function () {
     // Ephemeral token for the in-app AI chat (separate from the MCP token).
     Route::post('/me/chat-token', [\App\Http\Controllers\McpTokenController::class, 'chatToken']);
 
+    // Self-serve API keys. A key IS a Sanctum personal access token, so it
+    // reaches exactly what its owner reaches in the app — the admin surface
+    // below is already auth:sanctum + admin. Admin-only for now; customer keys
+    // are a later pass. Full-access (`*`): scopes are not implemented yet.
+    Route::middleware('admin')->group(function () {
+        Route::get('/me/api-keys', [\App\Http\Controllers\ApiKeyController::class, 'index']);
+        Route::post('/me/api-keys', [\App\Http\Controllers\ApiKeyController::class, 'store']);
+        Route::delete('/me/api-keys/{id}', [\App\Http\Controllers\ApiKeyController::class, 'destroy']);
+    });
+
     // AI shopping assistant — chat threads (history sidebar + resume)
     Route::prefix('conversations')->group(function () {
         Route::get('/', [\App\Http\Controllers\ConversationController::class, 'index']);

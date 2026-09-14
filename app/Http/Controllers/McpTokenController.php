@@ -22,9 +22,9 @@ use Illuminate\Http\Request;
  */
 class McpTokenController extends Controller
 {
-    private const TOKEN_NAME = 'claude-mcp';
+    public const TOKEN_NAME = 'claude-mcp';
 
-    private const CHAT_TOKEN_NAME = 'boxly-web-chat';
+    public const CHAT_TOKEN_NAME = 'boxly-web-chat';
 
     /**
      * Lightweight token for the in-app AI chat's server-to-server tool calls.

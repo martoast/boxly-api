@@ -18,7 +18,7 @@ use Illuminate\Http\Request;
  */
 class ExtensionTokenController extends Controller
 {
-    private const TOKEN_NAME = 'chrome-extension';
+    public const TOKEN_NAME = 'chrome-extension';
 
     public function issue(Request $request)
     {
