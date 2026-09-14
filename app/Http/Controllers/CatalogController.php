@@ -417,13 +417,24 @@ class CatalogController extends Controller
             $rows = $search->json('shopping_results') ?? [];
             // Prefer the brand's OWN listing: its colour names are the ones the shopper
             // sees on the store, and a reseller's row names them differently.
+            // NEVER QUOTE A SIZE-SPECIFIC LISTING AS THE WHOLE PRODUCT. Google lists some
+            // items per size, so a match can be "Defy Leggings L" or "Dynamic Leggings XL"
+            // — a row whose axes describe that ONE size. Measured on DFYNE 2026-09-13: it
+            // answered with two sizes for a brand that sells more, which would tell a
+            // shopper their size does not exist. That is worse than admitting we could not
+            // read the page, so those rows are skipped and a real parent listing preferred.
+            $sizeSuffix = '/\s(?:XXS|XS|S|M|L|XL|XXL|XXXL|\d{1,2}\.5)$/i';
             $pick = null;
+            $fallback = null;
             foreach ($rows as $r) {
                 if (empty($r['immersive_product_page_token'])) { continue; }
+                $title = trim((string) ($r['title'] ?? ''));
+                if ($title !== '' && preg_match($sizeSuffix, $title)) { continue; }
                 $src = mb_strtolower((string) ($r['source'] ?? ''));
                 if ($brand !== '' && str_contains($src, mb_strtolower($brand))) { $pick = $r; break; }
-                $pick = $pick ?: $r;
+                $fallback = $fallback ?: $r;
             }
+            $pick = $pick ?: $fallback;
             if (! $pick) { return response()->json(['variants' => [], 'axes' => [], 'error' => 'no_feed_match'], 200); }
 
             $imm = Http::timeout(25)->get('https://serpapi.com/search.json', [
