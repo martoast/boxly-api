@@ -60,6 +60,10 @@ class CatalogController extends Controller
             // the catalog dropped them (relaxed_filters says which) rather than return empty.
             'relaxed' => (bool) ($data['relaxed'] ?? false),
             'relaxed_filters' => $data['relaxed_filters'] ?? [],
+            // brand_unmatched = the shopper named a brand we do not carry, and no row carries
+            // it either. The assistant must go to the web for that brand rather than render a
+            // gallery of other brands (see catalog_db.mjs, "A NAMED BRAND MEANS THAT BRAND ONLY").
+            'brand_unmatched' => $data['brand_unmatched'] ?? [],
             'products' => $data['products'] ?? [],
         ]);
     }
