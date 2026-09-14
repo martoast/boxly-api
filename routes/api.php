@@ -789,7 +789,20 @@ Route::post('/catalog/collection', [\App\Http\Controllers\CatalogController::cla
 // Live-grab fallback: fetch a specific product the catalog doesn't have with the
 // computer-use agent. Heavy + serialized upstream (~7-9s), so throttled tighter.
 Route::post('/catalog/live-grab', [\App\Http\Controllers\CatalogController::class, 'liveGrab'])->middleware('throttle:30,1');
+Route::post('/catalog/product-variants', [\App\Http\Controllers\CatalogController::class, 'productVariants'])->middleware('throttle:60,1');
 // Google Shopping fallback: out-of-catalog product search via the computer-use agent.
 // Heavy + serialized + rate-limited upstream (Google walls sustained use), so throttled tight.
-Route::post('/catalog/google-shop', [\App\Http\Controllers\CatalogController::class, 'googleShop'])->middleware('throttle:20,1');
-Route::post('/catalog/amazon', [\App\Http\Controllers\CatalogController::class, 'amazon'])->middleware('throttle:20,1');
+Route::post('/catalog/google-shop', [\App\Http\Controllers\CatalogController::class, 'googleShop'])->middleware('throttle:120,1'); // all chat traffic arrives from a few Netlify egress IPs — 20/min per IP throttled real users
+Route::post('/catalog/amazon', [\App\Http\Controllers\CatalogController::class, 'amazon'])->middleware('throttle:120,1');
+// EVERY healthy engine at once — google shopping + amazon + ebay + bing + walmart (+ home depot for tool words),
+// fanned out in parallel with Http::pool so one slow engine never decides whether the shopper sees a gallery.
+Route::post('/catalog/web-search', [\App\Http\Controllers\CatalogController::class, 'webSearch'])->middleware('throttle:120,1');
+// Is Google failing on SerpAPI's side or ours? Raw status/timing for google_shopping beside amazon (2026-09-11).
+Route::get('/catalog/serp-diag', [\App\Http\Controllers\CatalogController::class, 'serpDiag'])->middleware('throttle:3,1'); // each probe is a paid search — keep it rare
+// One Amazon PRODUCT from its page (images, availability, variant dimensions) — the modal's read for an amazon.com link.
+// A Google Shopping row -> the merchant's own product page (Google's rows only link to google.com).
+Route::post('/catalog/google-product', [\App\Http\Controllers\CatalogController::class, 'googleProduct'])->middleware('throttle:120,1');
+Route::post('/catalog/amazon-product', [\App\Http\Controllers\CatalogController::class, 'amazonProduct'])->middleware('throttle:120,1');
+// Variants for a store whose own page we cannot read (New Balance answers every
+// server fetch with 403 and exposes no accessibility tree to the browser).
+Route::post('/catalog/feed-product', [\App\Http\Controllers\CatalogController::class, 'feedProduct'])->middleware('throttle:60,1');
