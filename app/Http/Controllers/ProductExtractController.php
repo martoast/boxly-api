@@ -2016,6 +2016,11 @@ class ProductExtractController extends Controller
             }
             $old = $r['extracted_old_price'] ?? null;
             $onSale = $old && $price && $old > $price;
+            // A storefront outside the US cannot receive the purchase at our San Ysidro address,
+            // so it is not an offer the customer can take (see CatalogController).
+            if (CatalogController::isUnshippableMerchant($r['source'] ?? null)) {
+                continue;
+            }
             $products[] = [
                 'title'   => $title,
                 'price'   => $price ?: null,
@@ -2225,6 +2230,9 @@ class ProductExtractController extends Controller
             $img = $r['thumbnail'] ?? null;
             if ($img && ! Str::startsWith($img, ['data:', 'http'])) {
                 $img = null;
+            }
+            if (CatalogController::isUnshippableMerchant($r['source'] ?? null)) {
+                continue;
             }
             $products[] = [
                 'title' => $title,

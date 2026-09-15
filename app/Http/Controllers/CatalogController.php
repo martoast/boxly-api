@@ -329,6 +329,43 @@ class CatalogController extends Controller
         return (bool) preg_match('/\b(used|pre-?owned|refurbished|refurb|renewed|open[- ]box|second[- ]hand|reconditioned)\b/u', $cond);
     }
 
+    // A MERCHANT THAT CANNOT SHIP TO SAN YSIDRO IS NOT AN OPTION. Boxly's whole mechanism is a US
+    // address that receives the purchase, so a storefront outside the US is not a cheaper version of
+    // the same offer — it is an offer the customer cannot take. A German retailer was quoted to a
+    // customer at $14.63 for a Karl Lagerfeld tee (2026-08-24), and Google Shopping also returns
+    // merchants that are not shops at all: a daycare (risingstardaycare.co.za) surfaced for "shorts
+    // vital seamless gymshark", a management consultancy (management30.jp) for an Owala bottle.
+    //
+    // Matched on the COUNTRY-CODE TLD of the merchant name, which is how SerpAPI reports these
+    // (`source: "ravir.de"`). Across two months of real searches every merchant on a ccTLD was one
+    // of these and every legitimate one was .com (or .myshopify.com), so this drops the bad rows
+    // and none of the good ones. A US brand that happens to own a ccTLD domain is not the case
+    // here; if one ever is, it belongs in a carried store, not in a Google row.
+    private const NON_US_TLDS = [
+        'de', 'at', 'ch', 'fr', 'es', 'it', 'nl', 'be', 'pt', 'ie', 'dk', 'se', 'no', 'fi', 'pl', 'cz',
+        'gr', 'hu', 'ro', 'ru', 'tr', 'ua', 'uk', 'co.uk', 'eus', 'jp', 'cn', 'kr', 'hk', 'sg', 'in',
+        'au', 'com.au', 'nz', 'co.nz', 'za', 'co.za', 'ae', 'il', 'br', 'com.br', 'ar', 'com.ar', 'cl',
+        'pe', 'ca', 'mx', 'com.mx',
+    ];
+
+    /** Is this merchant a storefront the customer cannot buy from for a US delivery? */
+    public static function isUnshippableMerchant(?string $merchant): bool
+    {
+        $m = mb_strtolower(trim((string) $merchant));
+        if ($m === '' || ! str_contains($m, '.')) {
+            return false;   // a plain name ("Amazon", "Red Tool Store") says nothing about country
+        }
+        // Only the HOST part: a merchant is reported as a bare domain, never a URL with a path.
+        $host = preg_replace('/^https?:\/\//', '', $m);
+        $host = rtrim(explode('/', $host)[0], '.');
+        foreach (self::NON_US_TLDS as $tld) {
+            if (str_ends_with($host, '.' . $tld)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private function normalizeGoogleShopping($json): array
     {
         $results = is_array($json) ? ($json['shopping_results'] ?? null) : null;
@@ -345,7 +382,7 @@ class CatalogController extends Controller
             $old = $r['extracted_old_price'] ?? null;
             $onSale = $old && $price && $old > $price;
             $merchant = $r['source'] ?? null;
-            if (self::isSecondHand($r, $merchant, $title)) {
+            if (self::isSecondHand($r, $merchant, $title) || self::isUnshippableMerchant($merchant)) {
                 continue;
             }
             $out[] = [
