@@ -11,6 +11,7 @@ use App\Mail\PurchaseRequestCreated;
 use App\Mail\PurchaseRequestCreatedTeamNotification;
 use App\Mail\PurchaseRequestInPersonScheduled;
 use App\Models\User;
+use App\Services\PurchaseRequestIntake;
 use App\Services\StripeAccount;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -21,6 +22,10 @@ use Illuminate\Support\Str;
 
 class PurchaseRequestController extends Controller
 {
+    public function __construct(private PurchaseRequestIntake $intake)
+    {
+    }
+
     public function index(Request $request)
     {
         $requests = PurchaseRequest::with('items')
@@ -42,131 +47,6 @@ class PurchaseRequestController extends Controller
     /**
      * Create a new purchase request
      */
-    /**
-     * Download a product image URL and store it permanently in our Spaces
-     * bucket, then point the item's image_url at it. Best-effort: on any failure
-     * the item keeps its original product_image_url. Only runs at PR creation.
-     */
-    private function rehostItemImage(PurchaseRequestItem $item, string $sourceUrl, $user, PurchaseRequest $pr): void
-    {
-        try {
-            $res = \Illuminate\Support\Facades\Http::timeout(20)
-                ->withHeaders(['User-Agent' => 'Mozilla/5.0 (compatible; BoxlyBot/1.0)'])
-                ->get($sourceUrl);
-            if (! $res->successful() || ! $res->body()) {
-                return;
-            }
-            $body = $res->body();
-            $type = strtolower((string) $res->header('Content-Type'));
-            if (! str_contains($type, 'image')) {
-                return; // not an image
-            }
-            $ext = match (true) {
-                str_contains($type, 'png')  => 'png',
-                str_contains($type, 'webp') => 'webp',
-                str_contains($type, 'gif')  => 'gif',
-                default                     => 'jpg',
-            };
-
-            $userName = Str::slug($user->name);
-            $path = "users/{$userName}-{$user->id}/requests/{$pr->request_number}/items/{$item->id}/image-" . time() . ".{$ext}";
-
-            Storage::disk('spaces')->put($path, $body, 'public');
-            $url = config('filesystems.disks.spaces.url') . '/' . $path;
-
-            $item->update([
-                'image_path'      => $path,
-                'image_filename'  => basename($path),
-                'image_mime_type' => $type,
-                'image_size'      => strlen($body),
-                'image_url'       => $url, // permanent, hosted by us (display prefers this)
-            ]);
-        } catch (\Throwable $e) {
-            Log::warning('PR item image re-host failed: ' . $e->getMessage());
-        }
-    }
-
-    /**
-     * A readable product name for an item the customer pasted as a bare link.
-     *
-     * Product URLs almost always carry the product name as a slug, so we can get
-     * something human WITHOUT a network call — which is the whole point: the old
-     * create page scraped every URL just to fill this field, and the customer paid
-     * for it in seconds of spinner.
-     *
-     *   .../shop/monchhichi-classic-fruit-plushie-keychain?color=040
-     *        -> "Monchhichi Classic Fruit Plushie Keychain"
-     *   .../p/starbucks-pumpkin-spice-light-roast-ground-coffee-11oz/-/A-53409621
-     *        -> "Starbucks Pumpkin Spice Light Roast Ground Coffee 11oz"
-     *
-     * We walk the path backwards and take the last segment that reads like words,
-     * skipping numeric ids ("17795600806", "A-53409621") and routing noise
-     * ("p", "dp", "ip", "shop", "products"). If nothing qualifies we fall back to
-     * the host, which is still better than showing a raw URL in the admin list.
-     * A background job enriches these with the real title later, on our time.
-     */
-    private function nameFromUrl(?string $url): ?string
-    {
-        $url = trim((string) $url);
-        if ($url === '') {
-            return null;
-        }
-
-        $host = strtolower((string) parse_url($url, PHP_URL_HOST));
-        $host = preg_replace('/^www\./', '', $host);
-
-        $segments = array_values(array_filter(
-            explode('/', (string) parse_url($url, PHP_URL_PATH)),
-            fn ($s) => $s !== '',
-        ));
-
-        $skip = ['p', 'dp', 'ip', 'gp', 'shop', 'product', 'products', 'item', 'items', 'pd', 'prod'];
-        foreach (array_reverse($segments) as $segment) {
-            $slug = preg_replace('/\.(html?|aspx?|php|htm)$/i', '', $segment);
-            if (in_array(strtolower($slug), $skip, true)) {
-                continue;
-            }
-            // Needs a real word in it — filters out ids like "A-53409621".
-            if (! preg_match('/[a-z]{3,}/i', $slug)) {
-                continue;
-            }
-            $pretty = trim(preg_replace('/\s+/', ' ', str_replace(['-', '_', '+'], ' ', $slug)));
-            if ($pretty === '') {
-                continue;
-            }
-
-            return mb_substr(mb_convert_case($pretty, MB_CASE_TITLE, 'UTF-8'), 0, 255);
-        }
-
-        return $host !== '' ? mb_substr($host, 0, 255) : null;
-    }
-
-    /**
-     * The name to store for an item: what the customer typed, else the slug from
-     * their link. Returns null when there is neither — the caller skips those.
-     */
-    private function itemName(array $itemData): ?string
-    {
-        $given = trim((string) ($itemData['product_name'] ?? ''));
-        if ($given !== '') {
-            return mb_substr($given, 0, 255);
-        }
-
-        return $this->nameFromUrl($itemData['product_url'] ?? null);
-    }
-
-    /**
-     * A product/image URL exactly as we should store and render it: trimmed,
-     * with raw spaces percent-encoded. Google Shopping links from SerpAPI carry
-     * a literal space ("...&q=Nikon Z30&prds=...") which is invalid in an href —
-     * some mail clients cut the link there, so "Ver producto" dies. Everything
-     * else is left byte-for-byte, so an already-encoded link is untouched.
-     */
-    private function cleanUrl(?string $url): string
-    {
-        return str_replace(' ', '%20', trim((string) $url));
-    }
-
     public function store(Request $request)
     {
         $request->validate([
@@ -201,70 +81,26 @@ class PurchaseRequestController extends Controller
         try {
             $user = $request->user();
 
-            // Only link a chat this customer actually owns.
-            $conversationId = $request->input('conversation_id');
-            if ($conversationId && ! Conversation::where('id', $conversationId)->where('user_id', $user->id)->exists()) {
-                $conversationId = null;
-            }
-
-            // 1. Create the Request Ticket
-            $pr = PurchaseRequest::create([
-                'user_id' => $user->id,
-                'conversation_id' => $conversationId,
-                'request_number' => PurchaseRequest::generateRequestNumber(),
-                'status' => PurchaseRequest::STATUS_PENDING_REVIEW,
-                'currency' => $request->input('currency', 'usd'),
-            ]);
-
-            // 2. Process Items
-            $itemsInput = $request->input('items');
-
-            $createdItems = 0;
-
-            foreach ($itemsInput as $index => $itemData) {
-
-                // Handle options: If sent via FormData, it might be a JSON string or an array
-                $options = null;
-                if (isset($itemData['options'])) {
-                    $options = is_string($itemData['options'])
-                        ? json_decode($itemData['options'], true)
-                        : $itemData['options'];
-                }
-
-                // A link or a name — one of the two. Anything else is an empty row
-                // the paste UI left behind, and silently dropping it is right:
-                // failing the whole request over a blank line would lose the
-                // customer's entire list.
-                $name = $this->itemName($itemData);
-                if ($name === null) {
-                    continue;
-                }
-
-                // Create Item Record
-                $item = PurchaseRequestItem::create([
-                    'purchase_request_id' => $pr->id,
-                    'product_name' => $name,
-                    'product_url' => $this->cleanUrl($itemData['product_url'] ?? null),
-                    'product_image_url' => $this->cleanUrl($itemData['product_image_url'] ?? null) ?: null,
-                    // Null until the cart is built and the REAL price is written.
-                    'price' => $itemData['price'] ?? null,
-                    'quantity' => $itemData['quantity'],
-                    'options' => $options,
-                    'notes' => $itemData['notes'] ?? null,
-                ]);
-                $createdItems++;
-
-                // 3. Handle Image Upload
-                // Check if a file exists for this specific item index
-                if ($request->hasFile("items.{$index}.image")) {
+            $pr = $this->intake->create(
+                $user,
+                $request->input('items'),
+                $request->input('conversation_id'),
+                $request->input('currency', 'usd'),
+                null,
+                // Handle Image Upload: a file for this specific item index wins
+                // over re-hosting its product_image_url.
+                function (PurchaseRequestItem $item, $index, PurchaseRequest $pr) use ($request, $user): bool {
+                    if (! $request->hasFile("items.{$index}.image")) {
+                        return false;
+                    }
                     $file = $request->file("items.{$index}.image");
-                    
+
                     // Create storage path
                     $userName = Str::slug($user->name);
                     $storagePath = "users/{$userName}-{$user->id}/requests/{$pr->request_number}/items/{$item->id}";
-                    
+
                     $filename = "image-" . time() . "." . $file->getClientOriginalExtension();
-                    
+
                     // Upload
                     $path = Storage::disk('spaces')->putFileAs(
                         $storagePath,
@@ -272,9 +108,9 @@ class PurchaseRequestController extends Controller
                         $filename,
                         'public'
                     );
-                    
+
                     $url = config('filesystems.disks.spaces.url') . '/' . $path;
-                    
+
                     // Update item with file info
                     $item->update([
                         'image_path' => $path,
@@ -283,16 +119,14 @@ class PurchaseRequestController extends Controller
                         'image_size' => $file->getSize(),
                         'image_url' => $url,
                     ]);
-                } elseif (! empty($itemData['product_image_url'])) {
-                    // No uploaded file — re-host the provided image URL to our
-                    // bucket so it's permanent (source thumbnails can expire).
-                    $this->rehostItemImage($item, $item->product_image_url, $user, $pr);
-                }
-            }
+
+                    return true;
+                },
+            );
 
             // Every row was blank — nothing to buy. Better a clear message than
             // an empty request the team has to chase the customer about.
-            if ($createdItems === 0) {
+            if ($pr === null) {
                 DB::rollBack();
 
                 return response()->json([
@@ -303,31 +137,7 @@ class PurchaseRequestController extends Controller
 
             DB::commit();
 
-            Log::info('Purchase Request created', ['id' => $pr->id, 'user_id' => $user->id]);
-
-            // Customer confirmation
-            try {
-                Mail::to($user)->queue(new PurchaseRequestCreated($pr));
-                Log::info('Purchase Request confirmation email queued for ' . $user->email);
-            } catch (\Exception $e) {
-                Log::error('Failed to queue purchase request email: ' . $e->getMessage());
-            }
-
-            // Internal alert to the shopping team — Velonie can review and quote
-            // right away. Admins excluded (they have the dashboard).
-            try {
-                $pr->load(['items', 'user']);
-                $teamEmails = User::query()
-                    ->where('role', User::ROLE_EMPLOYEE)
-                    ->where('team', User::TEAM_SHOPPING)
-                    ->pluck('email')
-                    ->all();
-                if (! empty($teamEmails)) {
-                    Mail::to($teamEmails)->queue(new PurchaseRequestCreatedTeamNotification($pr));
-                }
-            } catch (\Exception $e) {
-                Log::error('Failed to queue PR-created team notification: ' . $e->getMessage());
-            }
+            $this->intake->notifyCreated($pr, $user);
 
             return response()->json([
                 'success' => true,
@@ -777,8 +587,8 @@ class PurchaseRequestController extends Controller
                     // Update existing. Name falls back to the link's slug and
                     // price may legitimately still be null — the cart step owns it.
                     $item->update([
-                        'product_name' => $this->itemName($itemData) ?? $item->product_name,
-                        'product_url' => $this->cleanUrl($itemData['product_url'] ?? null),
+                        'product_name' => $this->intake->itemName($itemData) ?? $item->product_name,
+                        'product_url' => $this->intake->cleanUrl($itemData['product_url'] ?? null),
                         'price' => $itemData['price'] ?? null,
                         'quantity' => $itemData['quantity'],
                         'options' => $options,
@@ -786,15 +596,15 @@ class PurchaseRequestController extends Controller
                     ]);
                 } else {
                     // Create new
-                    $name = $this->itemName($itemData);
+                    $name = $this->intake->itemName($itemData);
                     if ($name === null) {
                         continue; // blank row from the paste UI
                     }
                     $item = PurchaseRequestItem::create([
                         'purchase_request_id' => $purchaseRequest->id,
                         'product_name' => $name,
-                        'product_url' => $this->cleanUrl($itemData['product_url'] ?? null),
-                        'product_image_url' => $this->cleanUrl($itemData['product_image_url'] ?? null) ?: null,
+                        'product_url' => $this->intake->cleanUrl($itemData['product_url'] ?? null),
+                        'product_image_url' => $this->intake->cleanUrl($itemData['product_image_url'] ?? null) ?: null,
                         'price' => $itemData['price'] ?? null,
                         'quantity' => $itemData['quantity'],
                         'options' => $options,
@@ -806,7 +616,7 @@ class PurchaseRequestController extends Controller
                     // the chat come through here, so without this they'd have no
                     // image at all.
                     if (! $request->hasFile("items.{$index}.image") && ! empty($itemData['product_image_url'])) {
-                        $this->rehostItemImage($item, $item->product_image_url, $user, $purchaseRequest);
+                        $this->intake->rehostItemImage($item, $item->product_image_url, $user, $purchaseRequest);
                     }
                 }
 
