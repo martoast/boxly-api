@@ -311,6 +311,9 @@ class ConversationController extends Controller
                         'id'      => $id,
                         'title'   => $title,
                         'store'   => $p['store'] ?? null,
+                        // The catalog slug, so a reopened chat can still add
+                        // its products to the Boxly cart (C2). Only a slug.
+                        'store_id' => (isset($p['store_id']) && is_string($p['store_id']) && preg_match('/^[a-z0-9][a-z0-9_-]{0,39}$/', $p['store_id'])) ? $p['store_id'] : null,
                         'price'   => $p['price'] ?? $p['price_usd'] ?? $money['price'],
                         'was'     => $p['was'] ?? $money['was'],
                         'on_sale' => $p['on_sale'] ?? $money['on_sale'],
