@@ -296,6 +296,27 @@ class CartSyncTest extends LiveShoppingTestCase
         Queue::assertPushed(SyncStoreCartJob::class, 4);
     }
 
+    public function test_a_cart_terminal_also_redispatches_other_stores_left_pending(): void
+    {
+        $this->fakeEngine();
+        $u = User::factory()->createQuietly();
+        $this->actingAs($u)->postJson('/cart/items', $this->item())->assertStatus(201);
+        $a = CartItem::first();
+        // Another store's item whose busy retries ran out while nike held the engine.
+        $other = CartItem::create(array_merge($a->only(['cart_id', 'title', 'source', 'variants', 'variants_key']), [
+            'store_id' => 'adidas', 'product_url' => 'https://www.adidas.com/us/samba',
+            'product_url_hash' => CartItem::urlHash('https://www.adidas.com/us/samba'),
+        ]));
+        $this->assertSame('pending', $other->fresh()->sync_status);
+        Queue::fake();
+
+        $this->deliverAndProcess($this->cartDelivery([$this->line($a)]));
+
+        $this->assertSame('in_store_cart', $a->fresh()->sync_status);
+        Queue::assertPushed(SyncStoreCartJob::class, fn ($job) => $job->cartId === $a->cart_id && $job->storeId === 'adidas');
+        Queue::assertNotPushed(SyncStoreCartJob::class, fn ($job) => $job->storeId === 'nike');
+    }
+
     public function test_a_cart_terminal_updates_items_releases_the_key_and_redispatches_pending(): void
     {
         $this->fakeEngine();

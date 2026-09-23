@@ -63,7 +63,9 @@ class CartSync
      * A completed result sets each reported line's state and note; an item it
      * does not mention goes back to `pending`. Anything else (failed, cancelled,
      * expired, or a completed result without `cart`) fails the items with the
-     * retry note. Then, if that store still has pending items, sync again.
+     * retry note. Then every store of the cart that still has pending items
+     * syncs again — not only this one: the engine just freed up, and another
+     * store's job may have spent its busy retries while this one ran.
      *
      * Runs inside the caller's terminal transaction; the caller writes the
      * session's own terminal columns (and nulls cart_active_key).
@@ -95,10 +97,11 @@ class CartSync
         }
 
         if ($session->cart_id
-            && Cart::where('id', $session->cart_id)->where('status', Cart::STATUS_OPEN)->exists()
-            && CartItem::where('cart_id', $session->cart_id)->where('store_id', $session->store_id)
-                ->where('sync_status', 'pending')->exists()) {
-            self::dispatch($session->cart_id, $session->store_id);
+            && Cart::where('id', $session->cart_id)->where('status', Cart::STATUS_OPEN)->exists()) {
+            // A store whose sync is still running just returns (its key is held).
+            CartItem::where('cart_id', $session->cart_id)->where('sync_status', 'pending')
+                ->distinct()->orderBy('store_id')->pluck('store_id')
+                ->each(fn (string $storeId) => self::dispatch($session->cart_id, $storeId));
         }
     }
 
