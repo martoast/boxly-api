@@ -470,4 +470,13 @@ class CartSyncTest extends LiveShoppingTestCase
         $this->assertNull(LiveShoppingSession::first()->cart_active_key);
         $this->assertSame('failed', CartItem::first()->sync_status);
     }
+
+    public function test_get_cart_reports_whether_store_sync_is_on(): void
+    {
+        $user = User::factory()->createQuietly();
+        config(['services.live_shopping_engine.cart_sync' => false]);
+        $this->actingAs($user)->getJson('/cart')->assertOk()->assertJsonPath('data.sync_enabled', false);
+        config(['services.live_shopping_engine.cart_sync' => true]);
+        $this->actingAs($user)->getJson('/cart')->assertOk()->assertJsonPath('data.sync_enabled', true);
+    }
 }

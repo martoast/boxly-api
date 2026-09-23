@@ -416,6 +416,7 @@ class CartController extends Controller
                 'subtotal' => 0,
                 'has_unpriced' => false,
                 'updated_at' => null,
+                'sync_enabled' => \App\Services\CartSync::enabled(),
             ];
         }
 
@@ -453,6 +454,9 @@ class CartController extends Controller
             'subtotal' => round(array_sum(array_column($stores, 'subtotal')), 2),
             'has_unpriced' => (bool) array_filter(array_column($stores, 'has_unpriced')),
             'updated_at' => $cart->updated_at?->toISOString(),
+            // C3: whether adds are being mirrored into the real store carts. With it
+            // off the app never waits on (or polls for) a store sync that won't run.
+            'sync_enabled' => \App\Services\CartSync::enabled(),
         ];
     }
 }
