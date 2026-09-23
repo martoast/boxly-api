@@ -43,11 +43,15 @@ class CartSync
         return $cartId . ':' . $storeId;
     }
 
-    /** Sync this store of this cart once the current transaction commits; a no-op with the flag off. */
+    /**
+     * Sync this store of this cart once the current transaction commits; a no-op with the flag off.
+     * Pinned to a real queue (`database`, like the webhook's result job): on the `sync` driver the
+     * job's busy-engine `release()` is a silent no-op and the items would sit `pending` forever.
+     */
     public static function dispatch(int $cartId, string $storeId): void
     {
         if (self::enabled()) {
-            SyncStoreCartJob::dispatch($cartId, $storeId)->afterCommit();
+            SyncStoreCartJob::dispatch($cartId, $storeId)->onConnection(config('services.live_shopping_engine.cart_sync_connection'))->afterCommit();
         }
     }
 

@@ -180,6 +180,8 @@ return [
         // an engine `cart` session. Off by default: with it off the cart (C2)
         // behaves exactly as before and no sync job is ever dispatched.
         'cart_sync'       => (bool) env('LIVE_SHOPPING_CART_SYNC', false),
+        // A real queue: SyncStoreCartJob's busy-engine release() is a silent no-op on `sync`.
+        'cart_sync_connection' => env('LIVE_SHOPPING_CART_SYNC_CONNECTION', 'database'),
     ],
 
     'catalog' => [

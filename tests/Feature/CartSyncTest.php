@@ -36,6 +36,8 @@ class CartSyncTest extends LiveShoppingTestCase
     protected function setUp(): void
     {
         parent::setUp();
+        // Run the sync job inline so these tests see its engine call; production pins `database`.
+        config(['services.live_shopping_engine.cart_sync_connection' => 'sync']);
 
         $this->artisan('migrate', [
             '--path'  => 'database/migrations/2026_04_29_000007_add_team_to_users.php',
@@ -219,10 +221,15 @@ class CartSyncTest extends LiveShoppingTestCase
 
     public function test_engine_busy_puts_items_back_to_pending_and_releases_the_job_with_backoff(): void
     {
+        // The shipped default is a real queue (setUp runs inline for the other tests).
+        $shipped = (require config_path('services.php'))['live_shopping_engine']['cart_sync_connection'];
+        $this->assertSame('database', $shipped);
+        config(['services.live_shopping_engine.cart_sync_connection' => $shipped]);
         Queue::fake();
         $u = User::factory()->createQuietly();
         $this->actingAs($u)->postJson('/cart/items', $this->item())->assertStatus(201);
-        Queue::assertPushed(SyncStoreCartJob::class, 1);
+        // Never the default connection: on `sync` the busy release below would be a silent no-op.
+        Queue::assertPushed(SyncStoreCartJob::class, fn (SyncStoreCartJob $j) => $j->connection === 'database');
         $this->engineBusy();
 
         $job = (new SyncStoreCartJob(Cart::first()->id, 'nike'))->withFakeQueueInteractions();
