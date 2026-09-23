@@ -303,6 +303,16 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/{purchaseRequest}/deposit-checkout', [PurchaseRequestController::class, 'createDepositCheckout']);
     });
 
+    // The Boxly cart: one open, multi-store cart per customer, fed by chat,
+    // live shopping and the extension, finalized into ONE purchase request.
+    Route::prefix('cart')->group(function () {
+        Route::get('/', [\App\Http\Controllers\CartController::class, 'show']);
+        Route::post('/items', [\App\Http\Controllers\CartController::class, 'addItem']);
+        Route::patch('/items/{id}', [\App\Http\Controllers\CartController::class, 'updateItem'])->whereNumber('id');
+        Route::delete('/items/{id}', [\App\Http\Controllers\CartController::class, 'destroyItem'])->whereNumber('id');
+        Route::post('/finalize', [\App\Http\Controllers\CartController::class, 'finalize']);
+    });
+
     // In-person flow read-only endpoints — open trips for the calendar
     // picker, mall-flagged stores for the store-multiselect.
     Route::prefix('shopping-trips')->group(function () {
