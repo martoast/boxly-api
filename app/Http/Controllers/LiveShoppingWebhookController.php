@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Jobs\ProcessLiveShoppingResultJob;
+use App\Models\LiveShoppingSession;
 use App\Models\LiveShoppingWebhookReceipt;
 use App\Services\LiveShoppingEngine;
 use App\Support\LiveShoppingSignature;
@@ -227,8 +228,26 @@ class LiveShoppingWebhookController extends Controller
         }
 
         $result = $body['result'] ?? null;
-        if (! is_array($result) || array_diff(array_keys($result), ['outcome', 'products', 'error_code', 'stores']) !== []) {
+        if (! is_array($result) || array_diff(array_keys($result), ['outcome', 'products', 'error_code', 'stores', 'cart']) !== []) {
             return null;
+        }
+        // C3: the optional terminal `cart` result of a cart session. Closed
+        // shape; it rides only on a completed, product-less, code-less result,
+        // and only for a session that is (or may yet become visible as) a cart
+        // session — never on an agent or manual one.
+        $cart = null;
+        if (array_key_exists('cart', $result)) {
+            $cart = LiveShoppingEngine::cartResult($result['cart']);
+            if ($cart === null || ($result['outcome'] ?? null) !== 'completed'
+                || ($result['products'] ?? null) !== [] || ($result['error_code'] ?? null) !== null) {
+                return null;
+            }
+            $kind = is_string($body['session_id'] ?? null)
+                ? LiveShoppingSession::where('engine_session_id', $body['session_id'])->value('kind')
+                : null;
+            if ($kind !== null && $kind !== LiveShoppingSession::KIND_CART) {
+                return null;
+            }
         }
         // L2 (multi-store): optional per-store outcomes, closed shape, and the
         // part's copy must agree with the result's exactly.
@@ -293,7 +312,7 @@ class LiveShoppingWebhookController extends Controller
             'conversation_id' => $ids['conversation_id'],
             'terminal_seq'    => $seq,
             'occurred_at'     => $occurredAt,
-            'result'          => array_merge(['outcome' => $result['outcome'], 'error_code' => $errorCode], $stores === null ? [] : ['stores' => $stores]),
+            'result'          => array_merge(['outcome' => $result['outcome'], 'error_code' => $errorCode], $stores === null ? [] : ['stores' => $stores], $cart === null ? [] : ['cart' => $cart]),
             // The EXACT frozen part shape. No toolCallId, no input: those were
             // never in the contract, and inventing fields here would mean the
             // persisted part is not the one that was agreed and verified.

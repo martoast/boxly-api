@@ -6,6 +6,7 @@ use App\Models\ConversationMessage;
 use App\Models\LiveShoppingSession;
 use App\Models\LiveShoppingWebhookReceipt;
 use App\Models\SearchEvent;
+use App\Services\CartSync;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -128,6 +129,24 @@ class ProcessLiveShoppingResultJob implements ShouldQueue
                         : LiveShoppingWebhookReceipt::STATUS_CONFLICT,
                     $sameDelivery ? null : 'already_terminal',
                 );
+
+                return;
+            }
+
+            // C3: a cart session's terminal settles its cart items and releases
+            // the cart × store key. It never appends a conversation message and
+            // records no search event.
+            if ($session->kind === LiveShoppingSession::KIND_CART) {
+                $outcome = $payload['result']['outcome'] ?? LiveShoppingSession::STATUS_FAILED;
+                CartSync::applyTerminal($session, $outcome, $payload['result']['cart'] ?? null);
+                $session->forceFill([
+                    'status'               => $outcome,
+                    'error_code'           => $payload['result']['error_code'] ?? null,
+                    'terminal_delivery_id' => $receipt->delivery_id,
+                    'terminal_seq'         => $seq,
+                    'cart_active_key'      => null,
+                ])->save();
+                $this->close($receipt, LiveShoppingWebhookReceipt::STATUS_PROCESSED);
 
                 return;
             }

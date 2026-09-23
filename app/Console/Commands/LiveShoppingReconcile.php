@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\LiveShoppingSession;
+use App\Services\CartSync;
 use App\Services\LiveShoppingEngine;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
@@ -46,6 +47,16 @@ class LiveShoppingReconcile extends Command
 
         $released = 0;
 
+        // C3: nobody polls a cart session's show route, so its lost webhook is
+        // repaired here, through the same status projector the show route uses.
+        if (CartSync::enabled() && Schema::hasColumn('live_shopping_sessions', 'cart_active_key')) {
+            LiveShoppingSession::query()->active()
+                ->where('kind', LiveShoppingSession::KIND_CART)
+                ->whereNotNull('engine_session_id')
+                ->orderBy('id')->limit(50)->get()
+                ->each(fn (LiveShoppingSession $session) => CartSync::reconcileStatus($session, $engine));
+        }
+
         LiveShoppingSession::query()
             ->active()
             ->where(function ($q) use ($cutoff, $noDeadlineCutoff) {
@@ -66,7 +77,9 @@ class LiveShoppingReconcile extends Command
                         // call returned) or had its slot released. Acting on a
                         // row that no longer matches is how a live session gets
                         // killed out from under a customer.
-                        if (! $fresh || $fresh->isTerminal() || $fresh->active_slot === null) {
+                        // A cart session never holds active_slot; its claim is cart_active_key.
+                        $cart = $fresh && $fresh->kind === LiveShoppingSession::KIND_CART;
+                        if (! $fresh || $fresh->isTerminal() || ($cart ? $fresh->cart_active_key === null : $fresh->active_slot === null)) {
                             return;
                         }
                         $stillExpired = $fresh->expires_at !== null
@@ -74,6 +87,13 @@ class LiveShoppingReconcile extends Command
                             : $fresh->created_at->lt($noDeadlineCutoff);
                         if (! $stillExpired) {
                             return;   // it acquired a live deadline while we looked away
+                        }
+
+                        if ($cart) {
+                            // Settle its syncing items like a failed terminal
+                            // and release the cart × store key.
+                            CartSync::applyTerminal($fresh, LiveShoppingSession::STATUS_FAILED, null);
+                            $fresh->forceFill(['cart_active_key' => null]);
                         }
 
                         $fresh->forceFill([

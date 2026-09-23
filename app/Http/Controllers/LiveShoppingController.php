@@ -6,6 +6,7 @@ use App\Models\Conversation;
 use App\Models\LiveShoppingSession;
 use App\Models\LiveShoppingWebhookReceipt;
 use App\Jobs\ProcessLiveShoppingResultJob;
+use App\Services\CartSync;
 use App\Services\LiveShoppingEngine;
 use App\Services\LiveShoppingEngineException;
 use Illuminate\Database\QueryException;
@@ -294,6 +295,12 @@ class LiveShoppingController extends Controller
      */
     private function reconcileEngineTerminal(LiveShoppingSession $session): void
     {
+        // C3: a cart session's terminal carries `cart`, not products.
+        if ($session->kind === LiveShoppingSession::KIND_CART) {
+            CartSync::reconcileStatus($session, $this->engine);
+
+            return;
+        }
         if ($session->isTerminal() || ! $session->engine_session_id) {
             return;
         }

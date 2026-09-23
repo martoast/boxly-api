@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Cart;
 use App\Models\CartItem;
 use App\Models\Conversation;
+use App\Services\CartSync;
 use App\Services\PurchaseRequestIntake;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
@@ -72,7 +73,7 @@ class CartController extends Controller
             $conversationId = null;
         }
 
-        [$cart, $item] = DB::transaction(function () use ($user, $data, $variants, $quantity, $url, $conversationId) {
+        [$cart, $item, $sync] = DB::transaction(function () use ($user, $data, $variants, $quantity, $url, $conversationId) {
             $cart = $this->openCartForWrite($user->id);
 
             if ($conversationId && ! $cart->conversation_id) {
@@ -90,8 +91,12 @@ class CartController extends Controller
 
             if ($item) {
                 // Same product, same selection: one line, more units.
-                $item->update(['quantity' => min(CartItem::MAX_QUANTITY, $item->quantity + $quantity)]);
+                $newQuantity = min(CartItem::MAX_QUANTITY, $item->quantity + $quantity);
+                // C3: more units must reach the store cart too.
+                $sync = CartSync::enabled() && $newQuantity !== $item->quantity;
+                $item->update(['quantity' => $newQuantity] + ($sync ? ['sync_status' => 'pending', 'sync_note' => null] : []));
             } else {
+                $sync = true;   // a new row starts `pending`
                 $item = $cart->items()->create([
                     'store_id' => $data['store_id'],
                     'store_name' => $data['store_name'] ?? null,
@@ -111,8 +116,12 @@ class CartController extends Controller
 
             $cart->touch();
 
-            return [$cart, $item];
+            return [$cart, $item, $sync];
         });
+
+        if ($sync) {
+            CartSync::dispatch($cart->id, $item->store_id);
+        }
 
         return response()->json(['data' => [
             'item' => $this->itemPayload($item->fresh()),
@@ -155,8 +164,17 @@ class CartController extends Controller
         }
 
         if ($changes) {
-            $item->update($changes);
+            // C3: a changed quantity or selection must reach the store cart too.
+            $item->fill($changes);
+            $sync = CartSync::enabled() && $item->isDirty(['quantity', 'variants']);
+            if ($sync) {
+                $item->fill(['sync_status' => 'pending', 'sync_note' => null]);
+            }
+            $item->save();
             $item->cart->touch();
+            if ($sync) {
+                CartSync::dispatch($item->cart_id, $item->store_id);
+            }
         }
 
         return response()->json(['data' => [

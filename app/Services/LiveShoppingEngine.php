@@ -66,7 +66,11 @@ class LiveShoppingEngine
      * entry is store_id. `store_ids` is sent ONLY when there is more than one,
      * so a single-store create is byte-identical to before.
      */
-    public function createSession(int $localRowId, ?int $conversationId, string|array $storeId, string $objective, string $kind = 'agent'): array
+    /**
+     * C3: a `cart` session carries the `cart` object (and query "cart"); it is
+     * sent only for that kind, so every other create is byte-identical.
+     */
+    public function createSession(int $localRowId, ?int $conversationId, string|array $storeId, string $objective, string $kind = 'agent', ?array $cart = null): array
     {
         $storeIds = is_array($storeId) ? array_values($storeId) : [$storeId];
         $storeId = (string) ($storeIds[0] ?? '');
@@ -79,7 +83,7 @@ class LiveShoppingEngine
             'store_id'        => $storeId,
             'query'           => $objective,
             'callback_id'     => self::CALLBACK_ID,
-        ], count($storeIds) > 1 ? ['store_ids' => $storeIds] : [], $kind === 'manual' ? ['kind' => 'manual'] : []), ['Idempotency-Key' => 'live-shopping-session-' . $localRowId]);
+        ], count($storeIds) > 1 ? ['store_ids' => $storeIds] : [], $kind === 'manual' ? ['kind' => 'manual'] : [], $kind === 'cart' ? ['kind' => 'cart', 'cart' => $cart] : []), ['Idempotency-Key' => 'live-shopping-session-' . $localRowId]);
 
         // The envelope is closed too, not just the session inside it. An extra
         // key out here means the same thing it means in there: we are not
@@ -232,7 +236,12 @@ class LiveShoppingEngine
      * separate from createSession(): a terminal status is valid here, while a
      * create response must be running.
      */
-    public function sessionStatus(string $engineSessionId): array
+    /**
+     * C3: $cart = true (only for a local `cart` row) additionally accepts the
+     * terminal outcome "cart" (state completed) with its `cart` result, and
+     * returns it under `cart`. With $cart = false every check is unchanged.
+     */
+    public function sessionStatus(string $engineSessionId, bool $cart = false): array
     {
         $data = $this->get('/v1/sessions/' . rawurlencode($engineSessionId));
         $this->assertClosedKeys($data, ['schema_version', 'session'], 'status_envelope');
@@ -258,9 +267,26 @@ class LiveShoppingEngine
         }
         $terminal = $session['terminal_result'] ?? null;
         if ($terminal !== null && (! is_array($terminal)
-            || array_diff(array_keys($terminal), ['outcome', 'products', 'error_code', 'stores']) !== []
-            || ! in_array($terminal['outcome'] ?? null, ['completed', 'failed', 'cancelled'], true))) {
+            || array_diff(array_keys($terminal), $cart ? ['outcome', 'products', 'error_code', 'stores', 'cart'] : ['outcome', 'products', 'error_code', 'stores']) !== []
+            || ! in_array($terminal['outcome'] ?? null, $cart ? ['completed', 'failed', 'cancelled', 'cart'] : ['completed', 'failed', 'cancelled'], true))) {
             throw LiveShoppingEngineException::unavailable('bad_terminal_result');
+        }
+        $cartResult = null;
+        if ($cart && is_array($terminal)) {
+            // `cart` is present iff outcome is "cart", which carries no products
+            // and no error code; the journal state of that outcome is completed.
+            $isCart = ($terminal['outcome'] ?? null) === 'cart';
+            if ($isCart !== array_key_exists('cart', $terminal)
+                || $isCart && (($terminal['products'] ?? null) !== [] || ($terminal['error_code'] ?? null) !== null)) {
+                throw LiveShoppingEngineException::unavailable('bad_terminal_result');
+            }
+            if ($isCart) {
+                $cartResult = self::cartResult($terminal['cart']);
+                if ($cartResult === null) {
+                    throw LiveShoppingEngineException::unavailable('bad_terminal_result');
+                }
+                $terminal['outcome'] = 'completed';
+            }
         }
         $storeOutcomes = self::storeOutcomes($session['stores'] ?? ($terminal['stores'] ?? null));
         if ($storeOutcomes === false) {
@@ -295,7 +321,43 @@ class LiveShoppingEngine
                 ? $terminal['error_code'] : null,
             'products' => $products,
             'stores' => $storeOutcomes,
-        ];
+        ] + ($cart ? ['cart' => $cartResult] : []);
+    }
+
+    /**
+     * C3: the closed terminal `cart` result {cart_ref, operation, lines[]} — the
+     * validated copy, or null when malformed. Shared by the webhook and the
+     * status read so both projections agree.
+     */
+    public static function cartResult($raw): ?array
+    {
+        if (! is_array($raw) || array_diff(array_keys($raw), ['cart_ref', 'operation', 'lines']) !== []
+            || ! is_string($raw['cart_ref'] ?? null) || ! preg_match('/^cart-[A-Za-z0-9_-]{1,80}$/', $raw['cart_ref'])
+            || ! in_array($raw['operation'] ?? null, ['add', 'read', 'quote'], true)
+            || ! is_array($raw['lines'] ?? null) || ! array_is_list($raw['lines']) || count($raw['lines']) > 20) {
+            return null;
+        }
+        $lines = [];
+        foreach ($raw['lines'] as $line) {
+            if (! is_array($line) || array_diff(array_keys($line), ['selection_id', 'state', 'availability', 'observed_quantity', 'note']) !== []
+                || ! is_string($line['selection_id'] ?? null) || ! preg_match('/^ci-[A-Za-z0-9_-]{1,80}$/', $line['selection_id'])
+                || ! in_array($line['state'] ?? null, ['in_store_cart', 'unavailable', 'failed'], true)
+                || ! in_array($line['availability'] ?? null, ['in_stock', 'out_of_stock', 'unknown'], true)) {
+                return null;
+            }
+            $qty = $line['observed_quantity'] ?? null;
+            $note = $line['note'] ?? null;
+            if ($qty !== null && (! is_int($qty) || $qty < 0)
+                || $note !== null && (! is_string($note) || mb_strlen($note) > 200)) {
+                return null;
+            }
+            $lines[] = [
+                'selection_id' => $line['selection_id'], 'state' => $line['state'],
+                'availability' => $line['availability'], 'observed_quantity' => $qty, 'note' => $note,
+            ];
+        }
+
+        return ['cart_ref' => $raw['cart_ref'], 'operation' => $raw['operation'], 'lines' => $lines];
     }
 
     /**

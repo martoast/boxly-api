@@ -16,7 +16,7 @@ class LiveShoppingSession extends Model
     protected $fillable = [
         'user_id', 'conversation_id', 'engine_session_id', 'status', 'store_id', 'kind',
         'stores', 'objective', 'expires_at', 'latest_seq', 'terminal_seq',
-        'terminal_delivery_id', 'error_code', 'active_slot',
+        'terminal_delivery_id', 'error_code', 'active_slot', 'cart_id', 'cart_active_key',
     ];
 
     protected $casts = [
@@ -30,6 +30,9 @@ class LiveShoppingSession extends Model
     public const KIND_AGENT  = 'agent';
     public const KIND_MANUAL = 'manual';
     public const KINDS = [self::KIND_AGENT, self::KIND_MANUAL];
+    /** C3: a cart sync session, created only by SyncStoreCartJob — never a
+     * customer-selectable kind, so it is deliberately NOT in KINDS. */
+    public const KIND_CART = 'cart';
 
     public const STATUS_PENDING   = 'pending';
     public const STATUS_RUNNING   = 'running';
@@ -53,6 +56,11 @@ class LiveShoppingSession extends Model
     public function conversation(): BelongsTo
     {
         return $this->belongsTo(Conversation::class);
+    }
+
+    public function cart(): BelongsTo
+    {
+        return $this->belongsTo(Cart::class);
     }
 
     public function scopeActive(Builder $query): Builder

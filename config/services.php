@@ -176,6 +176,10 @@ return [
         'orphan_horizon'  => (int) env('LIVE_SHOPPING_ORPHAN_HORIZON', 300),
         // callback_id is NOT configurable: it is the frozen literal
         // LiveShoppingEngine::CALLBACK_ID.
+        // C3: mirror Boxly cart adds into the customer's real store cart through
+        // an engine `cart` session. Off by default: with it off the cart (C2)
+        // behaves exactly as before and no sync job is ever dispatched.
+        'cart_sync'       => (bool) env('LIVE_SHOPPING_CART_SYNC', false),
     ],
 
     'catalog' => [
