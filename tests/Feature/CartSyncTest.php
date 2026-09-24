@@ -222,6 +222,20 @@ class CartSyncTest extends LiveShoppingTestCase
         $this->assertSame('syncing', CartItem::first()->sync_status);
     }
 
+    public function test_the_cart_lists_its_running_store_browser_until_it_ends(): void
+    {
+        $this->fakeEngine();
+        $u = User::factory()->createQuietly();
+        $this->actingAs($u)->postJson('/cart/items', $this->item())->assertStatus(201);
+        $session = LiveShoppingSession::first();
+
+        $live = $this->actingAs($u)->getJson('/cart')->assertOk()->json('data.live_sessions');
+        $this->assertSame([['id' => $session->id, 'store_id' => 'nike', 'store_name' => 'Nike', 'status' => $session->status]], $live);
+
+        $this->deliverAndProcess($this->cartDelivery([$this->line(CartItem::first())]));
+        $this->assertSame([], $this->actingAs($u)->getJson('/cart')->assertOk()->json('data.live_sessions'));
+    }
+
     public function test_engine_busy_puts_items_back_to_pending_and_releases_the_job_with_backoff(): void
     {
         // The shipped default is a real queue (setUp runs inline for the other tests).

@@ -422,6 +422,7 @@ class CartController extends Controller
                 'has_unpriced' => false,
                 'updated_at' => null,
                 'sync_enabled' => \App\Services\CartSync::enabled(),
+                'live_sessions' => [],
             ];
         }
 
@@ -462,6 +463,31 @@ class CartController extends Controller
             // C3: whether adds are being mirrored into the real store carts. With it
             // off the app never waits on (or polls for) a store sync that won't run.
             'sync_enabled' => \App\Services\CartSync::enabled(),
+            // C4 (watch in chat): the store browsers the agent is running for this cart right
+            // now, so the chat can show them live (view-only ticket via /live-shopping/sessions/{id}/ticket).
+            'live_sessions' => $this->liveSessions($cart),
         ];
+    }
+
+    /** Running (or starting) cart sessions of this cart, newest first: they hold the store's active key. */
+    private function liveSessions(Cart $cart): array
+    {
+        if (! \Illuminate\Support\Facades\Schema::hasColumn('live_shopping_sessions', 'cart_id')) {
+            return [];
+        }
+
+        return \App\Models\LiveShoppingSession::where('cart_id', $cart->id)
+            ->whereNotNull('cart_active_key')
+            ->whereNotNull('engine_session_id')
+            ->orderByDesc('id')
+            ->get(['id', 'store_id', 'status'])
+            ->map(fn ($s) => [
+                'id' => $s->id,
+                'store_id' => $s->store_id,
+                'store_name' => $cart->items()->where('store_id', $s->store_id)->value('store_name'),
+                'status' => $s->status,
+            ])
+            ->values()
+            ->all();
     }
 }
