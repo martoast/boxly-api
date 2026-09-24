@@ -270,6 +270,17 @@ class CartQuotesTest extends LiveShoppingTestCase
         $this->actingAs($other)->getJson('/cart')->assertStatus(404);
     }
 
+    public function test_the_browser_may_call_the_cart_and_the_lab_opt_in_cross_origin(): void
+    {
+        foreach (['/cart', '/cart/items', '/cart/finalize', '/lab/join'] as $path) {
+            $this->call('OPTIONS', $path, [], [], [], [
+                'HTTP_ORIGIN' => 'https://boxly.mx',
+                'HTTP_ACCESS_CONTROL_REQUEST_METHOD' => 'POST',
+                'HTTP_ACCESS_CONTROL_REQUEST_HEADERS' => 'x-xsrf-token',
+            ])->assertHeader('Access-Control-Allow-Origin');
+        }
+    }
+
     public function test_a_malformed_quote_is_refused_by_the_contract(): void
     {
         $this->assertNull(LiveShoppingEngine::cartQuote($this->quoteBlock('verified', null)), 'verified without a total');
