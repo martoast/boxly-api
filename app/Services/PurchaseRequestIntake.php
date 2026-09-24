@@ -111,6 +111,10 @@ class PurchaseRequestIntake
             $this->notifyCustomer($pr, $user);
         }
 
+        if (! self::alertsTeam($user)) {
+            return;
+        }
+
         // Internal alert to the shopping team — Velonie can review and quote
         // right away. Admins excluded (they have the dashboard).
         try {
@@ -126,6 +130,12 @@ class PurchaseRequestIntake
         } catch (\Exception $e) {
             Log::error('Failed to queue PR-created team notification: ' . $e->getMessage());
         }
+    }
+
+    /** False for the automated production test account: its orders are tests, so the team is not alerted. */
+    public static function alertsTeam(User $user): bool
+    {
+        return ! in_array(mb_strtolower((string) $user->email), (array) config('services.boxly_beta.quiet_emails', []), true);
     }
 
     /** The customer's "we got your request" email. */

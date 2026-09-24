@@ -256,6 +256,12 @@ class CartQuotesTest extends LiveShoppingTestCase
         Mail::assertQueued(PurchaseRequestCreated::class, 1);
     }
 
+    public function test_the_test_account_never_alerts_the_shopping_team(): void
+    {
+        $this->assertFalse(\App\Services\PurchaseRequestIntake::alertsTeam(new User(['email' => 'AlexMartos96+BoxlyLab@gmail.com'])));
+        $this->assertTrue(\App\Services\PurchaseRequestIntake::alertsTeam(new User(['email' => 'customer@example.com'])));
+    }
+
     public function test_finalize_while_the_agent_quotes_sends_the_customer_no_email_yet(): void
     {
         $this->finalizedTwoStores();

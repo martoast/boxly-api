@@ -203,6 +203,8 @@ return [
             fn ($e) => mb_strtolower(trim($e)),
             explode(',', (string) env('BOXLY_BETA_EMAILS', '')),
         ))),
+        // Claude's own production test account: its test orders never alert the shopping team (Alex, 2026-09-24).
+        'quiet_emails' => ['alexmartos96+boxlylab@gmail.com'],
     ],
 
 ];
