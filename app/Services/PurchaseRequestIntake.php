@@ -98,17 +98,17 @@ class PurchaseRequestIntake
         return $createdItems === 0 ? null : $pr;
     }
 
-    /** Customer confirmation + shopping-team alert. Call after commit. */
-    public function notifyCreated(PurchaseRequest $pr, User $user): void
+    /**
+     * Customer confirmation + shopping-team alert. Call after commit.
+     * $customer false: the team alert only — the customer's email waits until
+     * the Boxly agent has quoted the stores (CartQuotes sends the right one).
+     */
+    public function notifyCreated(PurchaseRequest $pr, User $user, bool $customer = true): void
     {
         Log::info('Purchase Request created', ['id' => $pr->id, 'user_id' => $user->id]);
 
-        // Customer confirmation
-        try {
-            Mail::to($user)->queue(new PurchaseRequestCreated($pr));
-            Log::info('Purchase Request confirmation email queued for ' . $user->email);
-        } catch (\Exception $e) {
-            Log::error('Failed to queue purchase request email: ' . $e->getMessage());
+        if ($customer) {
+            $this->notifyCustomer($pr, $user);
         }
 
         // Internal alert to the shopping team — Velonie can review and quote
@@ -125,6 +125,17 @@ class PurchaseRequestIntake
             }
         } catch (\Exception $e) {
             Log::error('Failed to queue PR-created team notification: ' . $e->getMessage());
+        }
+    }
+
+    /** The customer's "we got your request" email. */
+    public function notifyCustomer(PurchaseRequest $pr, User $user): void
+    {
+        try {
+            Mail::to($user)->queue(new PurchaseRequestCreated($pr));
+            Log::info('Purchase Request confirmation email queued for ' . $user->email);
+        } catch (\Exception $e) {
+            Log::error('Failed to queue purchase request email: ' . $e->getMessage());
         }
     }
 

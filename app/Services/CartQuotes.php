@@ -144,8 +144,11 @@ class CartQuotes
                 }
                 $why = self::manualReason($quotes);
                 if ($why !== null) {
-                    self::noteManual($pr, "Cotización automática no enviada: {$why}. Cotizar manualmente.");
+                    $first = self::noteManual($pr, "Cotización automática no enviada: {$why}. Cotizar manualmente.");
                     Log::info('auto-quote fell back to manual', ['purchase_request_id' => $pr->id, 'why' => $why]);
+                    if ($first) {
+                        DB::afterCommit(fn () => self::notifyReceived($pr));
+                    }
 
                     return;
                 }
@@ -156,17 +159,31 @@ class CartQuotes
             Log::error('automatic invoice failed; manual quote needed', ['purchase_request_id' => $purchaseRequestId, 'error' => $e->getMessage()]);
             $pr = PurchaseRequest::find($purchaseRequestId);
             if ($pr && ! $pr->stripe_invoice_id) {
-                self::noteManual($pr, 'La factura automática falló (' . mb_substr($e->getMessage(), 0, 120) . '). Cotizar manualmente.');
+                if (self::noteManual($pr, 'La factura automática falló (' . mb_substr($e->getMessage(), 0, 120) . '). Cotizar manualmente.')) {
+                    self::notifyReceived($pr);
+                }
             }
         }
     }
 
-    private static function noteManual(PurchaseRequest $pr, string $text): void
+    /** The team quotes it by hand: now the customer gets the usual "request received" email (held at finalize). */
+    private static function notifyReceived(PurchaseRequest $pr): void
+    {
+        if ($pr->user) {
+            app(PurchaseRequestIntake::class)->notifyCustomer($pr, $pr->user);
+        }
+    }
+
+    /** True when this is the first manual-fallback note (so the fallback email goes out once). */
+    private static function noteManual(PurchaseRequest $pr, string $text): bool
     {
         $marker = '[auto-quote]';
-        if (! str_contains((string) $pr->admin_notes, $marker)) {
-            $pr->forceFill(['admin_notes' => trim(((string) $pr->admin_notes) . "\n{$marker} {$text}")])->save();
+        if (str_contains((string) $pr->admin_notes, $marker)) {
+            return false;
         }
+        $pr->forceFill(['admin_notes' => trim(((string) $pr->admin_notes) . "\n{$marker} {$text}")])->save();
+
+        return true;
     }
 
     /** Null when the quotes can be invoiced automatically; else why not (Spanish, for the team). */

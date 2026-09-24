@@ -64,6 +64,9 @@
     @php
         $billable = $request->items->filter(fn ($i) => $i->stock_status !== 'unavailable' && $i->stock_status !== 'wishlist');
         $dropped  = $request->items->filter(fn ($i) => $i->stock_status === 'unavailable');
+        // Automatic quote (Boxly agent): each store's own checkout total is the real money; the price
+        // seen in the chat is not, so item rows show only the quantity (StoreQuoteInvoice writes these).
+        $verifiedStores = collect((array) ($request->store_costs ?? []))->filter(fn ($s) => is_array($s) && isset($s['total']));
     @endphp
 
     <h3 style="margin: 30px 0 10px;">
@@ -82,8 +85,12 @@
                     @endif
                 </td>
                 <td style="padding: 8px 0; border-bottom: 1px solid #eee; text-align: right; white-space: nowrap;">
-                    {{ $item->quantity }} × ${{ number_format((float) $item->price, 2) }}<br>
-                    <strong>${{ number_format((float) $item->price * (int) $item->quantity, 2) }}</strong>
+                    @if($verifiedStores->isNotEmpty())
+                        × {{ $item->quantity }}
+                    @else
+                        {{ $item->quantity }} × ${{ number_format((float) $item->price, 2) }}<br>
+                        <strong>${{ number_format((float) $item->price * (int) $item->quantity, 2) }}</strong>
+                    @endif
                 </td>
             </tr>
         @endforeach
@@ -96,6 +103,32 @@
                 <br><span style="color: #7a6000;">{{ $item->product_name }}</span>
             @endforeach
         </div>
+    @endif
+
+    @if($verifiedStores->isNotEmpty())
+        <h3 style="margin: 10px 0 10px;">
+            {{ $locale === 'es' ? 'Totales verificados en cada tienda' : 'Totals verified at each store' }}
+        </h3>
+        <p style="color: #666; font-size: 13px; margin: -5px 0 10px;">
+            {{ $locale === 'es' ? 'Nuestro agente puso tus productos en el carrito de cada tienda y llegó al checkout con envío a nuestra bodega en San Diego.' : 'Our agent put your items in each store\'s cart and reached checkout with shipping to our San Diego warehouse.' }}
+        </p>
+        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 14px;">
+            @foreach($verifiedStores as $storeId => $sc)
+                <tr><td colspan="2" style="padding: 8px 0 2px;"><strong>{{ $sc['name'] ?? $storeId }}</strong></td></tr>
+                @foreach([['merchandise', 'Productos', 'Products'], ['discounts', 'Descuentos', 'Discounts'], ['shipping', 'Envío a nuestra bodega', 'Shipping to our warehouse'], ['tax', 'Impuestos', 'Sales tax'], ['fees', 'Cargos de la tienda', 'Store fees']] as [$key, $es, $en])
+                    @if(isset($sc[$key]) && ! (in_array($key, ['discounts', 'fees'], true) && (float) $sc[$key] == 0))
+                        <tr>
+                            <td style="padding: 2px 0 2px 12px; color: #666;">{{ $locale === 'es' ? $es : $en }}@if($key === 'tax' && ! empty($sc['estimated'])) ({{ $locale === 'es' ? 'estimado por la tienda' : 'estimated by the store' }})@endif</td>
+                            <td style="padding: 2px 0; text-align: right; color: #666;">{{ $key === 'discounts' ? '-' : '' }}${{ number_format(abs((float) $sc[$key]), 2) }}</td>
+                        </tr>
+                    @endif
+                @endforeach
+                <tr>
+                    <td style="padding: 2px 0 8px 12px; border-bottom: 1px solid #eee;">{{ $locale === 'es' ? 'Total de la tienda' : 'Store total' }}</td>
+                    <td style="padding: 2px 0 8px; border-bottom: 1px solid #eee; text-align: right;"><strong>${{ number_format((float) $sc['total'], 2) }}</strong></td>
+                </tr>
+            @endforeach
+        </table>
     @endif
 
     <table style="width: 100%; border-collapse: collapse; margin-bottom: 25px;">

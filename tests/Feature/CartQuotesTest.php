@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Jobs\ProcessLiveShoppingResultJob;
 use App\Jobs\QuoteStoreCartJob;
+use App\Mail\PurchaseRequestCreated;
 use App\Models\Cart;
 use App\Models\CartItem;
 use App\Models\LiveShoppingSession;
@@ -234,6 +235,7 @@ class CartQuotesTest extends LiveShoppingTestCase
 
         CartQuotes::maybeInvoice($pr->id);
         $this->assertCount(1, $this->invoices, 'never a second invoice');
+        Mail::assertNotQueued(PurchaseRequestCreated::class, 'the invoice email is the customer\'s only email');
     }
 
     public function test_a_store_without_a_verified_total_leaves_the_request_for_the_manual_quote(): void
@@ -247,6 +249,17 @@ class CartQuotesTest extends LiveShoppingTestCase
         $this->assertSame(PurchaseRequest::STATUS_PENDING_REVIEW, $pr->status);
         $this->assertStringContainsString('[auto-quote]', (string) $pr->admin_notes);
         $this->assertStringContainsString('Nike', (string) $pr->admin_notes);
+
+        // The "request received" email was held at finalize; it goes out now, once.
+        Mail::assertQueued(PurchaseRequestCreated::class, 1);
+        CartQuotes::maybeInvoice($pr->id);
+        Mail::assertQueued(PurchaseRequestCreated::class, 1);
+    }
+
+    public function test_finalize_while_the_agent_quotes_sends_the_customer_no_email_yet(): void
+    {
+        $this->finalizedTwoStores();
+        Mail::assertNotQueued(PurchaseRequestCreated::class);
     }
 
     public function test_a_total_over_the_automatic_limit_goes_to_the_team(): void

@@ -250,7 +250,8 @@ class CartController extends Controller
             ]);
 
             // C5 (testers only): each store's real checkout total, then the invoice goes out automatically.
-            if (\App\Services\CartQuotes::enabledFor($user)) {
+            $quoting = \App\Services\CartQuotes::enabledFor($user);
+            if ($quoting) {
                 \App\Services\CartQuotes::start($cart, $pr);
             }
 
@@ -268,7 +269,9 @@ class CartController extends Controller
             ], 500);
         }
 
-        $this->intake->notifyCreated($pr, $user);
+        // While the agent quotes, the customer hears nothing yet: their one email comes when it is done —
+        // the invoice with the real totals, or "received" when the team has to quote (CartQuotes::maybeInvoice).
+        $this->intake->notifyCreated($pr, $user, customer: ! $quoting);
 
         return response()->json(['data' => [
             'purchase_request_id' => $pr->id,
