@@ -49,6 +49,43 @@ class StoreQuote extends Model
         return $this->belongsTo(Cart::class);
     }
 
+    /**
+     * The quotes of a purchase request for its detail payload: customers see
+     * each store's status and money; the team also sees the evidence and why a
+     * quote failed. [] when there are none (or before the table exists).
+     */
+    public static function payloadFor(PurchaseRequest $pr, bool $forTeam): array
+    {
+        if (! \Illuminate\Support\Facades\Schema::hasTable('store_quotes')) {
+            return [];
+        }
+
+        return $pr->storeQuotes()->get()->map(function (self $q) use ($forTeam) {
+            $row = [
+                'store_id'    => $q->store_id,
+                'store_name'  => $q->store_name,
+                'status'      => $q->status,
+                'currency'    => $q->currency,
+                'estimated'   => $q->estimated,
+                'observed_at' => optional($q->observed_at)->toIso8601String(),
+            ];
+            foreach (self::MONEY as $part) {
+                $row["{$part}_cents"] = $q->{"{$part}_cents"};
+            }
+            if ($forTeam) {
+                $row += [
+                    'evidence'             => $q->evidence ?? [],
+                    'error_code'           => $q->error_code,
+                    'attempts'             => $q->attempts,
+                    'destination_verified' => $q->destination_verified,
+                    'checkout_stage'       => $q->checkout_stage,
+                ];
+            }
+
+            return $row;
+        })->values()->all();
+    }
+
     public function isTerminal(): bool
     {
         return in_array($this->status, self::TERMINAL, true);

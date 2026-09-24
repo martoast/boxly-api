@@ -282,6 +282,7 @@ class AdminPurchaseRequestController extends Controller
     {
         $purchaseRequest->load(['user', 'items', 'stores']);
         $payload = $purchaseRequest->toArray();
+        $payload['store_quotes'] = \App\Models\StoreQuote::payloadFor($purchaseRequest, true);
 
         // Resolve the store_categories JSON map into a per-store breakdown
         // with category names so the admin panel can render "Nike → Sneakers,

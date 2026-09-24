@@ -244,6 +244,18 @@ class CartQuotesTest extends LiveShoppingTestCase
         $this->assertStringContainsString('límite', (string) $pr->fresh()->admin_notes);
     }
 
+    public function test_customers_see_status_and_money_the_team_also_sees_evidence(): void
+    {
+        [, $pr] = $this->finalizedTwoStores();
+        $this->deliverQuote(StoreQuote::where('store_id', 'gap')->first(), $this->quoteBlock('verified', 3664), 1);
+        $customer = collect(StoreQuote::payloadFor($pr, false))->keyBy('store_id');
+        $team = collect(StoreQuote::payloadFor($pr, true))->keyBy('store_id');
+        $this->assertSame(3664, $customer['gap']['total_cents']);
+        $this->assertSame('running', $customer['nike']['status']);
+        $this->assertArrayNotHasKey('evidence', $customer['gap']);
+        $this->assertSame(['Order total $57.28'], $team['gap']['evidence']);
+    }
+
     public function test_a_malformed_quote_is_refused_by_the_contract(): void
     {
         $this->assertNull(LiveShoppingEngine::cartQuote($this->quoteBlock('verified', null)), 'verified without a total');

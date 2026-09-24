@@ -124,6 +124,12 @@ class PurchaseRequest extends Model
         return $this->belongsTo(User::class);
     }
 
+    /** C5: the engine's checkout quote per store (automatic quote). */
+    public function storeQuotes(): HasMany
+    {
+        return $this->hasMany(StoreQuote::class)->orderBy('store_id');
+    }
+
     public function items(): HasMany
     {
         return $this->hasMany(PurchaseRequestItem::class);
