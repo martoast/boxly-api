@@ -68,6 +68,8 @@ class StoreQuote extends Model
                 'currency'    => $q->currency,
                 'estimated'   => $q->estimated,
                 'observed_at' => optional($q->observed_at)->toIso8601String(),
+                // The store browser taking this quote right now (watchable in the chat).
+                'live_session_id' => $q->status === self::STATUS_RUNNING ? $q->live_shopping_session_id : null,
             ];
             foreach (self::MONEY as $part) {
                 $row["{$part}_cents"] = $q->{"{$part}_cents"};

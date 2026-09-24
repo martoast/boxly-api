@@ -207,6 +207,18 @@ class CartQuotesTest extends LiveShoppingTestCase
         $this->assertSame(CartSync_activeKey($nike), $session->cart_active_key);
     }
 
+    public function test_the_customer_payload_names_the_store_browser_of_a_running_quote_only_while_it_runs(): void
+    {
+        [, $pr] = $this->finalizedTwoStores();
+        $gap = StoreQuote::where('store_id', 'gap')->first();
+        $quotes = collect(StoreQuote::payloadFor($pr, false))->keyBy('store_id');
+        $this->assertSame($gap->live_shopping_session_id, $quotes['gap']['live_session_id']);
+
+        $this->deliverQuote($gap, $this->quoteBlock('verified', 3664), 1);
+        $quotes = collect(StoreQuote::payloadFor($pr, false))->keyBy('store_id');
+        $this->assertNull($quotes['gap']['live_session_id']);
+    }
+
     public function test_every_store_verified_sends_one_automatic_invoice_with_each_store_total(): void
     {
         [, $pr] = $this->finalizedTwoStores();
