@@ -77,6 +77,7 @@ class CartQuotesTest extends LiveShoppingTestCase
             'database/migrations/2026_09_23_000000_create_carts_tables.php',
             'database/migrations/2026_09_23_010000_add_cart_to_live_shopping_sessions_table.php',
             'database/migrations/2026_09_24_000000_create_store_quotes_table.php',
+            'database/migrations/2026_09_24_010000_add_boxly_lab_joined_at_to_users_table.php',
         ] as $path) {
             $this->artisan('migrate', ['--path' => $path, '--force' => true]);
         }
@@ -256,6 +257,17 @@ class CartQuotesTest extends LiveShoppingTestCase
         $this->assertSame('running', $customer['nike']['status']);
         $this->assertArrayNotHasKey('evidence', $customer['gap']);
         $this->assertSame(['Order total $57.28'], $team['gap']['evidence']);
+    }
+
+    public function test_opening_the_lab_opts_an_account_in_and_nobody_else(): void
+    {
+        $u = User::factory()->createQuietly(['email' => 'teammate@example.com']);
+        $this->actingAs($u)->getJson('/cart')->assertStatus(404);
+        $this->actingAs($u)->postJson('/lab/join')->assertOk()->assertJsonPath('data.boxly_lab', true);
+        $this->actingAs($u->fresh())->getJson('/cart')->assertOk();
+        $this->assertNotNull($u->fresh()->boxly_lab_joined_at);
+        $other = User::factory()->createQuietly(['email' => 'customer@example.com']);
+        $this->actingAs($other)->getJson('/cart')->assertStatus(404);
     }
 
     public function test_a_malformed_quote_is_refused_by_the_contract(): void

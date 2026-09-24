@@ -307,7 +307,12 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // The Boxly cart: one open, multi-store cart per customer, fed by chat,
     // live shopping and the extension, finalized into ONE purchase request.
-    // Boxly Lab only (allowlisted testers) while it is evaluated in production.
+    // Boxly Lab only (accounts that opted in on /app/lab) while it is evaluated in production.
+    Route::post('/lab/join', function (Request $request) {
+        \App\Services\BoxlyBeta::join($request->user());
+
+        return response()->json(['data' => ['boxly_lab' => \App\Services\BoxlyBeta::allows($request->user()->fresh())]]);
+    });
     Route::prefix('cart')->middleware('boxly.lab')->group(function () {
         Route::get('/', [\App\Http\Controllers\CartController::class, 'show']);
         Route::post('/items', [\App\Http\Controllers\CartController::class, 'addItem']);

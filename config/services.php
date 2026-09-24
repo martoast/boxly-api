@@ -179,12 +179,13 @@ return [
         // C3: mirror Boxly cart adds into the customer's real store cart through
         // an engine `cart` session. Off by default: with it off the cart (C2)
         // behaves exactly as before and no sync job is ever dispatched.
-        'cart_sync'       => (bool) env('LIVE_SHOPPING_CART_SYNC', false),
+        // On by default: the cart only exists for Boxly Lab users (EnsureBoxlyLab), so this never touches customers.
+        'cart_sync'       => (bool) env('LIVE_SHOPPING_CART_SYNC', true),
         // A real queue: SyncStoreCartJob's busy-engine release() is a silent no-op on `sync`.
         'cart_sync_connection' => env('LIVE_SHOPPING_CART_SYNC_CONNECTION', 'database'),
         // C5: at Finalizar, the engine takes a checkout quote per store and the
         // invoice goes out automatically once every store is verified.
-        'cart_quotes'     => (bool) env('LIVE_SHOPPING_CART_QUOTES', false),
+        'cart_quotes'     => (bool) env('LIVE_SHOPPING_CART_QUOTES', true),
         // Guard rails on automatic invoices during the internal test (USD).
         'quote_max_store_usd' => (float) env('LIVE_SHOPPING_QUOTE_MAX_STORE_USD', 1500),
         'quote_max_order_usd' => (float) env('LIVE_SHOPPING_QUOTE_MAX_ORDER_USD', 3000),
