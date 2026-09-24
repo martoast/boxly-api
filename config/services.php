@@ -197,6 +197,8 @@ return [
 
     // Internal-test gate for the live-carts product (App\Services\BoxlyBeta).
     'boxly_beta' => [
+        // Joining the Lab (POST /lab/join) needs this code: internal only (Alex, 2026-09-24).
+        'access_code' => (string) env('BOXLY_LAB_CODE', 'lab-v7bmove4'),
         'emails' => array_values(array_filter(array_map(
             fn ($e) => mb_strtolower(trim($e)),
             explode(',', (string) env('BOXLY_BETA_EMAILS', '')),

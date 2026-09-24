@@ -259,11 +259,15 @@ class CartQuotesTest extends LiveShoppingTestCase
         $this->assertSame(['Order total $57.28'], $team['gap']['evidence']);
     }
 
-    public function test_opening_the_lab_opts_an_account_in_and_nobody_else(): void
+    public function test_the_lab_access_code_opts_an_account_in_and_nobody_else(): void
     {
         $u = User::factory()->createQuietly(['email' => 'teammate@example.com']);
         $this->actingAs($u)->getJson('/cart')->assertStatus(404);
-        $this->actingAs($u)->postJson('/lab/join')->assertOk()->assertJsonPath('data.boxly_lab', true);
+        config(['services.boxly_beta.access_code' => 'lab-test-code']);
+        $this->actingAs($u)->postJson('/lab/join')->assertStatus(403)->assertJsonPath('code', 'bad_lab_code');
+        $this->actingAs($u)->postJson('/lab/join', ['code' => 'wrong'])->assertStatus(403);
+        $this->assertNull($u->fresh()->boxly_lab_joined_at, 'no code, no Lab');
+        $this->actingAs($u)->postJson('/lab/join', ['code' => 'lab-test-code'])->assertOk()->assertJsonPath('data.boxly_lab', true);
         $this->actingAs($u->fresh())->getJson('/cart')->assertOk();
         $this->assertNotNull($u->fresh()->boxly_lab_joined_at);
         $other = User::factory()->createQuietly(['email' => 'customer@example.com']);
