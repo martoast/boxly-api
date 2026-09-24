@@ -241,6 +241,8 @@ Route::middleware('auth:sanctum')->group(function () {
             'preferred_language' => $user->preferred_language,
             'role' => $user->role,
             'team' => $user->team,
+            // Boxly Lab: the live-carts product is shown only to allowlisted testers.
+            'boxly_lab' => \App\Services\BoxlyBeta::allows($user),
             'email_verified_at' => $user->email_verified_at,
             'created_at' => $user->created_at,
             'is_affiliate' => $user->isAffiliate(),
@@ -305,7 +307,8 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // The Boxly cart: one open, multi-store cart per customer, fed by chat,
     // live shopping and the extension, finalized into ONE purchase request.
-    Route::prefix('cart')->group(function () {
+    // Boxly Lab only (allowlisted testers) while it is evaluated in production.
+    Route::prefix('cart')->middleware('boxly.lab')->group(function () {
         Route::get('/', [\App\Http\Controllers\CartController::class, 'show']);
         Route::post('/items', [\App\Http\Controllers\CartController::class, 'addItem']);
         Route::patch('/items/{id}', [\App\Http\Controllers\CartController::class, 'updateItem'])->whereNumber('id');

@@ -30,6 +30,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'employee' => \App\Http\Middleware\EmployeeMiddleware::class,
             'shopping' => \App\Http\Middleware\ShoppingEmployeeMiddleware::class,
             'edge.cache' => \App\Http\Middleware\EdgeCacheHeaders::class,
+            'boxly.lab' => \App\Http\Middleware\EnsureBoxlyLab::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

@@ -36,6 +36,8 @@ class CartSyncTest extends LiveShoppingTestCase
     protected function setUp(): void
     {
         parent::setUp();
+        // Boxly Lab: the cart is for allowlisted testers; every user here is one.
+        config(['services.boxly_beta.emails' => ['*']]);
         // Run the sync job inline so these tests see its engine call; production pins `database`.
         config(['services.live_shopping_engine.cart_sync_connection' => 'sync']);
 

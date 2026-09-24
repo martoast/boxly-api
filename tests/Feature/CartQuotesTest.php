@@ -173,13 +173,15 @@ class CartQuotesTest extends LiveShoppingTestCase
         return [$u, PurchaseRequest::first()];
     }
 
-    public function test_finalize_by_a_tester_starts_one_quote_per_store_and_others_get_the_manual_flow(): void
+    public function test_finalize_by_a_tester_starts_one_quote_per_store_and_others_never_see_the_cart(): void
     {
         Queue::fake();
+        // Boxly Lab: a customer outside the allowlist does not see the cart at all.
         $other = User::factory()->createQuietly(['email' => 'customer@example.com']);
-        $this->add($other, 'nike', 'https://www.nike.com/t/a');
-        $this->actingAs($other)->postJson('/cart/finalize')->assertStatus(201);
-        $this->assertSame(0, StoreQuote::count());
+        $this->actingAs($other)->getJson('/cart')->assertStatus(404);
+        $this->actingAs($other)->postJson('/cart/items', ['store_id' => 'nike', 'product_url' => 'https://www.nike.com/t/a', 'title' => 'x', 'source' => 'chat'])->assertStatus(404);
+        $this->actingAs($other)->postJson('/cart/finalize')->assertStatus(404);
+        $this->assertSame(0, Cart::count());
         Queue::assertNotPushed(QuoteStoreCartJob::class);
 
         $u = $this->tester();

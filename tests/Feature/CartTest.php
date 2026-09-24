@@ -32,6 +32,8 @@ class CartTest extends LiveShoppingTestCase
     protected function setUp(): void
     {
         parent::setUp();
+        // Boxly Lab: the cart is for allowlisted testers; every user here is one.
+        config(['services.boxly_beta.emails' => ['*']]);
 
         $this->artisan('migrate', [
             '--path'  => 'database/migrations/2026_04_29_000007_add_team_to_users.php',
