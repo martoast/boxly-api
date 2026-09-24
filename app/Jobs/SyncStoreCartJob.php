@@ -141,7 +141,7 @@ class SyncStoreCartJob implements ShouldQueue
         $selections = [];
         $ids = [];
         foreach ($items as $item) {
-            $selection = $this->selection($item);
+            $selection = self::selection($item);
             if ($selection === null) {
                 // A link the engine would refuse can never sync; say so instead
                 // of retrying it forever.
@@ -189,7 +189,7 @@ class SyncStoreCartJob implements ShouldQueue
      * sent (not https, credentials, or too long). A fragment is dropped; the
      * variant keys are folded onto the engine's key alphabet.
      */
-    private function selection(CartItem $item): ?array
+    public static function selection(CartItem $item): ?array
     {
         $url = explode('#', trim($item->product_url), 2)[0];
         $parts = parse_url($url);

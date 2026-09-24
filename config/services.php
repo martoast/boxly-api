@@ -182,9 +182,24 @@ return [
         'cart_sync'       => (bool) env('LIVE_SHOPPING_CART_SYNC', false),
         // A real queue: SyncStoreCartJob's busy-engine release() is a silent no-op on `sync`.
         'cart_sync_connection' => env('LIVE_SHOPPING_CART_SYNC_CONNECTION', 'database'),
+        // C5: at Finalizar, the engine takes a checkout quote per store and the
+        // invoice goes out automatically once every store is verified.
+        'cart_quotes'     => (bool) env('LIVE_SHOPPING_CART_QUOTES', false),
+        // Guard rails on automatic invoices during the internal test (USD).
+        'quote_max_store_usd' => (float) env('LIVE_SHOPPING_QUOTE_MAX_STORE_USD', 1500),
+        'quote_max_order_usd' => (float) env('LIVE_SHOPPING_QUOTE_MAX_ORDER_USD', 3000),
     ],
 
     'catalog' => [
         'url' => env('CATALOG_API_URL', 'https://catalog.fullstacklabs.org'),
     ],
+
+    // Internal-test gate for the live-carts product (App\Services\BoxlyBeta).
+    'boxly_beta' => [
+        'emails' => array_values(array_filter(array_map(
+            fn ($e) => mb_strtolower(trim($e)),
+            explode(',', (string) env('BOXLY_BETA_EMAILS', '')),
+        ))),
+    ],
+
 ];

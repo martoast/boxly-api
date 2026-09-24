@@ -72,6 +72,14 @@ class CartSync
      */
     public static function applyTerminal(LiveShoppingSession $session, string $outcome, ?array $cart): void
     {
+        // C5: a quote session settles its store quote (and the items), not a sync.
+        $quote = \App\Models\StoreQuote::where('live_shopping_session_id', $session->id)->first();
+        if ($quote !== null) {
+            CartQuotes::applyTerminal($session, $quote, $outcome, $cart);
+
+            return;
+        }
+
         $items = CartItem::where('cart_id', $session->cart_id)
             ->where('store_id', $session->store_id)
             ->where('sync_status', 'syncing')

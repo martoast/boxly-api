@@ -331,7 +331,7 @@ class LiveShoppingEngine
      */
     public static function cartResult($raw): ?array
     {
-        if (! is_array($raw) || array_diff(array_keys($raw), ['cart_ref', 'operation', 'lines']) !== []
+        if (! is_array($raw) || array_diff(array_keys($raw), ['cart_ref', 'operation', 'lines', 'quote']) !== []
             || ! is_string($raw['cart_ref'] ?? null) || ! preg_match('/^cart-[A-Za-z0-9_-]{1,80}$/', $raw['cart_ref'])
             || ! in_array($raw['operation'] ?? null, ['add', 'read', 'quote'], true)
             || ! is_array($raw['lines'] ?? null) || ! array_is_list($raw['lines']) || count($raw['lines']) > 20) {
@@ -357,7 +357,58 @@ class LiveShoppingEngine
             ];
         }
 
-        return ['cart_ref' => $raw['cart_ref'], 'operation' => $raw['operation'], 'lines' => $lines];
+        // C5: a quote result carries its money (present iff the operation is quote).
+        $quote = null;
+        if (($raw['operation'] === 'quote') !== array_key_exists('quote', $raw)) {
+            return null;
+        }
+        if ($raw['operation'] === 'quote') {
+            $quote = self::cartQuote($raw['quote']);
+            if ($quote === null) {
+                return null;
+            }
+        }
+
+        return ['cart_ref' => $raw['cart_ref'], 'operation' => $raw['operation'], 'lines' => $lines]
+            + ($quote !== null ? ['quote' => $quote] : []);
+    }
+
+    /**
+     * C5 — the closed quote block (docs/C3_CART_SYNC_CONTRACT.md § C5): money in
+     * integer cents, null when undisclosed; a verified/partial quote always has
+     * its total, a verified destination and a currency. Null when malformed.
+     */
+    public static function cartQuote($raw): ?array
+    {
+        $money = ['merchandise', 'discounts', 'shipping', 'tax', 'fees', 'total'];
+        $keys = array_merge(['verdict', 'currency'], $money, ['estimated', 'destination_verified', 'checkout_stage', 'evidence', 'observed_at']);
+        if (! is_array($raw) || array_diff(array_keys($raw), $keys) !== [] || array_diff($keys, array_keys($raw)) !== []) {
+            return null;
+        }
+        if (! in_array($raw['verdict'], ['verified', 'partial', 'failed'], true)
+            || ! ($raw['currency'] === null || is_string($raw['currency']) && preg_match('/^[A-Z]{3}$/', $raw['currency']))
+            || ! is_bool($raw['estimated']) || ! is_bool($raw['destination_verified'])
+            || ! ($raw['checkout_stage'] === null || in_array($raw['checkout_stage'], ['cart', 'shipping', 'payment', 'order_review'], true))
+            || ! is_string($raw['observed_at']) || strlen($raw['observed_at']) > 40 || strtotime($raw['observed_at']) === false
+            || ! is_array($raw['evidence']) || ! array_is_list($raw['evidence']) || count($raw['evidence']) > 8) {
+            return null;
+        }
+        foreach ($raw['evidence'] as $line) {
+            if (! is_string($line) || $line === '' || mb_strlen($line) > 200 || preg_match('/[\x00-\x1f\x7f]/', $line)) {
+                return null;
+            }
+        }
+        foreach ($money as $part) {
+            $v = $raw[$part];
+            if (! ($v === null || is_int($v) && abs($v) <= 100000000)) {
+                return null;
+            }
+        }
+        if ($raw['verdict'] !== 'failed' && ($raw['total'] === null || ! $raw['destination_verified'] || $raw['currency'] === null)) {
+            return null;
+        }
+
+        return $raw;
     }
 
     /**

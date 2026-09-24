@@ -51,6 +51,7 @@ class CartSyncTest extends LiveShoppingTestCase
         foreach ([
             'database/migrations/2026_09_23_000000_create_carts_tables.php',
             'database/migrations/2026_09_23_010000_add_cart_to_live_shopping_sessions_table.php',
+            'database/migrations/2026_09_24_000000_create_store_quotes_table.php',
         ] as $path) {
             $this->artisan('migrate', ['--path' => $path, '--force' => true]);
         }
