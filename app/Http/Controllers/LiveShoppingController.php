@@ -217,15 +217,41 @@ class LiveShoppingController extends Controller
         }
 
         try {
-            // Only the customer-driven session gets an input plane; the agent's
-            // session stays view-only.
-            $ticket = $this->engine->viewerTicket($session->engine_session_id, $request->user()->id, $session->kind === LiveShoppingSession::KIND_MANUAL);
+            // The customer-driven session gets an input plane, and so does a cart
+            // session (C4): the engine grants it only while the customer has taken
+            // it over (paused agent); otherwise the ticket comes back view-only.
+            $ticket = $this->engine->viewerTicket($session->engine_session_id, $request->user()->id, in_array($session->kind, [LiveShoppingSession::KIND_MANUAL, LiveShoppingSession::KIND_CART], true));
         } catch (LiveShoppingEngineException $e) {
             return response()->json(['success' => false, 'message' => $e->customer()], $e->status);
         }
 
         // Minted per request, passed through verbatim, never persisted.
         return response()->json(['success' => true, 'data' => $ticket]);
+    }
+
+    /**
+     * C4 pause & take control of the agent's store browser (a cart session): {controller: customer} parks the
+     * agent at its next step, {controller: agent} hands it back. Answers who holds it now: agent|pausing|customer.
+     */
+    public function control(Request $request, LiveShoppingSession $session)
+    {
+        if ($disabled = $this->disabled()) {
+            return $disabled;
+        }
+        $this->authorizeOwner($request, $session);
+        $data = $request->validate(['controller' => 'required|in:customer,agent']);
+
+        if ($session->kind !== LiveShoppingSession::KIND_CART || $session->isTerminal() || ! $session->engine_session_id) {
+            return response()->json(['success' => false, 'code' => 'not_controllable', 'message' => 'This browser can no longer be taken over.'], 409);
+        }
+
+        try {
+            $controller = $this->engine->setController($session->engine_session_id, $data['controller']);
+        } catch (LiveShoppingEngineException $e) {
+            return response()->json(['success' => false, 'code' => $e->getMessage(), 'message' => $e->customer()], $e->status === 503 ? 503 : 409);
+        }
+
+        return response()->json(['success' => true, 'data' => ['controller' => $controller]]);
     }
 
     /** Copied verbatim in shape from ConversationController::authorizeOwner. */

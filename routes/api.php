@@ -787,6 +787,9 @@ Route::middleware('auth:sanctum')->group(function () {
         // link.
         Route::post('/sessions/{session}/ticket', [\App\Http\Controllers\LiveShoppingController::class, 'ticket'])
             ->middleware('throttle:30,1');
+        // C4: pause the agent's store browser and take control / hand it back (cart sessions).
+        Route::post('/sessions/{session}/control', [\App\Http\Controllers\LiveShoppingController::class, 'control'])
+            ->middleware('throttle:30,1');
     });
 
 });

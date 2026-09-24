@@ -156,6 +156,25 @@ class LiveShoppingEngine
      * Mint a viewer ticket. Engine round-trip on EVERY request; nothing is
      * persisted and nothing is invented.
      */
+    /**
+     * C4: pause the agent of a cart session for the customer (controller "customer") or hand it back ("agent").
+     * Returns who holds the browser now: agent | pausing | customer.
+     */
+    public function setController(string $engineSessionId, string $controller): string
+    {
+        $data = $this->post('/v1/sessions/' . rawurlencode($engineSessionId) . '/control', [
+            'schema_version' => self::SCHEMA_VERSION,
+            'controller'     => $controller,
+        ]);
+        $this->assertClosedKeys($data, ['schema_version', 'controller'], 'control');
+        $now = $data['controller'] ?? null;
+        if (! in_array($now, ['agent', 'pausing', 'customer'], true)) {
+            throw LiveShoppingEngineException::unavailable('bad_control_response');
+        }
+
+        return $now;
+    }
+
     public function viewerTicket(string $engineSessionId, int $userId, bool $input = false): array
     {
         // The id came from the engine, but it lands in a URL path: encode it so

@@ -236,6 +236,28 @@ class CartSyncTest extends LiveShoppingTestCase
         $this->assertSame([], $this->actingAs($u)->getJson('/cart')->assertOk()->json('data.live_sessions'));
     }
 
+    public function test_the_owner_can_pause_the_agents_store_browser_and_hand_it_back(): void
+    {
+        $this->fakeEngine();
+        $u = User::factory()->createQuietly();
+        $this->actingAs($u)->postJson('/cart/items', $this->item())->assertStatus(201);
+        $session = LiveShoppingSession::first();
+
+        $this->fakeEngine(['ok' => true, 'data' => ['schema_version' => 1, 'controller' => 'pausing']], 200);
+        $this->actingAs($u)->postJson("/live-shopping/sessions/{$session->id}/control", ['controller' => 'customer'])
+            ->assertOk()->assertJsonPath('data.controller', 'pausing');
+        $this->assertStringEndsWith('/v1/sessions/eng_c1/control', $this->sent[0]['url']);
+        $this->assertSame(['schema_version' => 1, 'controller' => 'customer'], json_decode($this->sent[0]['body'], true));
+
+        $other = User::factory()->createQuietly();
+        $this->actingAs($other)->postJson("/live-shopping/sessions/{$session->id}/control", ['controller' => 'agent'])->assertStatus(403);
+        $this->actingAs($u)->postJson("/live-shopping/sessions/{$session->id}/control", ['controller' => 'boss'])->assertStatus(422);
+
+        $session->forceFill(['kind' => LiveShoppingSession::KIND_MANUAL])->save();
+        $this->actingAs($u)->postJson("/live-shopping/sessions/{$session->id}/control", ['controller' => 'customer'])
+            ->assertStatus(409)->assertJsonPath('code', 'not_controllable');
+    }
+
     public function test_engine_busy_puts_items_back_to_pending_and_releases_the_job_with_backoff(): void
     {
         // The shipped default is a real queue (setUp runs inline for the other tests).
