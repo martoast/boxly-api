@@ -97,6 +97,7 @@ class CartSync
                 $item = ctype_digit($id) ? $items->pull((int) $id) : null;
                 if ($item) {
                     $item->forceFill(['sync_status' => $line['state'], 'sync_note' => $line['note'] ?? null] + self::foundUrlFields($item, $line)
+                        + self::variantPhotoFields($item, $line)
                         + (self::countsFailures() ? ['sync_failures' => 0] : []))->save();
                 }
             }
@@ -128,6 +129,22 @@ class CartSync
     private static function countsFailures(): bool
     {
         return \Illuminate\Support\Facades\Schema::hasColumn('cart_items', 'sync_failures');
+    }
+
+    /**
+     * The photo the engine read on the store's product page with the options picked, just before the add: it IS the
+     * variant in the cart (Lab 2026-09-28: a Black beanie showed the catalog's brown default photo). It replaces the
+     * line's photo when there is none or a colour was chosen; a product with no colour keeps the chat's photo.
+     */
+    public static function variantPhotoFields(CartItem $item, array $line): array
+    {
+        $photo = $line['image_url'] ?? null;
+        if (($line['state'] ?? null) !== 'in_store_cart' || ! is_string($photo) || $photo === '') {
+            return [];
+        }
+        $colour = collect((array) $item->variants)->keys()->contains(fn ($k) => preg_match('/colou?r|shade|finish|style/i', (string) $k));
+
+        return blank($item->image_url) || $colour ? ['image_url' => $photo] : [];
     }
 
     /**

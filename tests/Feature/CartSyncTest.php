@@ -187,6 +187,40 @@ class CartSyncTest extends LiveShoppingTestCase
         $this->assertSame('https://www.nike.com/t/tech-fleece', $item->refresh()->product_url, 'a line with a real page keeps it');
     }
 
+    public function test_the_photo_of_the_colour_added_replaces_the_default_one(): void
+    {
+        $u = User::factory()->create();
+        $this->fakeEngine();
+        $this->actingAs($u)->postJson('/cart/items', $this->item(['variants' => ['Color' => 'Black'], 'image_url' => 'https://img.example/brown.jpg']))->assertStatus(201);
+        $item = CartItem::first();
+        $photo = 'https://img.example/black.jpg';
+        $this->deliverAndProcess($this->cartDelivery([$this->line($item) + ['image_url' => $photo]]));
+        $this->assertSame($photo, $item->refresh()->image_url, 'the store page with the colour picked shows the colour in the cart');
+    }
+
+    public function test_a_product_without_colour_keeps_the_chat_photo_and_a_bad_photo_is_ignored(): void
+    {
+        $u = User::factory()->create();
+        $this->fakeEngine();
+        $this->actingAs($u)->postJson('/cart/items', $this->item(['image_url' => 'https://img.example/chat.jpg']))->assertStatus(201);
+        $item = CartItem::first();
+        $this->deliverAndProcess($this->cartDelivery([$this->line($item) + ['image_url' => 'https://img.example/page.jpg']]));
+        $this->assertSame('https://img.example/chat.jpg', $item->refresh()->image_url);
+        $this->assertSame('in_store_cart', $item->sync_status);
+    }
+
+    public function test_a_line_with_a_non_https_photo_still_settles(): void
+    {
+        $u = User::factory()->create();
+        $this->fakeEngine();
+        $this->actingAs($u)->postJson('/cart/items', $this->item(['variants' => ['Color' => 'Black']]))->assertStatus(201);
+        $item = CartItem::first();
+        $this->deliverAndProcess($this->cartDelivery([$this->line($item) + ['image_url' => 'http://img.example/x.jpg']]));
+        $item->refresh();
+        $this->assertSame('in_store_cart', $item->sync_status);
+        $this->assertNull($item->image_url);
+    }
+
     public function test_flag_off_dispatches_nothing_and_changes_nothing(): void
     {
         $this->configureEngine(['cart_sync' => false]);

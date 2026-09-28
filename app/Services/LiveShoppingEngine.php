@@ -358,7 +358,7 @@ class LiveShoppingEngine
         }
         $lines = [];
         foreach ($raw['lines'] as $line) {
-            if (! is_array($line) || array_diff(array_keys($line), ['selection_id', 'state', 'availability', 'observed_quantity', 'note', 'found_url']) !== []
+            if (! is_array($line) || array_diff(array_keys($line), ['selection_id', 'state', 'availability', 'observed_quantity', 'note', 'found_url', 'image_url']) !== []
                 || ! is_string($line['selection_id'] ?? null) || ! preg_match('/^ci-[A-Za-z0-9_-]{1,80}$/', $line['selection_id'])
                 || ! in_array($line['state'] ?? null, ['in_store_cart', 'unavailable', 'failed'], true)
                 || ! in_array($line['availability'] ?? null, ['in_stock', 'out_of_stock', 'unknown'], true)) {
@@ -378,10 +378,19 @@ class LiveShoppingEngine
                     return null;
                 }
             }
+            // The photo of the variant the store took (read on its product page before the add). Optional: a bad
+            // one is dropped, it never sinks the result.
+            $photo = $line['image_url'] ?? null;
+            if ($photo !== null) {
+                $parts = is_string($photo) && strlen($photo) <= 2048 ? parse_url($photo) : false;
+                if (! is_array($parts) || ($parts['scheme'] ?? '') !== 'https' || empty($parts['host']) || isset($parts['user']) || isset($parts['pass'])) {
+                    $photo = null;
+                }
+            }
             $lines[] = [
                 'selection_id' => $line['selection_id'], 'state' => $line['state'],
                 'availability' => $line['availability'], 'observed_quantity' => $qty, 'note' => $note,
-            ] + ($found !== null ? ['found_url' => $found] : []);
+            ] + ($found !== null ? ['found_url' => $found] : []) + ($photo !== null ? ['image_url' => $photo] : []);
         }
 
         // C5: a quote result carries its money (present iff the operation is quote).
