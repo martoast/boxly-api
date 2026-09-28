@@ -55,6 +55,7 @@ class CartSyncTest extends LiveShoppingTestCase
             'database/migrations/2026_09_23_010000_add_cart_to_live_shopping_sessions_table.php',
             'database/migrations/2026_09_24_000000_create_store_quotes_table.php',
             'database/migrations/2026_09_28_000000_add_find_query_to_cart_items.php',
+            'database/migrations/2026_09_28_010000_add_sync_failures_to_cart_items.php',
         ] as $path) {
             $this->artisan('migrate', ['--path' => $path, '--force' => true]);
         }
@@ -438,6 +439,27 @@ class CartSyncTest extends LiveShoppingTestCase
         Queue::assertPushed(SyncStoreCartJob::class, 1);
     }
 
+    public function test_a_second_failed_run_is_final_with_the_spanish_note(): void
+    {
+        $this->fakeEngine();
+        $u = User::factory()->createQuietly();
+        $this->actingAs($u)->postJson('/cart/items', $this->item())->assertStatus(201);
+        $item = CartItem::first();
+        // Already retried once, and syncing again.
+        $item->forceFill(['sync_failures' => 1, 'sync_status' => 'syncing'])->save();
+        Queue::fake();
+
+        $this->deliverAndProcess($this->body([
+            'session_id' => 'eng_c1', 'conversation_id' => '0', 'products' => [],
+            'result' => ['outcome' => 'failed', 'products' => [], 'error_code' => 'worker_failed'],
+        ]));
+
+        $item->refresh();
+        $this->assertSame('failed', $item->sync_status);
+        $this->assertSame('No se pudo agregar en la tienda', $item->sync_note);
+        Queue::assertNotPushed(SyncStoreCartJob::class);
+    }
+
     public function test_a_failed_terminal_fails_the_syncing_items_with_the_spanish_note(): void
     {
         $this->fakeEngine();
@@ -450,13 +472,14 @@ class CartSyncTest extends LiveShoppingTestCase
             'result' => ['outcome' => 'failed', 'products' => [], 'error_code' => 'worker_failed'],
         ]));
 
+        // The first failed run is retried: the line goes back to pending and a sync is dispatched again.
         $item = CartItem::first();
-        $this->assertSame('failed', $item->sync_status);
-        $this->assertSame('No se pudo agregar en la tienda; se reintentará', $item->sync_note);
+        $this->assertSame('pending', $item->sync_status);
+        $this->assertSame(1, (int) $item->sync_failures);
+        Queue::assertPushed(SyncStoreCartJob::class, 1);
         $session = LiveShoppingSession::first();
         $this->assertSame('failed', $session->status);
         $this->assertNull($session->cart_active_key);
-        Queue::assertNotPushed(SyncStoreCartJob::class);
         $this->assertSame(0, ConversationMessage::count());
     }
 
@@ -573,7 +596,9 @@ class CartSyncTest extends LiveShoppingTestCase
 
         $this->assertSame('failed', LiveShoppingSession::first()->status);
         $this->assertNull(LiveShoppingSession::first()->cart_active_key);
-        $this->assertSame('failed', CartItem::first()->sync_status);
+        // A failed run is retried once: the line is back in line for another sync.
+        $this->assertSame(1, (int) CartItem::first()->sync_failures);
+        $this->assertNotSame('failed', CartItem::first()->sync_status);
     }
 
     public function test_get_cart_reports_whether_store_sync_is_on(): void

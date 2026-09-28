@@ -20,7 +20,11 @@ use App\Models\LiveShoppingWebhookReceipt;
 class CartSync
 {
     /** The note a failed sync leaves on the items it was carrying. */
-    public const FAILED_NOTE = 'No se pudo agregar en la tienda; se reintentará';
+    // Final: the automatic retry has already happened (a failed run is tried once more — see applyTerminal).
+    public const FAILED_NOTE = 'No se pudo agregar en la tienda';
+
+    /** How many failed agent runs a line gets before it is marked failed (the first is retried). */
+    public const RUN_ATTEMPTS = 2;
 
     public static function enabled(): bool
     {
@@ -92,15 +96,22 @@ class CartSync
                 $id = substr((string) ($line['selection_id'] ?? ''), 3);
                 $item = ctype_digit($id) ? $items->pull((int) $id) : null;
                 if ($item) {
-                    $item->forceFill(['sync_status' => $line['state'], 'sync_note' => $line['note'] ?? null] + self::foundUrlFields($item, $line))->save();
+                    $item->forceFill(['sync_status' => $line['state'], 'sync_note' => $line['note'] ?? null] + self::foundUrlFields($item, $line)
+                        + (self::countsFailures() ? ['sync_failures' => 0] : []))->save();
                 }
             }
             foreach ($items as $item) {
                 $item->forceFill(['sync_status' => 'pending', 'sync_note' => null])->save();
             }
         } else {
+            // A failed RUN (the model API erroring mid-add, a lost browser — live Lab Gymshark 2026-09-28: the item was
+            // in the bag when the run died) is tried once more: the line goes back to pending and is re-dispatched
+            // below. The second failure is final.
             foreach ($items as $item) {
-                $item->forceFill(['sync_status' => 'failed', 'sync_note' => self::FAILED_NOTE])->save();
+                $failures = self::countsFailures() ? (int) $item->sync_failures + 1 : self::RUN_ATTEMPTS;
+                $item->forceFill($failures < self::RUN_ATTEMPTS
+                    ? ['sync_status' => 'pending', 'sync_note' => null, 'sync_failures' => $failures]
+                    : ['sync_status' => 'failed', 'sync_note' => self::FAILED_NOTE] + (self::countsFailures() ? ['sync_failures' => $failures] : []))->save();
             }
         }
 
@@ -111,6 +122,12 @@ class CartSync
                 ->distinct()->orderBy('store_id')->pluck('store_id')
                 ->each(fn (string $storeId) => self::dispatch($session->cart_id, $storeId));
         }
+    }
+
+    /** Whether cart_items has sync_failures (older schemas in tests do not). */
+    private static function countsFailures(): bool
+    {
+        return \Illuminate\Support\Facades\Schema::hasColumn('cart_items', 'sync_failures');
     }
 
     /**
