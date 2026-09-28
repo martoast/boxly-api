@@ -213,7 +213,7 @@ class SyncStoreCartJob implements ShouldQueue
             'title'        => mb_substr($item->title, 0, 300),
             'quantity'     => max(1, min(20, (int) $item->quantity)),
             'variants'     => (object) $variants,
-        ];
+        ] + (filled($item->find_query) ? ['find' => mb_substr(trim($item->find_query), 0, 300)] : []);
     }
 
     /**

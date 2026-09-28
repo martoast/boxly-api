@@ -358,7 +358,7 @@ class LiveShoppingEngine
         }
         $lines = [];
         foreach ($raw['lines'] as $line) {
-            if (! is_array($line) || array_diff(array_keys($line), ['selection_id', 'state', 'availability', 'observed_quantity', 'note']) !== []
+            if (! is_array($line) || array_diff(array_keys($line), ['selection_id', 'state', 'availability', 'observed_quantity', 'note', 'found_url']) !== []
                 || ! is_string($line['selection_id'] ?? null) || ! preg_match('/^ci-[A-Za-z0-9_-]{1,80}$/', $line['selection_id'])
                 || ! in_array($line['state'] ?? null, ['in_store_cart', 'unavailable', 'failed'], true)
                 || ! in_array($line['availability'] ?? null, ['in_stock', 'out_of_stock', 'unknown'], true)) {
@@ -370,10 +370,18 @@ class LiveShoppingEngine
                 || $note !== null && (! is_string($note) || mb_strlen($note) > 200)) {
                 return null;
             }
+            // Search to cart: the product page the engine found for a `find` selection (https, no credentials).
+            $found = $line['found_url'] ?? null;
+            if ($found !== null) {
+                $parts = is_string($found) && strlen($found) <= 2048 ? parse_url($found) : false;
+                if (! is_array($parts) || ($parts['scheme'] ?? '') !== 'https' || empty($parts['host']) || isset($parts['user']) || isset($parts['pass'])) {
+                    return null;
+                }
+            }
             $lines[] = [
                 'selection_id' => $line['selection_id'], 'state' => $line['state'],
                 'availability' => $line['availability'], 'observed_quantity' => $qty, 'note' => $note,
-            ];
+            ] + ($found !== null ? ['found_url' => $found] : []);
         }
 
         // C5: a quote result carries its money (present iff the operation is quote).

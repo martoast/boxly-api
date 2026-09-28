@@ -60,6 +60,8 @@ class CartController extends Controller
             'source' => 'required|in:' . implode(',', CartItem::SOURCES),
             'saved_id' => 'nullable|string|max:255',
             'conversation_id' => 'nullable|integer',
+            // Search to cart: the product is found on the store's own site by the engine (product_url is that site).
+            'find' => 'nullable|string|min:2|max:300',
         ]);
 
         $user = $request->user();
@@ -111,7 +113,7 @@ class CartController extends Controller
                     'variants_key' => $key,
                     'source' => $data['source'],
                     'saved_id' => $data['saved_id'] ?? null,
-                ]);
+                ] + (isset($data['find']) ? ['find_query' => trim($data['find'])] : []));
             }
 
             $cart->touch();

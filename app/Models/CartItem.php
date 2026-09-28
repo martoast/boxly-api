@@ -14,7 +14,7 @@ class CartItem extends Model
     protected $fillable = [
         'cart_id', 'store_id', 'store_name', 'product_url', 'product_url_hash', 'title',
         'image_url', 'price', 'currency', 'quantity', 'variants', 'variants_key',
-        'source', 'saved_id', 'sync_status', 'sync_note',
+        'source', 'saved_id', 'sync_status', 'sync_note', 'find_query',
     ];
 
     protected $casts = [

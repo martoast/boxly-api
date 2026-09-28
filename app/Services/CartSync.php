@@ -92,7 +92,7 @@ class CartSync
                 $id = substr((string) ($line['selection_id'] ?? ''), 3);
                 $item = ctype_digit($id) ? $items->pull((int) $id) : null;
                 if ($item) {
-                    $item->forceFill(['sync_status' => $line['state'], 'sync_note' => $line['note'] ?? null])->save();
+                    $item->forceFill(['sync_status' => $line['state'], 'sync_note' => $line['note'] ?? null] + self::foundUrlFields($item, $line))->save();
                 }
             }
             foreach ($items as $item) {
@@ -111,6 +111,24 @@ class CartSync
                 ->distinct()->orderBy('store_id')->pluck('store_id')
                 ->each(fn (string $storeId) => self::dispatch($session->cart_id, $storeId));
         }
+    }
+
+    /**
+     * Search to cart: a `find` line the engine found now IS that product page — product_url (and its hash) become
+     * it and find_query is cleared, so the quote prices exactly that page. Not when the same product (same page,
+     * same variants) is already its own line: the unique key forbids two, and that line already carries the page.
+     */
+    public static function foundUrlFields(CartItem $item, array $line): array
+    {
+        $found = $line['found_url'] ?? null;
+        if (! filled($item->find_query) || ! is_string($found) || $found === '') {
+            return [];
+        }
+        $hash = CartItem::urlHash($found);
+        $taken = CartItem::where('cart_id', $item->cart_id)->where('product_url_hash', $hash)
+            ->where('variants_key', $item->variants_key)->where('id', '!=', $item->id)->exists();
+
+        return $taken ? [] : ['product_url' => $found, 'product_url_hash' => $hash, 'find_query' => null];
     }
 
     /**

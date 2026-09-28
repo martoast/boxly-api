@@ -54,6 +54,7 @@ class CartSyncTest extends LiveShoppingTestCase
             'database/migrations/2026_09_23_000000_create_carts_tables.php',
             'database/migrations/2026_09_23_010000_add_cart_to_live_shopping_sessions_table.php',
             'database/migrations/2026_09_24_000000_create_store_quotes_table.php',
+            'database/migrations/2026_09_28_000000_add_find_query_to_cart_items.php',
         ] as $path) {
             $this->artisan('migrate', ['--path' => $path, '--force' => true]);
         }
@@ -147,6 +148,43 @@ class CartSyncTest extends LiveShoppingTestCase
     }
 
     // ── tests ────────────────────────────────────────────────────────────
+
+    public function test_a_find_item_is_sent_to_the_engine_with_its_search_and_takes_the_page_it_found(): void
+    {
+        // Search to cart: a web result from an outside seller of a brand we carry is FOUND on the store's own site.
+        $u = User::factory()->create();
+        $this->fakeEngine();
+        $this->actingAs($u)->postJson('/cart/items', $this->item([
+            'product_url' => 'https://www.nike.com/?boxly_find=pegasus-41',
+            'title' => 'Nike Pegasus 41',
+            'find' => 'Nike Pegasus 41 men\'s',
+        ]))->assertStatus(201);
+        $create = collect($this->sent)->first(fn ($r) => str_ends_with($r['url'], '/v1/sessions'));
+        $selection = json_decode($create['body'], true)['cart']['selections'][0];
+        $this->assertSame('Nike Pegasus 41 men\'s', $selection['find']);
+        $this->assertSame('https://www.nike.com/?boxly_find=pegasus-41', $selection['url']);
+
+        $item = CartItem::first();
+        $found = 'https://www.nike.com/t/pegasus-41/FD2722-002';
+        $this->deliverAndProcess($this->cartDelivery([$this->line($item) + ['found_url' => $found]]));
+        $item->refresh();
+        $this->assertSame('in_store_cart', $item->sync_status);
+        $this->assertSame($found, $item->product_url, 'the quote will price the page the search found');
+        $this->assertSame(CartItem::urlHash($found), $item->product_url_hash);
+        $this->assertNull($item->find_query);
+    }
+
+    public function test_an_item_without_find_sends_no_find_and_ignores_a_found_url(): void
+    {
+        $u = User::factory()->create();
+        $this->fakeEngine();
+        $this->actingAs($u)->postJson('/cart/items', $this->item())->assertStatus(201);
+        $create = collect($this->sent)->first(fn ($r) => str_ends_with($r['url'], '/v1/sessions'));
+        $this->assertArrayNotHasKey('find', json_decode($create['body'], true)['cart']['selections'][0]);
+        $item = CartItem::first();
+        $this->deliverAndProcess($this->cartDelivery([$this->line($item) + ['found_url' => 'https://www.nike.com/t/other/X1']]));
+        $this->assertSame('https://www.nike.com/t/tech-fleece', $item->refresh()->product_url, 'a line with a real page keeps it');
+    }
 
     public function test_flag_off_dispatches_nothing_and_changes_nothing(): void
     {
