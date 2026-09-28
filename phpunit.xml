@@ -18,6 +18,8 @@
         </include>
     </source>
     <php>
+        <!-- Tests never reach the real catalog service (FillItemImageJob, the catalog proxy). -->
+        <env name="CATALOG_API_URL" value=""/>
         <env name="APP_ENV" value="testing"/>
         <env name="APP_MAINTENANCE_DRIVER" value="file"/>
         <env name="BCRYPT_ROUNDS" value="4"/>

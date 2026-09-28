@@ -124,6 +124,10 @@ class CartController extends Controller
         if ($sync) {
             CartSync::dispatch($cart->id, $item->store_id);
         }
+        // No photo from the chat (a pasted link, a web store): the product page's own, in the background.
+        if (blank($item->image_url) && filled(config('services.catalog.url'))) {
+            \App\Jobs\FillItemImageJob::dispatch('cart', $item->id);
+        }
 
         return response()->json(['data' => [
             'item' => $this->itemPayload($item->fresh()),
@@ -255,6 +259,13 @@ class CartController extends Controller
             $quoting = \App\Services\CartQuotes::enabledFor($user);
             if ($quoting) {
                 \App\Services\CartQuotes::start($cart, $pr);
+            }
+
+            // Any order item still without a photo gets the product page's own (order page, email, admin view).
+            foreach ($pr->items()->get() as $prItem) {
+                if (blank($prItem->image_url) && blank($prItem->product_image_url) && filled(config('services.catalog.url'))) {
+                    \App\Jobs\FillItemImageJob::dispatch('pr', $prItem->id)->afterCommit();
+                }
             }
 
             DB::commit();

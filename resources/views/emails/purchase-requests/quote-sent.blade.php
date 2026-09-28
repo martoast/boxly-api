@@ -75,16 +75,22 @@
 
     <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
         @foreach($billable as $item)
+            {{-- Each product with its photo (Alex 2026-09-28: the email must show the image, name and quantity). --}}
             <tr>
-                <td style="padding: 8px 0; border-bottom: 1px solid #eee;">
-                    {{ $item->product_name }}
+                @if($item->image_full_url)
+                    <td width="68" valign="top" style="padding: 8px 10px 8px 0; border-bottom: 1px solid #eee;">
+                        <img src="{{ $item->image_full_url }}" width="56" height="56" alt="" style="width: 56px; height: 56px; object-fit: contain; border: 1px solid #eee; border-radius: 6px; background: #fafafa;">
+                    </td>
+                @endif
+                <td valign="top" style="padding: 8px 0; border-bottom: 1px solid #eee;" @if(! $item->image_full_url) colspan="2" @endif>
+                    <span style="font-weight: 600; color: #111;">{{ $item->product_name }}</span>
                     @if($item->options)
                         @foreach((array) $item->options as $k => $v)
                             <br><span style="color: #888; font-size: 13px;">{{ $k }}: {{ $v }}</span>
                         @endforeach
                     @endif
                 </td>
-                <td style="padding: 8px 0; border-bottom: 1px solid #eee; text-align: right; white-space: nowrap;">
+                <td valign="top" style="padding: 8px 0; border-bottom: 1px solid #eee; text-align: right; white-space: nowrap;">
                     @if($verifiedStores->isNotEmpty())
                         × {{ $item->quantity }}
                     @else

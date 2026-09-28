@@ -145,7 +145,15 @@ class CartSync
         $taken = CartItem::where('cart_id', $item->cart_id)->where('product_url_hash', $hash)
             ->where('variants_key', $item->variants_key)->where('id', '!=', $item->id)->exists();
 
-        return $taken ? [] : ['product_url' => $found, 'product_url_hash' => $hash, 'find_query' => null];
+        if ($taken) {
+            return [];
+        }
+        // The page the search found also gives the line its photo when the chat had none (after this save).
+        if (blank($item->image_url) && filled(config('services.catalog.url'))) {
+            \App\Jobs\FillItemImageJob::dispatch('cart', $item->id)->afterCommit();
+        }
+
+        return ['product_url' => $found, 'product_url_hash' => $hash, 'find_query' => null];
     }
 
     /**
