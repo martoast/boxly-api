@@ -90,8 +90,10 @@ class PurchaseRequestIntake
             $handled = $afterItem ? (bool) $afterItem($item, $index, $pr) : false;
             if (! $handled && ! empty($itemData['product_image_url'])) {
                 // No uploaded file — re-host the provided image URL to our
-                // bucket so it's permanent (source thumbnails can expire).
-                $this->rehostItemImage($item, $item->product_image_url, $user, $pr);
+                // bucket so it's permanent (source thumbnails can expire). In the
+                // background: inline, one download at a time, it could hold the
+                // request past its caller's time limit (RehostItemImageJob).
+                \App\Jobs\RehostItemImageJob::dispatch($item->id);
             }
         }
 

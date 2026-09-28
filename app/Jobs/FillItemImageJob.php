@@ -47,6 +47,10 @@ class FillItemImageJob implements ShouldQueue
             return;
         }
         $item->forceFill($this->kind === 'cart' ? ['image_url' => $image] : ['product_image_url' => $image])->save();
+        // An order item's photo is then kept in our own bucket, like every other order image.
+        if ($this->kind === 'pr') {
+            RehostItemImageJob::dispatch($item->id);
+        }
     }
 
     /** The product's photo from the catalog service's live read (https only), or null. */
