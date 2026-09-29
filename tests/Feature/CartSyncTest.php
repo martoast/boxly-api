@@ -572,8 +572,9 @@ class CartSyncTest extends LiveShoppingTestCase
         $u = User::factory()->createQuietly();
         $this->actingAs($u)->postJson('/cart/items', $this->item())->assertStatus(201);
         LiveShoppingSession::query()->update(['expires_at' => now()->subMinutes(10)]);
-        // The engine no longer answers for it.
-        $this->fakeEngine(['ok' => false, 'error' => ['code' => 'unknown_session']], 404);
+        // The engine gives no usable status for it (an unknown session is settled sooner: see engine_lost below),
+        // and refuses the one retry.
+        $this->fakeEngine(['ok' => false, 'error' => ['code' => 'invalid_request']], 400);
 
         $this->artisan('boxly:live-shopping-reconcile')->assertSuccessful();
 
@@ -632,6 +633,40 @@ class CartSyncTest extends LiveShoppingTestCase
         // A failed run is retried once: the line is back in line for another sync.
         $this->assertSame(1, (int) CartItem::first()->sync_failures);
         $this->assertNotSame('failed', CartItem::first()->sync_status);
+    }
+
+    public function test_a_session_the_restarted_engine_no_longer_knows_is_settled_at_once_and_retried(): void
+    {
+        $this->fakeEngine();
+        $u = User::factory()->createQuietly();
+        $this->actingAs($u)->postJson('/cart/items', $this->item())->assertStatus(201);
+        LiveShoppingSession::query()->update(['status' => 'running', 'expires_at' => now()->addMinutes(20)]);
+        // The engine restarted: its sessions lived in memory, so it answers unknown_session long before the deadline.
+        $this->fakeEngine(['ok' => false, 'error' => ['code' => 'unknown_session']], 404);
+
+        $this->artisan('boxly:live-shopping-reconcile')->assertSuccessful();
+
+        $session = LiveShoppingSession::orderBy('id')->first();
+        $this->assertSame('failed', $session->status);
+        $this->assertSame('engine_lost', $session->error_code);
+        $this->assertNull($session->cart_active_key, 'the cart × store key is free for the next add');
+        $this->assertGreaterThanOrEqual(1, (int) CartItem::first()->sync_failures, 'counted as a lost run');
+        $creates = array_filter($this->sent, fn ($r) => str_ends_with(parse_url($r['url'], PHP_URL_PATH), '/v1/sessions'));
+        $this->assertCount(1, $creates, 'the item was sent again at once, not left pending until the old deadline');
+    }
+
+    public function test_an_unreachable_engine_is_not_taken_as_a_lost_session(): void
+    {
+        $this->fakeEngine();
+        $u = User::factory()->createQuietly();
+        $this->actingAs($u)->postJson('/cart/items', $this->item())->assertStatus(201);
+        LiveShoppingSession::query()->update(['status' => 'running', 'expires_at' => now()->addMinutes(20)]);
+        $this->fakeEngine(['ok' => false, 'error' => ['code' => 'internal_error']], 500);
+
+        $this->artisan('boxly:live-shopping-reconcile')->assertSuccessful();
+
+        $this->assertSame('running', LiveShoppingSession::first()->status);
+        $this->assertNotNull(LiveShoppingSession::first()->cart_active_key);
     }
 
     public function test_get_cart_reports_whether_store_sync_is_on(): void

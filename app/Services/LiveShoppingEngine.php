@@ -693,6 +693,11 @@ class LiveShoppingEngine
             throw LiveShoppingEngineException::unavailable('unreachable');
         }
         $json = $response->json();
+        // The one status refusal with a meaning: the engine does not know this session (it restarted).
+        if ($response->status() === 404 && is_array($json) && ($json['ok'] ?? null) === false
+            && ($json['error']['code'] ?? null) === 'unknown_session') {
+            throw LiveShoppingEngineException::refused('unknown_session');
+        }
         if (! is_array($json) || ($json['ok'] ?? false) !== true || $response->failed()) {
             throw LiveShoppingEngineException::unavailable('unreadable');
         }

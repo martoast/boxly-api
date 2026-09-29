@@ -183,6 +183,23 @@ class CartSync
      * a deterministic local receipt), so the active key is released and the
      * items are settled exactly once whichever path arrives first.
      */
+    /** A cart/quote session the engine no longer knows: failed like a lost run, its cart × store key released. */
+    private static function settleLost(LiveShoppingSession $session): void
+    {
+        \Illuminate\Support\Facades\DB::transaction(function () use ($session) {
+            $fresh = LiveShoppingSession::where('id', $session->id)->lockForUpdate()->first();
+            if (! $fresh || $fresh->isTerminal() || $fresh->cart_active_key === null) {
+                return;
+            }
+            self::applyTerminal($fresh, LiveShoppingSession::STATUS_FAILED, null);
+            $fresh->forceFill([
+                'status'          => LiveShoppingSession::STATUS_FAILED,
+                'error_code'      => 'engine_lost',
+                'cart_active_key' => null,
+            ])->save();
+        });
+    }
+
     public static function reconcileStatus(LiveShoppingSession $session, LiveShoppingEngine $engine): void
     {
         if ($session->isTerminal() || ! $session->engine_session_id) {
@@ -192,7 +209,14 @@ class CartSync
         try {
             $remote = $engine->sessionStatus($session->engine_session_id, true);
         } catch (LiveShoppingEngineException $e) {
-            return; // transport/schema failure is not authority to mutate local state
+            // The engine ANSWERED that it has no such session: it restarted (its sessions live in memory) and the run
+            // is gone for good (prod 2026-09-29: a lost Gymshark sync held the cart × store key, and every later add
+            // for that store sat pending until the old deadline). Settle it now as a failed run — retried once.
+            if ($e->status === 422 && $e->getMessage() === 'unknown_session') {
+                self::settleLost($session);
+            }
+
+            return; // any other transport/schema failure is not authority to mutate local state
         }
 
         // A deleted thread nulls the local conversation mid-session; the engine
