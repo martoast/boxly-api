@@ -2521,59 +2521,6 @@ class ProductExtractController extends Controller
     }
 
     /**
-     * Pull a real product feed from a (Shopify) US store — the latest drop, or a
-     * keyword search within the store. Powers the assistant's browse_store tool.
-     * Returns [] for non-Shopify stores (assistant falls back to web search).
-     */
-    public function storeFeed(Request $request)
-    {
-        $validated = $request->validate([
-            'url'   => 'required|url|max:2000',
-            'query' => 'nullable|string|max:200',
-            'limit' => 'nullable|integer|min:1|max:24',
-            'sale'  => 'nullable|boolean',
-        ]);
-
-        $origin = $this->origin($validated['url']);
-        if (! $origin) {
-            return response()->json(['success' => false, 'message' => 'Invalid store URL.'], 422);
-        }
-
-        $limit = $validated['limit'] ?? 12;
-
-        // NOTE: the `sale` flag is intentionally NOT a hard filter. Stores like
-        // YoungLA rarely discount, so sale-only would return a lonely 1-item
-        // gallery. Instead we ALWAYS return a lively hybrid (deals + the rest of
-        // the catalog) with the deals sorted first — a much better experience.
-        if (! empty($validated['query'])) {
-            $products = $this->shopifySearch($origin, $validated['query'], $limit);
-        } else {
-            // Wider window so on-sale items deeper in the catalog can surface,
-            // not just whatever's in the newest handful.
-            $products = $this->shopifyProducts($origin, $limit * 4);
-        }
-
-        // Deals first (stable — keeps the rest of the catalog in normal order),
-        // then trim to the requested limit.
-        usort($products, fn ($a, $b) => (empty($a['on_sale']) ? 1 : 0) <=> (empty($b['on_sale']) ? 1 : 0));
-        $products = array_slice($products, 0, $limit);
-
-        return response()->json([
-            'success' => true,
-            'data'    => ['store' => $this->storeFromUrl($validated['url']), 'products' => $products],
-        ]);
-    }
-
-    private function origin(string $url): ?string
-    {
-        $p = parse_url($url);
-        if (empty($p['scheme']) || empty($p['host'])) {
-            return null;
-        }
-        return $p['scheme'] . '://' . $p['host'];
-    }
-
-    /**
      * A named brand's OWN catalog, pulled straight from its site — the fix for
      * "I searched a specific store but you showed the resellers." Google Shopping
      * often omits a direct-to-consumer brand's own store and returns only eBay /
@@ -2740,55 +2687,4 @@ class ProductExtractController extends Controller
         return $out;
     }
 
-    /** Keyword search within a Shopify store via predictive search. */
-    private function shopifySearch(string $origin, string $query, int $limit): array
-    {
-        $url = $origin . '/search/suggest.json?' . http_build_query([
-            'q'                 => $query,
-            'resources[type]'   => 'product',
-            'resources[limit]'  => min($limit, 10),
-        ]);
-        $body = $this->fetch($url);
-        if (! $body) {
-            return [];
-        }
-        $items = json_decode($body, true)['resources']['results']['products'] ?? null;
-        if (! is_array($items)) {
-            return [];
-        }
-
-        $out = [];
-        foreach (array_slice($items, 0, $limit) as $p) {
-            // Skip locked / sold-out / unreleased drops (gated product page).
-            if ((isset($p['available']) && ! $p['available']) || $this->isFutureDrop($p['title'] ?? null)) {
-                continue;
-            }
-            $raw = $p['price'] ?? null;
-            $price = $raw !== null ? (float) preg_replace('/[^0-9.]/', '', (string) $raw) : null;
-            // Predictive search sometimes returns the price in cents.
-            if ($price && $price >= 1000 && strpos((string) $raw, '.') === false) {
-                $price = $price / 100;
-            }
-            // Best-effort sale detection (predictive search may include it).
-            $cmpRaw = $p['compare_at_price'] ?? null;
-            $compare = $cmpRaw !== null ? (float) preg_replace('/[^0-9.]/', '', (string) $cmpRaw) : null;
-            if ($compare && $compare >= 1000 && strpos((string) $cmpRaw, '.') === false) {
-                $compare = $compare / 100;
-            }
-            $onSale = $compare && $price && $compare > $price;
-            $u = $p['url'] ?? null;
-            if ($u && ! str_starts_with($u, 'http')) {
-                $u = $origin . $u;
-            }
-            $out[] = [
-                'title'   => $p['title'] ?? null,
-                'price'   => $price ?: null,
-                'was'     => $onSale ? $compare : null,
-                'on_sale' => $onSale,
-                'image'   => $p['image'] ?? ($p['featured_image']['url'] ?? null),
-                'url'     => $u,
-            ];
-        }
-        return $out;
-    }
 }

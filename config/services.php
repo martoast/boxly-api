@@ -35,8 +35,10 @@ return [
     ],
 
     /**
-     * SerpAPI — fast, reliable Google Shopping results (the assistant's primary
-     * universal product-search engine; ScraperAPI is the fallback).
+     * SerpAPI — Google Shopping / organic results. No longer the chat's product search (since 2026-09-28 the
+     * live store gallery searches the stores' own sites); still used by the Shopper panel (/products/search,
+     * /products/web-search, /products/details, WarmProductIndex), the admin campaign ideas and the New Balance
+     * variant read (/catalog/feed-product).
      */
     'serpapi' => [
         'key' => env('SERPAPI_KEY'),
