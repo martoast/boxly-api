@@ -22,6 +22,7 @@ class LiveShoppingSession extends Model
     protected $casts = [
         'stores' => 'array',
         'expires_at' => 'datetime',
+        'queued_at' => 'datetime',
         'latest_seq' => 'integer',
         'terminal_seq' => 'integer',
     ];

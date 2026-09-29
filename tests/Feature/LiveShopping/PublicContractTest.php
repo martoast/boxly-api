@@ -57,7 +57,7 @@ class PublicContractTest extends LiveShoppingTestCase
 
         $this->assertSame([
             'id', 'status', 'engine_session_id', 'conversation_id',
-            'store_id', 'kind', 'expires_at', 'created_at', 'updated_at', 'error_code', 'stores',
+            'store_id', 'kind', 'expires_at', 'created_at', 'updated_at', 'error_code', 'stores', 'queued', 'queue_position',
         ], array_keys($response->json('data')));
         // L2 (multi-store): one entry per requested store, sharing the session's status before a terminal.
         $this->assertSame([['id' => 'on', 'status' => 'running', 'error_code' => null]], $response->json('data.stores'));
@@ -86,7 +86,7 @@ class PublicContractTest extends LiveShoppingTestCase
 
         $this->assertSame([
             'id', 'status', 'engine_session_id', 'conversation_id',
-            'store_id', 'kind', 'expires_at', 'created_at', 'updated_at', 'error_code', 'stores',
+            'store_id', 'kind', 'expires_at', 'created_at', 'updated_at', 'error_code', 'stores', 'queued', 'queue_position',
         ], array_keys($response->json('data')));
         $this->assertSame([], $response->json('data.stores'), 'a row created with an empty stores list presents none');
     }

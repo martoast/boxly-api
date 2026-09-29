@@ -34,8 +34,9 @@ class SyncStoreCartJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    /** Bounded: after the last busy answer the items stay pending for the next add to retry. */
-    public int $tries = 5;
+    /** Bounded: after the last busy answer the items stay pending for the next add to retry. ~15 min of 3–6 s "busy"
+     * retries (the engine is full: the shopper waits their turn, 2026-09-28), fewer for real failures. */
+    public int $tries = 200;
 
     public const MAX_SELECTIONS = 20;
 
@@ -80,8 +81,11 @@ class SyncStoreCartJob implements ShouldQueue
             $retryable = $e->status === 503 || in_array($e->getMessage(), self::RETRYABLE_CODES, true);
             $this->abandon($session, $retryable, $e->getMessage());
 
-            if ($retryable && $this->attempts() < $this->tries) {
-                $this->release(random_int(30, 60));
+            // Full engine = a place in line: ask again in a few seconds. Anything else retryable: back off.
+            $busy = \App\Services\LiveQueue::isBusy($e);
+            $limit = $busy ? $this->tries : min($this->tries, 5 + intdiv($this->attempts(), 20));
+            if ($retryable && $this->attempts() < $limit) {
+                $this->release($busy ? random_int(3, 6) : random_int(30, 60));
             } elseif ($retryable) {
                 Log::warning('cart sync gave up after retries; items stay pending', [
                     'cart_id' => $this->cartId, 'store_id' => $this->storeId,

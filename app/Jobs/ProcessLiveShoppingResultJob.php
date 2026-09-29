@@ -40,6 +40,10 @@ class ProcessLiveShoppingResultJob implements ShouldQueue
         if (! Schema::hasTable('live_shopping_webhook_receipts')) {
             return;   // deploy window; the drainer picks it up afterwards
         }
+        // A session just ended somewhere: its slot is free for the next shopper in line (LiveQueue).
+        if (\App\Services\LiveQueue::enabled()) {
+            \App\Jobs\DrainLiveQueueJob::dispatch()->delay(now()->addSecond());
+        }
 
         DB::transaction(function () {
             $receipt = LiveShoppingWebhookReceipt::where('id', $this->receiptId)

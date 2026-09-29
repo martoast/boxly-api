@@ -7,6 +7,7 @@ use App\Models\LiveShoppingSession;
 use App\Models\LiveShoppingWebhookReceipt;
 use App\Jobs\ProcessLiveShoppingResultJob;
 use App\Services\CartSync;
+use App\Services\LiveQueue;
 use App\Services\LiveShoppingEngine;
 use App\Services\LiveShoppingEngineException;
 use Illuminate\Database\QueryException;
@@ -127,6 +128,13 @@ class LiveShoppingController extends Controller
                 $kind,
             );
         } catch (LiveShoppingEngineException $e) {
+            // THE ENGINE IS FULL, NOT DOWN (2026-09-28, simultaneous shoppers): a live search waits in line
+            // (LiveQueue) and starts the moment a slot frees — the chat shows its place instead of "busy".
+            if (! $manual && LiveQueue::enabled() && LiveQueue::isBusy($e)) {
+                LiveQueue::queue($session);
+
+                return response()->json(['success' => true, 'data' => $this->present($session->fresh())], 201);
+            }
             // A store the engine does not know is NOT an outage: the row and the
             // response both say so, so the assistant can offer a supported store
             // instead of "try again later".
@@ -446,6 +454,9 @@ class LiveShoppingController extends Controller
             'error_code'        => $this->publicErrorCode($session),
             // L2 (multi-store): one entry per requested store, in request order.
             'stores'            => $this->presentStores($session),
+            // Waiting for a free live browser (LiveQueue): its place in line, 1 = next.
+            'queued'            => LiveQueue::isQueued($session),
+            'queue_position'    => LiveQueue::position($session),
         ];
     }
 

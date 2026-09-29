@@ -35,8 +35,8 @@ class QuoteStoreCartJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    /** ~30 min of busy retries: a multi-store cart waits its turn. */
-    public int $tries = 40;
+    /** ~20 min of busy retries (3–6 s apart: the engine is full, this store waits its turn — 2026-09-28). */
+    public int $tries = 300;
 
     private const RETRYABLE_CODES = [
         'engine_busy', 'rate_limited', 'service_closing', 'not_accepting', 'controller_busy',
@@ -200,7 +200,7 @@ class QuoteStoreCartJob implements ShouldQueue
     private function retryLater(string $reason): void
     {
         if ($this->attempts() < $this->tries) {
-            $this->release(random_int(30, 60));
+            $this->release(in_array($reason, ['engine_busy', 'not_accepting', 'worker_ready_timeout', 'create_response_timeout'], true) ? random_int(3, 6) : random_int(30, 60));
 
             return;
         }

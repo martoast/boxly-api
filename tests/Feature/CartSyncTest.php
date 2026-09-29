@@ -346,8 +346,9 @@ class CartSyncTest extends LiveShoppingTestCase
         $job->handle(app(LiveShoppingEngine::class));
 
         $job->assertReleased();
-        $this->assertGreaterThanOrEqual(30, $job->job->releaseDelay);
-        $this->assertLessThanOrEqual(60, $job->job->releaseDelay);
+        // A full engine is a place in line (2026-09-28): the job asks again within seconds, not a minute.
+        $this->assertGreaterThanOrEqual(3, $job->job->releaseDelay);
+        $this->assertLessThanOrEqual(6, $job->job->releaseDelay);
         $this->assertSame('pending', CartItem::first()->sync_status);
         $session = LiveShoppingSession::first();
         $this->assertSame('failed', $session->status);

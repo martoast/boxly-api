@@ -76,6 +76,10 @@ class CartSync
      */
     public static function applyTerminal(LiveShoppingSession $session, string $outcome, ?array $cart): void
     {
+        // A cart session ended: its engine slot is free for the next shopper in line (LiveQueue).
+        if (LiveQueue::enabled()) {
+            \App\Jobs\DrainLiveQueueJob::dispatch()->delay(now()->addSecond());
+        }
         // C5: a quote session settles its store quote (and the items), not a sync.
         $quote = \App\Models\StoreQuote::where('live_shopping_session_id', $session->id)->first();
         if ($quote !== null) {
