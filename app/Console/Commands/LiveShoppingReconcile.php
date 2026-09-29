@@ -111,6 +111,13 @@ class LiveShoppingReconcile extends Command
             $this->info("Expired {$released} live shopping session(s).");
         }
 
+        // Cart lines left pending with no sync to carry them (prod 2026-09-29: while the engine was down the sync job
+        // gave up after its retries, and the line sat pending until the customer added something else): send them
+        // again. A store whose sync holds the key just returns, so this never doubles a run.
+        if (CartSync::enabled() && Schema::hasColumn('live_shopping_sessions', 'cart_active_key')) {
+            CartSync::redispatchStalled();
+        }
+
         return self::SUCCESS;
     }
 }

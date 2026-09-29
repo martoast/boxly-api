@@ -183,6 +183,18 @@ class CartSync
      * a deterministic local receipt), so the active key is released and the
      * items are settled exactly once whichever path arrives first.
      */
+    /** Open carts' lines pending for over 2 minutes with no sync holding their store: dispatched again (reconcile). */
+    public static function redispatchStalled(): void
+    {
+        CartItem::query()
+            ->where('sync_status', 'pending')
+            ->where('updated_at', '<', now()->subMinutes(2))
+            ->whereHas('cart', fn ($q) => $q->where('status', Cart::STATUS_OPEN))
+            ->select('cart_id', 'store_id')->distinct()->limit(50)->get()
+            ->reject(fn (CartItem $row) => LiveShoppingSession::where('cart_active_key', self::activeKey($row->cart_id, $row->store_id))->exists())
+            ->each(fn (CartItem $row) => self::dispatch($row->cart_id, $row->store_id));
+    }
+
     /** A cart/quote session the engine no longer knows: failed like a lost run, its cart × store key released. */
     private static function settleLost(LiveShoppingSession $session): void
     {

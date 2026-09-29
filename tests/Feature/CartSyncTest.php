@@ -655,6 +655,38 @@ class CartSyncTest extends LiveShoppingTestCase
         $this->assertCount(1, $creates, 'the item was sent again at once, not left pending until the old deadline');
     }
 
+    public function test_a_line_left_pending_after_the_sync_gave_up_is_sent_again(): void
+    {
+        $this->fakeEngine();
+        $u = User::factory()->createQuietly();
+        $this->actingAs($u)->postJson('/cart/items', $this->item())->assertStatus(201);
+        // The engine was down: the sync gave up, the line is pending and nothing holds the store's key.
+        LiveShoppingSession::query()->update(['status' => 'failed', 'cart_active_key' => null]);
+        CartItem::query()->update(['sync_status' => 'pending', 'updated_at' => now()->subMinutes(5)]);
+        $this->fakeEngine(['ok' => true, 'data' => ['schema_version' => 1, 'session' => $this->engineSession(['id' => 'eng_c2'])]]);
+
+        $this->artisan('boxly:live-shopping-reconcile')->assertSuccessful();
+
+        $creates = array_filter($this->sent, fn ($r) => str_ends_with(parse_url($r['url'], PHP_URL_PATH), '/v1/sessions'));
+        $this->assertCount(1, $creates, 'the stalled line is sent to the store again');
+        $this->assertSame('syncing', CartItem::first()->sync_status);
+    }
+
+    public function test_a_fresh_pending_line_or_one_with_a_running_sync_is_left_alone(): void
+    {
+        $this->fakeEngine();
+        $u = User::factory()->createQuietly();
+        $this->actingAs($u)->postJson('/cart/items', $this->item())->assertStatus(201);
+        LiveShoppingSession::query()->update(['status' => 'running', 'expires_at' => now()->addMinutes(20)]);
+        CartItem::query()->update(['sync_status' => 'pending', 'updated_at' => now()->subMinutes(5)]);
+        $this->fakeEngine(['ok' => false, 'error' => ['code' => 'internal_error']], 500);
+
+        $this->artisan('boxly:live-shopping-reconcile')->assertSuccessful();
+
+        $creates = array_filter($this->sent, fn ($r) => str_ends_with(parse_url($r['url'], PHP_URL_PATH), '/v1/sessions'));
+        $this->assertCount(0, $creates, 'the running sync holds the key: no second run');
+    }
+
     public function test_an_unreachable_engine_is_not_taken_as_a_lost_session(): void
     {
         $this->fakeEngine();
