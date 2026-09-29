@@ -137,7 +137,7 @@ class PurchaseRequestIntake
     /** False for the automated production test account: its orders are tests, so the team is not alerted. */
     public static function alertsTeam(User $user): bool
     {
-        return ! in_array(mb_strtolower((string) $user->email), (array) config('services.boxly_beta.quiet_emails', []), true);
+        return ! in_array(mb_strtolower((string) $user->email), (array) config('services.test_accounts.quiet_emails', []), true);
     }
 
     /** The customer's "we got your request" email. */

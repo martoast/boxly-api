@@ -179,7 +179,7 @@ return [
         // C3: mirror Boxly cart adds into the customer's real store cart through
         // an engine `cart` session. Off by default: with it off the cart (C2)
         // behaves exactly as before and no sync job is ever dispatched.
-        // On by default: the cart only exists for Boxly Lab users (EnsureBoxlyLab), so this never touches customers.
+        // On by default: every customer's box is mirrored into the real store carts (the product since 2026-09-28).
         'cart_sync'       => (bool) env('LIVE_SHOPPING_CART_SYNC', true),
         // A real queue: SyncStoreCartJob's busy-engine release() is a silent no-op on `sync`.
         'cart_sync_connection' => env('LIVE_SHOPPING_CART_SYNC_CONNECTION', 'database'),
@@ -195,15 +195,9 @@ return [
         'url' => env('CATALOG_API_URL', 'https://catalog.fullstacklabs.org'),
     ],
 
-    // Internal-test gate for the live-carts product (App\Services\BoxlyBeta).
-    'boxly_beta' => [
-        // Joining the Lab (POST /lab/join) needs this code: internal only (Alex, 2026-09-24).
-        'access_code' => (string) env('BOXLY_LAB_CODE', 'lab-v7bmove4'),
-        'emails' => array_values(array_filter(array_map(
-            fn ($e) => mb_strtolower(trim($e)),
-            explode(',', (string) env('BOXLY_BETA_EMAILS', '')),
-        ))),
-        // Claude's own production test account: its test orders never alert the shopping team (Alex, 2026-09-24).
+    // Claude's own production test account: its test orders never alert the shopping team (Alex, 2026-09-24).
+    // (The Boxly Lab gate that lived beside it — BOXLY_LAB_CODE / BOXLY_BETA_EMAILS — is gone since 2026-09-28.)
+    'test_accounts' => [
         'quiet_emails' => ['alexmartos96+boxlylab@gmail.com'],
     ],
 

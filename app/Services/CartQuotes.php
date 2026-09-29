@@ -9,7 +9,6 @@ use App\Models\LiveShoppingSession;
 use App\Models\PurchaseRequest;
 use App\Models\PurchaseRequestItem;
 use App\Models\StoreQuote;
-use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -30,12 +29,6 @@ class CartQuotes
     {
         return (bool) config('services.live_shopping_engine.cart_quotes')
             && CartSync::enabled();
-    }
-
-    /** Quotes run for this customer (internal testers only while the product is evaluated). */
-    public static function enabledFor(?User $user): bool
-    {
-        return self::configured() && BoxlyBeta::allows($user);
     }
 
     /** At finalize (inside its transaction): one row + one job per store of the cart. */

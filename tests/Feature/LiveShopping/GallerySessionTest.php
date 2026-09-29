@@ -12,11 +12,12 @@ use Illuminate\Support\Facades\Http;
 use Tests\LiveShoppingTestCase;
 
 /**
- * The Lab chat's live product gallery (2026-09-28): a Lab member's product request starts an AGENT session — the
- * engine opens the store(s) in live browsers and builds the gallery from their own search — and its products land
- * in the conversation as the `tool-live_results` part the chat renders as its gallery. Everyone else is refused.
+ * The chat's live product gallery (2026-09-28): a shopper's product request starts an AGENT session — the engine
+ * opens the store(s) in live browsers and builds the gallery from their own search — and its products land in the
+ * conversation as the `tool-live_results` part the chat renders as its gallery. It was Boxly Lab only for its first
+ * day; now it is every signed-in shopper's product search, and a guest still cannot start one.
  */
-class LabGallerySessionTest extends LiveShoppingTestCase
+class GallerySessionTest extends LiveShoppingTestCase
 {
     private function engine(int $cap = 3, string $conversationId = '1'): void
     {
@@ -37,37 +38,33 @@ class LabGallerySessionTest extends LiveShoppingTestCase
 
     private function member(): array
     {
-        $user = User::factory()->createQuietly(['email' => 'lab@boxly.test']);
-        config(['services.boxly_beta.emails' => ['lab@boxly.test']]);
+        $user = User::factory()->createQuietly(['email' => 'customer@example.com']);
 
         return [$user, Conversation::create(['user_id' => $user->id, 'title' => 't'])];
     }
 
-    public function test_a_shopper_outside_the_lab_cannot_start_an_agent_session_and_nothing_reaches_the_engine(): void
+    public function test_any_signed_in_shopper_starts_a_live_search_but_a_guest_cannot(): void
     {
-        config(['services.boxly_beta.emails' => []]);
-        $user = User::factory()->createQuietly();
-        $conversation = Conversation::create(['user_id' => $user->id, 'title' => 't']);
-        Http::fake();
+        [$user, $conversation] = $this->member();
+        $this->engine(3, (string) $conversation->id);
+        $this->postJson('/live-shopping/sessions', ['objective' => 'running shoes', 'store_id' => 'on'])->assertStatus(401);
+        $this->assertSame(0, LiveShoppingSession::count());
+        Http::assertNothingSent();
 
         $this->actingAs($user)->postJson('/live-shopping/sessions', [
             'conversation_id' => $conversation->id, 'objective' => 'running shoes', 'store_id' => 'on',
-        ])->assertStatus(403)->assertJsonPath('code', 'lab_only');
-
-        $this->assertSame(0, LiveShoppingSession::count());
-        Http::assertNothingSent();
+        ])->assertStatus(201)->assertJsonPath('data.kind', 'agent');
     }
 
     public function test_the_manual_store_browser_stays_open_to_everyone(): void
     {
-        config(['services.boxly_beta.emails' => []]);
         $user = User::factory()->createQuietly();
         $this->engine(3, '0'); // a manual session carries no conversation
 
         $this->actingAs($user)->postJson('/live-shopping/sessions', ['kind' => 'manual', 'store_id' => 'on'])->assertStatus(201);
     }
 
-    public function test_a_lab_member_fans_a_request_out_across_stores_up_to_the_engine_cap(): void
+    public function test_a_request_fans_out_across_stores_up_to_the_engine_cap(): void
     {
         [$user, $conversation] = $this->member();
         $this->engine(3, (string) $conversation->id);

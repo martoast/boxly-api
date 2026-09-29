@@ -255,8 +255,8 @@ class CartController extends Controller
                 'purchase_request_id' => $pr->id,
             ]);
 
-            // C5 (testers only): each store's real checkout total, then the invoice goes out automatically.
-            $quoting = \App\Services\CartQuotes::enabledFor($user);
+            // C5: each store's real checkout total, then the invoice goes out automatically.
+            $quoting = \App\Services\CartQuotes::configured();
             if ($quoting) {
                 \App\Services\CartQuotes::start($cart, $pr);
             }

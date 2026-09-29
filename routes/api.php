@@ -241,8 +241,6 @@ Route::middleware('auth:sanctum')->group(function () {
             'preferred_language' => $user->preferred_language,
             'role' => $user->role,
             'team' => $user->team,
-            // Boxly Lab: the live-carts product is shown only to allowlisted testers.
-            'boxly_lab' => \App\Services\BoxlyBeta::allows($user),
             'email_verified_at' => $user->email_verified_at,
             'created_at' => $user->created_at,
             'is_affiliate' => $user->isAffiliate(),
@@ -305,21 +303,11 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/{purchaseRequest}/deposit-checkout', [PurchaseRequestController::class, 'createDepositCheckout']);
     });
 
-    // The Boxly cart: one open, multi-store cart per customer, fed by chat,
-    // live shopping and the extension, finalized into ONE purchase request.
-    // Boxly Lab only (accounts that opted in on /app/lab) while it is evaluated in production.
-    // Internal only: joining needs the Lab access code (compared in constant time, throttled).
-    Route::post('/lab/join', function (Request $request) {
-        $code = (string) $request->input('code', '');
-        $expected = (string) config('services.boxly_beta.access_code', '');
-        if ($expected === '' || ! hash_equals($expected, trim($code))) {
-            return response()->json(['message' => 'Código incorrecto.', 'code' => 'bad_lab_code'], 403);
-        }
-        \App\Services\BoxlyBeta::join($request->user());
-
-        return response()->json(['data' => ['boxly_lab' => \App\Services\BoxlyBeta::allows($request->user()->fresh())]]);
-    })->middleware('throttle:10,1');
-    Route::prefix('cart')->middleware('boxly.lab')->group(function () {
+    // The Boxly cart: one open, multi-store cart per customer, fed by the chat's box (and the live store
+    // browser), mirrored into each store's real cart by the agent and finalized into ONE purchase request with
+    // live checkout quotes and an automatic invoice. Every signed-in customer's since 2026-09-28 (it was the
+    // Boxly Lab's, behind an opt-in code, until Alex made the Lab flow the product).
+    Route::prefix('cart')->group(function () {
         Route::get('/', [\App\Http\Controllers\CartController::class, 'show']);
         Route::post('/items', [\App\Http\Controllers\CartController::class, 'addItem']);
         Route::patch('/items/{id}', [\App\Http\Controllers\CartController::class, 'updateItem'])->whereNumber('id');

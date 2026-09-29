@@ -46,10 +46,9 @@ return [
         'shipment-tracking/*',
         'purchase-requests',
         'purchase-requests/*',
-        // Boxly Lab (live carts): the cart and the Lab opt-in are called from the browser.
+        // The Boxly cart (live store carts) is called from the browser.
         'cart',
         'cart/*',
-        'lab/*',
         'shopping-trips/*',
         'affiliate',
         'affiliate/*',
