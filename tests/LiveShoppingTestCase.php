@@ -83,6 +83,9 @@ abstract class LiveShoppingTestCase extends TestCase
             $this->artisan('migrate', ['--path' => $path, '--force' => true]);
         }
 
+        // Agent (search) sessions are Boxly Lab only (2026-09-28). This suite's actors are Lab members unless a
+        // test says otherwise; suites that test the gate itself (CartQuotesTest, LabGallerySessionTest) narrow it.
+        config(['services.boxly_beta.emails' => ['*']]);
         $this->configureEngine();
     }
 

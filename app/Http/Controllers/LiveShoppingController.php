@@ -6,6 +6,7 @@ use App\Models\Conversation;
 use App\Models\LiveShoppingSession;
 use App\Models\LiveShoppingWebhookReceipt;
 use App\Jobs\ProcessLiveShoppingResultJob;
+use App\Services\BoxlyBeta;
 use App\Services\CartSync;
 use App\Services\LiveShoppingEngine;
 use App\Services\LiveShoppingEngineException;
@@ -46,6 +47,13 @@ class LiveShoppingController extends Controller
             return response()->json(['success' => false, 'code' => 'invalid_kind', 'message' => 'kind must be agent or manual.'], 422);
         }
         $manual = $kind === LiveShoppingSession::KIND_MANUAL;
+        // Boxly Lab only (2026-09-28): an agent session is now the Lab chat's product search — the engine opens the
+        // store(s) in live browsers and builds the gallery from their own search (engine gallery_worker.mjs), with
+        // the browser streamed into the chat. No customer surface starts one outside the Lab (the app's only other
+        // create is the manual store browser), so everyone else is refused before any row or engine call.
+        if ($kind === LiveShoppingSession::KIND_AGENT && ! BoxlyBeta::allows($request->user())) {
+            return response()->json(['success' => false, 'code' => 'lab_only', 'message' => 'Live store search is only available in Boxly Lab.'], 403);
+        }
         $validated = $request->validate([
             // Required for agent sessions: EngineV1 is conversation-attached end
             // to end, and a session with no conversation has nowhere to land its
