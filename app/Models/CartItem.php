@@ -29,6 +29,32 @@ class CartItem extends Model
     }
 
     /**
+     * The product's name as a shopper reads it (Lab 2026-09-28: "Carhartt Women's Cuffed Rib Knit Beanie (105560)"
+     * on the order and the invoice): a trailing product code in brackets ("(105560)", "[SKU 12-AB3]", "Style #K87")
+     * and a trailing "| Store" page-title suffix are dropped. A name that would be left empty is kept as it was.
+     */
+    public static function cleanTitle(string $title): string
+    {
+        $clean = trim(preg_replace('/\s+/u', ' ', $title));
+        $before = null;
+        while ($before !== $clean) {
+            $before = $clean;
+            $clean = preg_replace_callback('/\s*[(\[]\s*((?:sku|style|item|model|ref|art)\.?\s*(?:no\.?|#)?\s*:?\s*)?#?\s*((?=[A-Z0-9-]*\d)[A-Z0-9][A-Z0-9-]{3,})\s*[)\]]$/iu', function ($m) {
+                // A size or a model year is part of the name ("(128GB)", "(24oz)", "iPad (2022)"), unless labelled a code.
+                $unit = preg_match('/^\d+(?:\.\d+)?(?:gb|tb|mb|oz|ml|mm|cm|in|pk|ct|lbs?|kg|g|w|v|mah|hz|p|k|pcs?)$/i', $m[2]);
+                $year = preg_match('/^(?:19|20)\d\d$/', $m[2]);
+
+                return ($unit || $year) && trim((string) $m[1]) === '' ? $m[0] : '';
+            }, $clean);
+            $clean = preg_replace('/\s*[-–,]?\s*(?:sku|style|item|model)\s*(?:no\.?|#|:)\s*(?=[A-Z0-9-]*\d)[A-Z0-9-]{3,}$/iu', '', $clean);
+            $clean = preg_replace('/\s+\|\s+[^|]{1,40}$/u', '', $clean);
+            $clean = trim($clean);
+        }
+
+        return $clean !== '' ? $clean : trim($title);
+    }
+
+    /**
      * The dedupe key for a variant selection: lowercase, trimmed, sorted by key,
      * "k=v|k=v". {"Size":"M","Color":"Red"} and {"color":"red","size":"m"} are
      * the same line in the cart. Nothing selected is the empty string.

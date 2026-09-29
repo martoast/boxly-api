@@ -104,7 +104,7 @@ class CartController extends Controller
                     'store_name' => $data['store_name'] ?? null,
                     'product_url' => $url,
                     'product_url_hash' => $hash,
-                    'title' => $data['title'],
+                    'title' => CartItem::cleanTitle($data['title']),
                     'image_url' => isset($data['image_url']) ? trim($data['image_url']) : null,
                     'price' => $data['price'] ?? null,
                     'currency' => 'USD',
