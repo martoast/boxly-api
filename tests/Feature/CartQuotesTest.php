@@ -10,6 +10,7 @@ use App\Models\CartItem;
 use App\Models\LiveShoppingSession;
 use App\Models\LiveShoppingWebhookReceipt;
 use App\Models\PurchaseRequest;
+use App\Models\PurchaseRequestItem;
 use App\Models\StoreQuote;
 use App\Models\User;
 use App\Services\CartQuotes;
@@ -229,10 +230,27 @@ class CartQuotesTest extends LiveShoppingTestCase
         Mail::assertNotQueued(PurchaseRequestCreated::class, 'the invoice email is the customer\'s only email');
     }
 
-    public function test_a_store_without_a_verified_total_leaves_the_request_for_the_manual_quote(): void
+    public function test_the_stores_that_verified_are_invoiced_and_a_failed_store_drops_out(): void
     {
         [, $pr] = $this->finalizedTwoStores();
         $this->deliverQuote(StoreQuote::where('store_id', 'gap')->first(), $this->quoteBlock('verified', 3664), 1);
+        $this->deliverQuote(StoreQuote::where('store_id', 'nike')->first(), $this->quoteBlock('failed', null), 2);
+
+        $this->assertCount(1, $this->invoices, 'Gap verified: the invoice goes out');
+        $this->assertSame(['gap' => 3664], $this->invoices[0]['stores'], 'only the store that verified is billed');
+        $nikeUrls = CartItem::where('store_id', 'nike')->pluck('product_url')->all();
+        $this->assertNotEmpty($nikeUrls);
+        foreach (PurchaseRequestItem::where('purchase_request_id', $pr->id)->whereIn('product_url', $nikeUrls)->get() as $item) {
+            $this->assertSame(PurchaseRequestItem::STOCK_UNAVAILABLE, $item->stock_status, 'the failed store\'s items are not billed');
+        }
+        CartQuotes::maybeInvoice($pr->id);
+        $this->assertCount(1, $this->invoices, 'never a second invoice');
+    }
+
+    public function test_no_store_verified_leaves_the_request_for_the_manual_quote(): void
+    {
+        [, $pr] = $this->finalizedTwoStores();
+        $this->deliverQuote(StoreQuote::where('store_id', 'gap')->first(), $this->quoteBlock('failed', null), 1);
         $this->deliverQuote(StoreQuote::where('store_id', 'nike')->first(), $this->quoteBlock('failed', null), 2);
 
         $this->assertSame([], $this->invoices);

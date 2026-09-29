@@ -146,7 +146,8 @@ class CartQuotes
                     return;
                 }
                 self::markUnavailableItems($pr, $quotes);
-                app(StoreQuoteInvoice::class)->send($pr, $quotes);
+                // Only the stores that verified are invoiced.
+                app(StoreQuoteInvoice::class)->send($pr, $quotes->filter(fn (StoreQuote $q) => in_array($q->status, StoreQuote::BILLABLE, true))->values());
             });
         } catch (\Throwable $e) {
             Log::error('automatic invoice failed; manual quote needed', ['purchase_request_id' => $purchaseRequestId, 'error' => $e->getMessage()]);
@@ -182,10 +183,14 @@ class CartQuotes
     /** Null when the quotes can be invoiced automatically; else why not (Spanish, for the team). */
     public static function manualReason($quotes): ?string
     {
-        $failed = $quotes->filter(fn (StoreQuote $q) => ! in_array($q->status, StoreQuote::BILLABLE, true));
-        if ($failed->isNotEmpty()) {
-            return 'sin total verificado en ' . $failed->map(fn ($q) => $q->store_name ?: $q->store_id)->join(', ');
+        // THE STORES THAT VERIFIED ARE INVOICED (Alex, 2026-09-28: "invoice the stores that verified"): a store without
+        // a verified total drops out of the invoice (its items are marked unavailable), and only when NO store verified
+        // does the team quote it by hand.
+        $billable = $quotes->filter(fn (StoreQuote $q) => in_array($q->status, StoreQuote::BILLABLE, true));
+        if ($billable->isEmpty()) {
+            return 'sin total verificado en ' . $quotes->map(fn ($q) => $q->store_name ?: $q->store_id)->join(', ');
         }
+        $quotes = $billable;
         if ($quotes->contains(fn (StoreQuote $q) => $q->currency !== 'USD' || $q->total_cents === null || $q->total_cents <= 0)) {
             return 'moneda o total inesperado';
         }
@@ -202,11 +207,15 @@ class CartQuotes
         return null;
     }
 
-    /** A partial quote's unavailable lines: the matching purchase request items are not billed. */
+    /**
+     * The lines that are not billed: a partial quote's unavailable lines, and every line of a store whose total could
+     * not be verified (it drops out of the invoice). Their purchase request items are marked unavailable.
+     */
     private static function markUnavailableItems(PurchaseRequest $pr, $quotes): void
     {
+        $unbilledStores = $quotes->filter(fn (StoreQuote $q) => ! in_array($q->status, StoreQuote::BILLABLE, true))->pluck('store_id')->all();
         $urls = CartItem::whereIn('cart_id', $quotes->pluck('cart_id')->unique())
-            ->where('sync_status', 'unavailable')
+            ->where(fn ($q) => $q->where('sync_status', 'unavailable')->orWhereIn('store_id', $unbilledStores))
             ->pluck('product_url')
             ->all();
         if ($urls !== []) {
