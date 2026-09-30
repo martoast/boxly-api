@@ -326,6 +326,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::prefix('in-person')->group(function () {
         Route::get('/availability', [\App\Http\Controllers\InPersonReservationController::class, 'availability']);
         Route::post('/reservations', [\App\Http\Controllers\InPersonReservationController::class, 'store']);
+        Route::get('/reservations', [\App\Http\Controllers\InPersonReservationController::class, 'index']);
         Route::get('/reservations/{number}', [\App\Http\Controllers\InPersonReservationController::class, 'show']);
     });
 
@@ -448,6 +449,8 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/reservations', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'reservations']);
             Route::post('/reservations/{id}/cancel', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'cancel'])->whereNumber('id');
             Route::post('/reservations/{id}/complete', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'complete'])->whereNumber('id');
+            Route::get('/reservations/{id}', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'reservation'])->whereNumber('id');
+            Route::post('/reservations/{id}/final-invoice', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'finalInvoice'])->whereNumber('id');
         });
 
         Route::prefix('management')->group(function () {
@@ -756,6 +759,8 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/reservations', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'reservations']);
             Route::post('/reservations/{id}/cancel', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'cancel'])->whereNumber('id');
             Route::post('/reservations/{id}/complete', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'complete'])->whereNumber('id');
+            Route::get('/reservations/{id}', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'reservation'])->whereNumber('id');
+            Route::post('/reservations/{id}/final-invoice', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'finalInvoice'])->whereNumber('id');
         });
 
         // Customer lookup — needed by the "create PR for customer" form.

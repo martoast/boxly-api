@@ -175,6 +175,28 @@ class AdminInPersonController extends Controller
         return response()->json(['success' => true, 'data' => $query->orderBy('starts_at')->get()->map->toApi(true)->values()]);
     }
 
+    public function reservation($id)
+    {
+        return response()->json(['success' => true, 'data' => ShoppingReservation::with('user')->findOrFail($id)->toApi(true)]);
+    }
+
+    public function finalInvoice($id)
+    {
+        $reservation = ShoppingReservation::with('user')->findOrFail($id);
+        try {
+            $refused = $this->service->createFinalInvoice($reservation);
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error('In-person final invoice failed', ['reservation' => $reservation->reservation_number, 'error' => $e->getMessage()]);
+
+            return response()->json(['success' => false, 'message' => 'No pudimos crear la factura en Stripe. Inténtalo de nuevo.'], 502);
+        }
+        if ($refused) {
+            return response()->json(['success' => false, 'message' => $refused], 422);
+        }
+
+        return response()->json(['success' => true, 'data' => $reservation->fresh('user')->toApi(true)]);
+    }
+
     public function cancel(Request $request, $id)
     {
         $data = $request->validate(['reason' => 'required|string|max:1000']);

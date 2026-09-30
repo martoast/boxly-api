@@ -12,4 +12,10 @@ interface InPersonStripeGateway
     public function retrieveSession(string $sessionId): object;
 
     public function refundPaymentIntent(string $paymentIntentId): void;
+
+    /**
+     * Create, finalize and send a send_invoice invoice with the given lines
+     * (description + amount in cents, may be negative). Returns an object with id and hosted_invoice_url.
+     */
+    public function createAndSendInvoice(string $customerId, array $invoiceParams, array $lines): object;
 }

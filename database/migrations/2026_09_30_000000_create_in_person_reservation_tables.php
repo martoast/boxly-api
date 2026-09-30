@@ -48,6 +48,13 @@ return new class extends Migration
                 $table->timestamp('confirmation_sent_at')->nullable();
                 $table->timestamp('cancelled_at')->nullable();
                 $table->text('cancel_reason')->nullable();
+                // Final billing after the visit: hours worked + commission - what was paid up front.
+                $table->timestamp('completed_at')->nullable();
+                $table->string('final_invoice_id')->nullable();
+                $table->text('final_invoice_url')->nullable();
+                $table->decimal('final_amount_usd', 10, 2)->nullable();
+                $table->timestamp('final_invoice_sent_at')->nullable();
+                $table->timestamp('final_paid_at')->nullable();
                 $table->foreignId('purchase_request_id')->nullable()->constrained()->nullOnDelete();
                 $table->timestamps();
                 $table->index(['starts_at', 'status']);

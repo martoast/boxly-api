@@ -56,6 +56,13 @@ class InPersonReservationController extends Controller
         return response()->json(['success' => true, 'checkout_url' => $checkoutUrl, 'data' => $reservation->toApi()], 201);
     }
 
+    public function index(Request $request)
+    {
+        $list = ShoppingReservation::where('user_id', $request->user()->id)->orderByDesc('starts_at')->orderByDesc('id')->get();
+
+        return response()->json(['success' => true, 'data' => $list->map->toApi()->values()]);
+    }
+
     public function show(Request $request, string $number)
     {
         $reservation = ShoppingReservation::where('reservation_number', $number)

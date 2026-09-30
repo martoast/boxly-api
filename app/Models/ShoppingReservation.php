@@ -23,6 +23,9 @@ class ShoppingReservation extends Model
         'refunded_at' => 'datetime',
         'confirmation_sent_at' => 'datetime',
         'cancelled_at' => 'datetime',
+        'completed_at' => 'datetime',
+        'final_invoice_sent_at' => 'datetime',
+        'final_paid_at' => 'datetime',
     ];
 
     public function user(): BelongsTo
@@ -59,6 +62,52 @@ class ShoppingReservation extends Model
         return $this->endsAt()->setTimezone(config('services.in_person.timezone'))->format('H:i');
     }
 
+    /** Final bill: hours + commission - the amount already paid, never below 0. Null until completed. */
+    public function final(): ?array
+    {
+        if ($this->status !== self::COMPLETED || $this->hours_worked === null || $this->amount_spent_usd === null) {
+            return null;
+        }
+        $hours = (float) $this->hours_worked;
+        $spent = (float) $this->amount_spent_usd;
+        $percent = (float) config('services.in_person.commission_percent');
+        $hoursFee = round($hours * (float) config('services.in_person.hourly_rate_usd'), 2);
+        $commission = round($spent * $percent / 100, 2);
+        $credit = (float) $this->amount_usd;
+
+        return [
+            'hours_worked' => $hours,
+            'amount_spent_usd' => $spent,
+            'hours_fee_usd' => $hoursFee,
+            'commission_percent' => $percent,
+            'commission_usd' => $commission,
+            'credit_usd' => $credit,
+            'total_usd' => max(0.0, round($hoursFee + $commission - $credit, 2)),
+            'status' => $this->final_paid_at ? ($this->final_invoice_id ? 'paid' : 'settled') : ($this->final_invoice_id ? 'sent' : 'pending'),
+            'invoice_url' => $this->final_invoice_url,
+            'sent_at' => $this->final_invoice_sent_at?->toIso8601String(),
+            'paid_at' => $this->final_paid_at?->toIso8601String(),
+        ];
+    }
+
+    /** Chronological timeline built from the timestamps that exist. */
+    public function events(): array
+    {
+        $events = [];
+        foreach ([
+            'reserved' => $this->created_at, 'paid' => $this->paid_at, 'refunded' => $this->refunded_at,
+            'cancelled' => $this->cancelled_at, 'completed' => $this->completed_at,
+            'final_invoice_sent' => $this->final_invoice_sent_at, 'final_invoice_paid' => $this->final_paid_at,
+        ] as $type => $at) {
+            if ($at) {
+                $events[] = ['type' => $type, 'at' => $at->copy()->utc()->toIso8601String(), 'label_key' => 'in_person.event.' . $type];
+            }
+        }
+        usort($events, fn ($a, $b) => strcmp($a['at'], $b['at']));
+
+        return $events;
+    }
+
     public function toApi(bool $team = false): array
     {
         $data = [
@@ -74,6 +123,9 @@ class ShoppingReservation extends Model
             'customer_notes' => $this->customer_notes,
             'whatsapp' => config('services.in_person.whatsapp'),
             'refunded' => $this->refunded_at !== null,
+            'completed_at' => $this->completed_at?->toIso8601String(),
+            'final' => $this->final(),
+            'events' => $this->events(),
         ];
 
         if ($team) {

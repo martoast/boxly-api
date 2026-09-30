@@ -382,6 +382,12 @@ class StripeWebhookController extends Controller
             return;
         }
 
+        // 5. In-person reservation final invoice
+        if ($type === 'in_person_final_invoice' && isset($metadata['reservation_id'])) {
+            app(\App\Services\InPersonReservationService::class)->markFinalPaid($metadata['reservation_id']);
+            return;
+        }
+
         // Log unhandled invoice types for debugging
         Log::warning('Invoice paid webhook received but no handler matched', [
             'invoice_id' => $invoice->id,

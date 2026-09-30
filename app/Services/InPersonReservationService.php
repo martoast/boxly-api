@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Mail\InPersonFinalInvoice;
 use App\Mail\InPersonReservationCancelled;
 use App\Mail\InPersonReservationConfirmed;
 use App\Mail\InPersonReservationManagerAlert;
@@ -342,13 +343,67 @@ class InPersonReservationService
     {
         return DB::transaction(function () use ($reservation, $hoursWorked, $amountSpent) {
             $flipped = ShoppingReservation::where('id', $reservation->id)->where('status', ShoppingReservation::CONFIRMED)
-                ->update(['status' => ShoppingReservation::COMPLETED, 'hours_worked' => $hoursWorked, 'amount_spent_usd' => $amountSpent]);
+                ->update(['status' => ShoppingReservation::COMPLETED, 'completed_at' => now(), 'hours_worked' => $hoursWorked, 'amount_spent_usd' => $amountSpent]);
             if ($flipped === 1) {
                 ShoppingReservationSlot::where('reservation_id', $reservation->id)->update(['active_slot_id' => null]);
             }
 
             return $flipped === 1;
         });
+    }
+
+    /**
+     * Bill the visit: hours + commission - what was paid up front. A zero/negative total is
+     * settled without an invoice. Returns null when done, else the reason it was refused
+     * (422 for the caller); throws on a Stripe failure with nothing stored.
+     */
+    public function createFinalInvoice(ShoppingReservation $reservation): ?string
+    {
+        $final = $reservation->final();
+        if (! $final) {
+            return 'Solo se puede facturar una reserva completada con horas y gasto registrados';
+        }
+        if ($reservation->final_invoice_id || $reservation->final_paid_at) {
+            return 'Esta reserva ya tiene factura final';
+        }
+
+        if ($final['total_usd'] <= 0) {
+            $reservation->update(['final_paid_at' => now(), 'final_amount_usd' => 0]);
+
+            return null;
+        }
+
+        $cents = fn (float $usd) => (int) round($usd * 100);
+        $pct = rtrim(rtrim(number_format($final['commission_percent'], 1, '.', ''), '0'), '.');
+        $lines = [
+            ['description' => sprintf('Compra personal: %s h trabajadas / hours worked', $final['hours_worked'] + 0), 'amount' => $cents($final['hours_fee_usd'])],
+            ['description' => sprintf('Comisión Boxly / Boxly commission (%s%% de $%.2f)', $pct, $final['amount_spent_usd']), 'amount' => $cents($final['commission_usd'])],
+            ['description' => 'Reserva pagada / Reservation already paid', 'amount' => -$cents($final['credit_usd'])],
+        ];
+        $lines = array_values(array_filter($lines, fn ($l) => $l['amount'] !== 0));
+
+        $reservation->loadMissing('user');
+        $invoice = $this->stripe->createAndSendInvoice($reservation->user->stripeShoppingCustomerId(), [
+            'description' => 'Compra personal Las Américas ' . $reservation->reservation_number,
+            'metadata' => ['type' => 'in_person_final_invoice', 'reservation_id' => (string) $reservation->id, 'reservation_number' => $reservation->reservation_number],
+        ], $lines);
+
+        $reservation->update([
+            'final_invoice_id' => $invoice->id,
+            'final_invoice_url' => $invoice->hosted_invoice_url,
+            'final_amount_usd' => $final['total_usd'],
+            'final_invoice_sent_at' => now(),
+        ]);
+        $this->queue($reservation->user, new InPersonFinalInvoice($reservation->fresh(['user'])));
+
+        return null;
+    }
+
+    /** invoice.paid for a final invoice: idempotent. */
+    public function markFinalPaid(string $reservationId): void
+    {
+        ShoppingReservation::where('id', $reservationId)->whereNotNull('final_invoice_id')->whereNull('final_paid_at')
+            ->update(['final_paid_at' => now()]);
     }
 
     /** Queue a mail; a mail failure only logs, it never fails the booking or the webhook. */

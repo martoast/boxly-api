@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Mail\InPersonFinalInvoice;
 use App\Mail\InPersonReservationCancelled;
 use App\Mail\InPersonReservationConfirmed;
 use App\Mail\InPersonReservationManagerAlert;
@@ -29,6 +30,8 @@ class FakeInPersonGateway implements InPersonStripeGateway
     public bool $failCreate = false;
     public bool $failExpire = false;
     public bool $failRefund = false;
+    public bool $failInvoice = false;
+    public array $invoices = []; // ['customer' =>, 'params' =>, 'lines' =>]
 
     public function createCheckoutSession(array $params): object
     {
@@ -55,6 +58,17 @@ class FakeInPersonGateway implements InPersonStripeGateway
 
         return (object) ['id' => $sessionId, 'payment_status' => $p ? 'paid' : 'unpaid',
             'payment_intent' => $p['payment_intent'] ?? null, 'invoice' => $p['invoice'] ?? null];
+    }
+
+    public function createAndSendInvoice(string $customerId, array $invoiceParams, array $lines): object
+    {
+        if ($this->failInvoice) {
+            throw new \RuntimeException('invoice failed');
+        }
+        $this->invoices[] = ['customer' => $customerId, 'params' => $invoiceParams, 'lines' => $lines];
+        $id = 'in_final_' . count($this->invoices);
+
+        return (object) ['id' => $id, 'hosted_invoice_url' => "https://invoice.stripe.test/$id"];
     }
 
     public function refundPaymentIntent(string $paymentIntentId): void
@@ -657,5 +671,203 @@ class InPersonReservationTest extends LiveShoppingTestCase
         $this->assertSame(['2026-10-26 10:00', '2026-10-31 10:00', '2026-11-01 10:00', '2026-11-02 10:00', '2026-11-07 10:00', '2026-11-08 10:00'], $local);
         $utc = ShoppingSlot::orderBy('starts_at')->get()->map(fn ($s) => $s->starts_at->format('m-d H:i'))->all();
         $this->assertSame(['10-26 17:00', '10-31 17:00', '11-01 18:00', '11-02 18:00', '11-07 18:00', '11-08 18:00'], $utc);
+    }
+
+    // ---------- final billing ----------
+
+    private function completed(float $hours, float $spent, ?User $customer = null): ShoppingReservation
+    {
+        $this->open('2026-10-03', [11]);
+        $r = $this->reserve($customer ?? $this->customer(), '2026-10-03', 11);
+        $this->pay($r);
+        $this->assertTrue($this->svc()->complete($r, $hours, $spent));
+
+        return $r->fresh();
+    }
+
+    private function invoiceWebhook(array $meta, string $id = 'in_final_1')
+    {
+        $payload = json_encode(['id' => 'evt_' . uniqid(), 'object' => 'event', 'type' => 'invoice.paid', 'data' => ['object' => [
+            'id' => $id, 'object' => 'invoice', 'amount_paid' => 8000, 'metadata' => $meta,
+        ]]]);
+        $t = time();
+        $sig = hash_hmac('sha256', "$t.$payload", 'whsec_test');
+
+        return $this->call('POST', '/webhooks/stripe-shopping', [], [], [], ['HTTP_STRIPE_SIGNATURE' => "t=$t,v1=$sig", 'CONTENT_TYPE' => 'application/json'], $payload);
+    }
+
+    public function test_complete_sets_completed_at_and_payload_has_final_preview(): void
+    {
+        $r = $this->completed(3, 200);
+        $this->assertNotNull($r->completed_at);
+        $final = $this->as($this->staff('admin'))->getJson("/admin/in-person/reservations/{$r->id}")->assertOk()->json('data.final');
+        $this->assertEquals(['hours_worked' => 3.0, 'amount_spent_usd' => 200.0, 'hours_fee_usd' => 90.0, 'commission_percent' => 10.0,
+            'commission_usd' => 20.0, 'credit_usd' => 30.0, 'total_usd' => 80.0, 'status' => 'pending',
+            'invoice_url' => null, 'sent_at' => null, 'paid_at' => null], $final);
+    }
+
+    public function test_final_is_null_until_completed(): void
+    {
+        $this->open('2026-10-03', [11]);
+        $r = $this->reserve($this->customer(), '2026-10-03', 11);
+        $this->assertNull($r->toApi()['final']);
+        $this->assertNull($r->toApi(true)['final']);
+    }
+
+    public function test_final_invoice_creates_credit_line_sends_mail_and_is_idempotent(): void
+    {
+        $r = $this->completed(3, 200);
+        $t = $this->staff('employee', 'shopping');
+        $res = $this->as($t)->postJson("/shopping/in-person/reservations/{$r->id}/final-invoice")->assertOk();
+        $this->assertSame('sent', $res->json('data.final.status'));
+        $this->assertEquals(80, $res->json('data.final.total_usd'));
+        $this->assertSame('https://invoice.stripe.test/in_final_1', $res->json('data.final.invoice_url'));
+
+        $inv = $this->stripe->invoices[0];
+        $this->assertSame('cus_test', $inv['customer']);
+        $this->assertSame('in_person_final_invoice', $inv['params']['metadata']['type']);
+        $this->assertSame((string) $r->id, $inv['params']['metadata']['reservation_id']);
+        $this->assertSame([9000, 2000, -3000], array_column($inv['lines'], 'amount'));
+        $this->assertSame(8000, array_sum(array_column($inv['lines'], 'amount')));
+        $this->assertStringContainsString('Reservation already paid', $inv['lines'][2]['description']);
+
+        $r = $r->fresh();
+        $this->assertSame('in_final_1', $r->final_invoice_id);
+        $this->assertEquals(80, $r->final_amount_usd);
+        $this->assertNotNull($r->final_invoice_sent_at);
+        Mail::assertQueued(InPersonFinalInvoice::class, 1);
+
+        $this->as($t)->postJson("/shopping/in-person/reservations/{$r->id}/final-invoice")->assertStatus(422);
+        $this->assertCount(1, $this->stripe->invoices);
+        Mail::assertQueued(InPersonFinalInvoice::class, 1);
+    }
+
+    public function test_final_invoice_mail_renders_es_and_en(): void
+    {
+        foreach (['es' => 'Pagar factura', 'en' => 'Pay invoice'] as $lang => $needle) {
+            $r = $this->completed(3, 200, $this->customer(['preferred_language' => $lang]));
+            $this->svc()->createFinalInvoice($r);
+            $html = (new InPersonFinalInvoice($r->fresh(['user'])))->render();
+            $this->assertStringContainsString($needle, $html);
+            $this->assertStringContainsString('80.00', $html);
+            $this->assertStringContainsString('invoice.stripe.test', $html);
+            $this->closeSlots();
+        }
+    }
+
+    private function closeSlots(): void
+    {
+        ShoppingReservationSlot::query()->delete();
+        ShoppingSlot::query()->delete();
+    }
+
+    public function test_final_invoice_total_not_positive_is_settled_without_stripe(): void
+    {
+        $r = $this->completed(0.5, 5); // 15 + 0.5 - 30 < 0
+        $res = $this->as($this->staff('admin'))->postJson("/admin/in-person/reservations/{$r->id}/final-invoice")->assertOk();
+        $this->assertSame('settled', $res->json('data.final.status'));
+        $this->assertEquals(0, $res->json('data.final.total_usd'));
+        $this->assertNotNull($res->json('data.final.paid_at'));
+        $this->assertCount(0, $this->stripe->invoices);
+        Mail::assertNotQueued(InPersonFinalInvoice::class);
+    }
+
+    public function test_final_invoice_refused_when_not_completed(): void
+    {
+        $this->open('2026-10-03', [11]);
+        $r = $this->reserve($this->customer(), '2026-10-03', 11);
+        $t = $this->staff('admin');
+        $this->as($t)->postJson("/admin/in-person/reservations/{$r->id}/final-invoice")->assertStatus(422);
+        $this->pay($r);
+        $this->as($t)->postJson("/admin/in-person/reservations/{$r->id}/final-invoice")->assertStatus(422);
+        $this->assertCount(0, $this->stripe->invoices);
+    }
+
+    public function test_final_invoice_stripe_failure_502_stores_nothing(): void
+    {
+        $r = $this->completed(3, 200);
+        $this->stripe->failInvoice = true;
+        $this->as($this->staff('admin'))->postJson("/admin/in-person/reservations/{$r->id}/final-invoice")->assertStatus(502);
+        $r = $r->fresh();
+        $this->assertNull($r->final_invoice_id);
+        $this->assertNull($r->final_invoice_sent_at);
+        $this->assertNull($r->final_amount_usd);
+        Mail::assertNotQueued(InPersonFinalInvoice::class);
+        $this->stripe->failInvoice = false;
+        $this->as($this->staff('admin'))->postJson("/admin/in-person/reservations/{$r->id}/final-invoice")->assertOk();
+    }
+
+    public function test_final_invoice_mail_queue_failure_is_tolerated(): void
+    {
+        $r = $this->completed(3, 200);
+        Mail::shouldReceive('to')->andThrow(new \RuntimeException('queue down'));
+        Log::spy();
+        $this->as($this->staff('admin'))->postJson("/admin/in-person/reservations/{$r->id}/final-invoice")->assertOk();
+        $this->assertSame('in_final_1', $r->fresh()->final_invoice_id);
+        Log::shouldHaveReceived('error')->withArgs(fn ($m) => str_contains($m, 'queue in-person'))->once();
+    }
+
+    public function test_invoice_paid_webhook_marks_final_paid_idempotently_and_ignores_other_types(): void
+    {
+        $r = $this->completed(3, 200);
+        $this->as($this->staff('admin'))->postJson("/admin/in-person/reservations/{$r->id}/final-invoice")->assertOk();
+
+        $this->invoiceWebhook(['type' => 'purchase_request_invoice', 'reservation_id' => (string) $r->id])->assertOk();
+        $this->assertNull($r->fresh()->final_paid_at);
+
+        $this->invoiceWebhook(['type' => 'in_person_final_invoice', 'reservation_id' => (string) $r->id])->assertOk();
+        $paidAt = $r->fresh()->final_paid_at;
+        $this->assertNotNull($paidAt);
+        $this->travel(5)->minutes();
+        $this->invoiceWebhook(['type' => 'in_person_final_invoice', 'reservation_id' => (string) $r->id])->assertOk();
+        $this->assertEquals($paidAt, $r->fresh()->final_paid_at);
+        $this->assertSame('paid', $r->fresh()->final()['status']);
+        $this->assertSame('completed', $r->fresh()->status);
+    }
+
+    public function test_final_authz_and_customer_visibility(): void
+    {
+        $owner = $this->customer();
+        $r = $this->completed(3, 200, $owner);
+        foreach (['/shopping', '/admin'] as $prefix) {
+            $this->as($owner)->getJson("$prefix/in-person/reservations/{$r->id}")->assertStatus(403);
+            $this->as($owner)->postJson("$prefix/in-person/reservations/{$r->id}/final-invoice")->assertStatus(403);
+        }
+        $this->as($this->staff('employee', 'shopping'))->getJson("/shopping/in-person/reservations/{$r->id}")->assertOk()->assertJsonPath('data.customer.id', $owner->id);
+        $this->as($this->staff('admin'))->getJson("/admin/in-person/reservations/{$r->id}")->assertOk();
+        $this->as($this->staff('admin'))->getJson('/admin/in-person/reservations/99999')->assertStatus(404);
+
+        $this->as($this->customer())->getJson('/in-person/reservations/' . $r->reservation_number)->assertStatus(404);
+        $mine = $this->as($owner)->getJson('/in-person/reservations/' . $r->reservation_number)->assertOk()->json('data');
+        $this->assertEquals(80, $mine['final']['total_usd']);
+        $this->assertArrayNotHasKey('stripe_payment_intent_id', $mine);
+        $this->assertArrayNotHasKey('cancel_reason', $mine);
+        $this->assertArrayNotHasKey('customer', $mine);
+    }
+
+    public function test_customer_list_is_only_own_newest_first(): void
+    {
+        $me = $this->customer();
+        $this->open('2026-10-03', [11, 12]);
+        $this->open('2026-10-05', [11]);
+        $a = $this->reserve($me, '2026-10-03', 11);
+        $b = $this->reserve($me, '2026-10-05', 11);
+        $this->reserve($this->customer(), '2026-10-03', 12);
+        $list = $this->as($me)->getJson('/in-person/reservations')->assertOk()->json('data');
+        $this->assertSame([$b->reservation_number, $a->reservation_number], array_column($list, 'reservation_number'));
+    }
+
+    public function test_events_are_chronological_and_only_present_ones(): void
+    {
+        $r = $this->completed(3, 200);
+        $this->travel(1)->hours();
+        $this->svc()->createFinalInvoice($r->fresh());
+        $this->travel(1)->hours();
+        $this->invoiceWebhook(['type' => 'in_person_final_invoice', 'reservation_id' => (string) $r->id])->assertOk();
+        $events = $r->fresh()->toApi()['events'];
+        $this->assertSame(['reserved', 'paid', 'completed', 'final_invoice_sent', 'final_invoice_paid'], array_column($events, 'type'));
+        $this->assertSame('in_person.event.paid', $events[1]['label_key']);
+        $this->assertStringEndsWith('+00:00', $events[0]['at']);
+        $this->assertSame($events, collect($events)->sortBy('at')->values()->all());
     }
 }
