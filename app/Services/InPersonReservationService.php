@@ -486,11 +486,74 @@ class InPersonReservationService
         return null;
     }
 
-    /** invoice.paid for a final invoice: idempotent. */
-    public function markFinalPaid(string $reservationId): void
+    /**
+     * invoice.paid for a final invoice (signed webhook, found by the reservation id in its metadata): idempotent.
+     * A row that never recorded the invoice (sent but unrecorded) gets its id/url stored together with the paid stamp;
+     * a different stored invoice id is logged and ignored.
+     */
+    public function markFinalPaid(string $reservationId, ?string $invoiceId = null, ?string $invoiceUrl = null): void
     {
-        ShoppingReservation::where('id', $reservationId)->whereNotNull('final_invoice_id')->whereNull('final_paid_at')
+        $reservation = ShoppingReservation::find($reservationId);
+        if (! $reservation || $reservation->final_paid_at !== null) {
+            return;
+        }
+        if ($reservation->final_invoice_id === null) {
+            if (! $invoiceId) {
+                return;
+            }
+            $update = ['final_invoice_id' => $invoiceId, 'final_paid_at' => now()];
+            if ($invoiceUrl) {
+                $update['final_invoice_url'] = $invoiceUrl;
+            }
+            ShoppingReservation::where('id', $reservation->id)->whereNull('final_invoice_id')->whereNull('final_paid_at')->update($update);
+
+            return;
+        }
+        if ($invoiceId && $reservation->final_invoice_id !== $invoiceId) {
+            Log::warning('In-person final invoice.paid ignored: invoice does not match the stored one', [
+                'reservation' => $reservation->reservation_number, 'stored' => $reservation->final_invoice_id, 'paid' => $invoiceId,
+            ]);
+
+            return;
+        }
+        ShoppingReservation::where('id', $reservation->id)->whereNotNull('final_invoice_id')->whereNull('final_paid_at')
             ->update(['final_paid_at' => now()]);
+    }
+
+    /**
+     * Unstick a final invoice whose claim was taken but never recorded (worker died). Returns 'released' (the team
+     * may generate again), 'recovered' (Stripe already had the sent invoice; now recorded) or null when the
+     * reservation is not stuck. Never creates an invoice. Throws when Stripe cannot be asked: the claim is kept,
+     * because a new claim would get a new idempotency key and could double-invoice.
+     */
+    public function retryFinalInvoice(ShoppingReservation $reservation): ?string
+    {
+        if (! $reservation->finalInvoiceStuck()) {
+            return null;
+        }
+        $invoice = $this->stripe->findInvoiceByReservation($reservation->id);
+        if ($invoice) {
+            $paid = ($invoice->status ?? null) === 'paid';
+            $amount = isset($invoice->amount_due) ? round($invoice->amount_due / 100, 2) : ($reservation->final()['total_usd'] ?? null);
+            $recorded = ShoppingReservation::where('id', $reservation->id)->whereNull('final_invoice_id')->whereNull('final_paid_at')
+                ->update([
+                    'final_invoice_id' => $invoice->id,
+                    'final_invoice_url' => $invoice->hosted_invoice_url ?? null,
+                    'final_amount_usd' => $amount,
+                    'final_invoice_sent_at' => now(),
+                    'final_paid_at' => $paid ? now() : null,
+                ]);
+            if ($recorded === 1 && ! $paid) {
+                $this->queue($reservation->user, new InPersonFinalInvoice($reservation->fresh(['user'])));
+            }
+
+            return 'recovered';
+        }
+        $released = ShoppingReservation::where('id', $reservation->id)->whereNull('final_invoice_id')->whereNull('final_paid_at')
+            ->where('final_invoice_claimed_at', '<=', now()->subMinutes(ShoppingReservation::STUCK_CLAIM_MINUTES))
+            ->update(['final_invoice_claimed_at' => null]);
+
+        return $released === 1 ? 'released' : null;
     }
 
     /** Queue a mail; a mail failure only logs, it never fails the booking or the webhook. */

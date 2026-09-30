@@ -30,7 +30,19 @@ class ShoppingReservation extends Model
         'completed_at' => 'datetime',
         'final_invoice_sent_at' => 'datetime',
         'final_paid_at' => 'datetime',
+        'final_invoice_claimed_at' => 'datetime',
     ];
+
+    public const STUCK_CLAIM_MINUTES = 10;
+
+    /** The final-invoice claim was taken long ago but nothing was recorded: the worker died mid-way. */
+    public function finalInvoiceStuck(): bool
+    {
+        return $this->final_invoice_claimed_at !== null
+            && $this->final_invoice_id === null
+            && $this->final_paid_at === null
+            && $this->final_invoice_claimed_at->lte(now()->subMinutes(self::STUCK_CLAIM_MINUTES));
+    }
 
     /** Paid money that must go back to the customer: slot_taken, or cancelled after paying. */
     public function needsRefund(): bool
@@ -155,6 +167,7 @@ class ShoppingReservation extends Model
                 'team_refund_pending' => $this->refundPending(),
                 'stripe_payment_intent_id' => $this->stripe_payment_intent_id,
                 'cancel_reason' => $this->cancel_reason,
+                'final_invoice_stuck' => $this->finalInvoiceStuck(),
                 'hours_worked' => $this->hours_worked !== null ? (float) $this->hours_worked : null,
                 'amount_spent_usd' => $this->amount_spent_usd !== null ? (float) $this->amount_spent_usd : null,
                 'customer' => $this->user ? [

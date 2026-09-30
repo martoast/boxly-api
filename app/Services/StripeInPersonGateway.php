@@ -52,6 +52,21 @@ class StripeInPersonGateway implements InPersonStripeGateway
         return (object) ['id' => $invoice->id, 'hosted_invoice_url' => $sent->hosted_invoice_url];
     }
 
+    public function findInvoiceByReservation(int $reservationId): ?object
+    {
+        $found = StripeAccount::shopping()->invoices->search([
+            'query' => "metadata['type']:'in_person_final_invoice' AND metadata['reservation_id']:'{$reservationId}'",
+            'limit' => 20,
+        ]);
+        foreach ($found->data as $invoice) {
+            if (in_array($invoice->status, ['open', 'paid'], true)) {
+                return (object) ['id' => $invoice->id, 'hosted_invoice_url' => $invoice->hosted_invoice_url ?? null, 'status' => $invoice->status, 'amount_due' => $invoice->amount_due ?? null];
+            }
+        }
+
+        return null;
+    }
+
     public function discardInvoice(string $invoiceId): void
     {
         try {

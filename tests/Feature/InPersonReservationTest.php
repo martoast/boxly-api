@@ -62,6 +62,18 @@ class FakeInPersonGateway implements InPersonStripeGateway
             'payment_intent' => $p['payment_intent'] ?? null, 'invoice' => $p['invoice'] ?? null];
     }
 
+    public ?object $existingInvoice = null; // what findInvoiceByReservation returns
+    public bool $failFind = false;
+
+    public function findInvoiceByReservation(int $reservationId): ?object
+    {
+        if ($this->failFind) {
+            throw new \RuntimeException('stripe search down');
+        }
+
+        return $this->existingInvoice;
+    }
+
     public function discardInvoice(string $invoiceId): void
     {
         $this->discarded[] = $invoiceId;
@@ -682,10 +694,10 @@ class InPersonReservationTest extends LiveShoppingTestCase
 
     // ---------- final billing ----------
 
-    private function completed(float $hours, float $spent, ?User $customer = null): ShoppingReservation
+    private function completed(float $hours, float $spent, ?User $customer = null, string $date = '2026-10-03'): ShoppingReservation
     {
-        $this->open('2026-10-03', [11]);
-        $r = $this->reserve($customer ?? $this->customer(), '2026-10-03', 11);
+        $this->open($date, [11]);
+        $r = $this->reserve($customer ?? $this->customer(), $date, 11);
         $this->pay($r);
         $this->assertTrue($this->svc()->complete($r, $hours, $spent));
 
@@ -830,6 +842,134 @@ class InPersonReservationTest extends LiveShoppingTestCase
         $this->assertEquals($paidAt, $r->fresh()->final_paid_at);
         $this->assertSame('paid', $r->fresh()->final()['status']);
         $this->assertSame('completed', $r->fresh()->status);
+    }
+
+    // ---------- stuck final-invoice claim ----------
+
+    private function claimedAgo(int $minutes, ?ShoppingReservation $r = null): ShoppingReservation
+    {
+        $r ??= $this->completed(3, 200);
+        $r->update(['final_invoice_claimed_at' => now()->subMinutes($minutes)]);
+
+        return $r->fresh();
+    }
+
+    public function test_stuck_flag_needs_more_than_ten_minutes_and_nothing_recorded(): void
+    {
+        $team = $this->staff('admin');
+        $r = $this->claimedAgo(9);
+        $this->assertFalse($this->as($team)->getJson("/admin/in-person/reservations/{$r->id}")->json('data.final_invoice_stuck'));
+        $this->travel(2)->minutes();
+        $this->assertTrue($this->as($team)->getJson("/admin/in-person/reservations/{$r->id}")->json('data.final_invoice_stuck'));
+        $list = $this->as($team)->getJson('/admin/in-person/reservations?from=2026-10-03&to=2026-10-03')->json('data');
+        $this->assertTrue($list[0]['final_invoice_stuck']);
+        $r->update(['final_invoice_id' => 'in_x']);
+        $this->assertFalse($this->as($team)->getJson("/admin/in-person/reservations/{$r->id}")->json('data.final_invoice_stuck'));
+        $this->assertFalse($this->as($team)->getJson("/admin/in-person/reservations/{$this->completed(1, 10, null, '2026-10-05')->id}")->json('data.final_invoice_stuck'));
+    }
+
+    public function test_retry_releases_only_a_stuck_claim_on_both_mounts_then_regenerates(): void
+    {
+        foreach (['/shopping' => $this->staff('employee', 'shopping'), '/admin' => $this->staff('admin')] as $prefix => $who) {
+            $r = $this->claimedAgo(9, $this->completed(3, 200, null, $prefix === '/shopping' ? '2026-10-03' : '2026-10-04'));
+            $this->as($who)->postJson("$prefix/in-person/reservations/{$r->id}/retry-final-invoice")->assertStatus(422);
+            $this->assertNotNull($r->fresh()->final_invoice_claimed_at);
+
+            $this->travel(2)->minutes();
+            $this->as($who)->postJson("$prefix/in-person/reservations/{$r->id}/retry-final-invoice")
+                ->assertOk()->assertJsonPath('outcome', 'released')->assertJsonPath('data.final_invoice_stuck', false);
+            $this->assertNull($r->fresh()->final_invoice_claimed_at);
+            $before = count($this->stripe->invoices);
+            $this->as($who)->postJson("$prefix/in-person/reservations/{$r->id}/final-invoice")->assertOk();
+            $this->assertCount($before + 1, $this->stripe->invoices);
+            $this->assertNotNull($r->fresh()->final_invoice_id);
+            $this->as($who)->postJson("$prefix/in-person/reservations/{$r->id}/retry-final-invoice")->assertStatus(422);
+        }
+    }
+
+    public function test_retry_refused_when_not_claimed_or_already_invoiced(): void
+    {
+        $team = $this->staff('admin');
+        $r = $this->completed(3, 200);
+        $this->as($team)->postJson("/admin/in-person/reservations/{$r->id}/retry-final-invoice")->assertStatus(422);
+        $this->as($team)->postJson("/admin/in-person/reservations/{$r->id}/final-invoice")->assertOk();
+        $this->travel(30)->minutes();
+        $this->as($team)->postJson("/admin/in-person/reservations/{$r->id}/retry-final-invoice")->assertStatus(422);
+        $this->assertNotNull($r->fresh()->final_invoice_claimed_at);
+    }
+
+    public function test_retry_recovers_an_invoice_stripe_already_has_instead_of_releasing(): void
+    {
+        $team = $this->staff('admin');
+        $r = $this->claimedAgo(11);
+        $this->stripe->existingInvoice = (object) ['id' => 'in_sent', 'hosted_invoice_url' => 'https://invoice.stripe.test/in_sent', 'status' => 'open', 'amount_due' => 8000];
+        $this->as($team)->postJson("/admin/in-person/reservations/{$r->id}/retry-final-invoice")
+            ->assertOk()->assertJsonPath('outcome', 'recovered')->assertJsonPath('data.final.status', 'sent');
+        $r = $r->fresh();
+        $this->assertSame('in_sent', $r->final_invoice_id);
+        $this->assertSame('https://invoice.stripe.test/in_sent', $r->final_invoice_url);
+        $this->assertEquals(80, $r->final_amount_usd);
+        $this->assertNotNull($r->final_invoice_sent_at);
+        $this->assertNull($r->final_paid_at);
+        $this->assertNotNull($r->final_invoice_claimed_at);
+        $this->assertCount(0, $this->stripe->invoices);
+        Mail::assertQueued(InPersonFinalInvoice::class, 1);
+    }
+
+    public function test_retry_recovers_a_paid_invoice_and_stamps_paid(): void
+    {
+        $r = $this->claimedAgo(11);
+        $this->stripe->existingInvoice = (object) ['id' => 'in_paid', 'hosted_invoice_url' => null, 'status' => 'paid', 'amount_due' => 8000];
+        $this->as($this->staff('admin'))->postJson("/admin/in-person/reservations/{$r->id}/retry-final-invoice")
+            ->assertOk()->assertJsonPath('data.final.status', 'paid');
+        $this->assertNotNull($r->fresh()->final_paid_at);
+        Mail::assertNotQueued(InPersonFinalInvoice::class);
+    }
+
+    public function test_retry_with_stripe_lookup_failure_is_502_and_keeps_the_claim(): void
+    {
+        $r = $this->claimedAgo(11);
+        $this->stripe->failFind = true;
+        $this->as($this->staff('admin'))->postJson("/admin/in-person/reservations/{$r->id}/retry-final-invoice")
+            ->assertStatus(502)->assertJsonPath('message', fn ($m) => str_contains($m, 'no pudimos verificar Stripe'));
+        $this->assertNotNull($r->fresh()->final_invoice_claimed_at);
+        $this->assertNull($r->fresh()->final_invoice_id);
+    }
+
+    public function test_retry_authz_customer_403_on_both_mounts(): void
+    {
+        $owner = $this->customer();
+        $r = $this->claimedAgo(11, $this->completed(3, 200, $owner));
+        foreach (['/shopping', '/admin'] as $prefix) {
+            $this->as($owner)->postJson("$prefix/in-person/reservations/{$r->id}/retry-final-invoice")->assertStatus(403);
+        }
+        $this->assertNotNull($r->fresh()->final_invoice_claimed_at);
+    }
+
+    public function test_paid_webhook_with_unrecorded_invoice_stores_id_and_stamps_paid_idempotently(): void
+    {
+        $r = $this->claimedAgo(11);
+        $meta = ['type' => 'in_person_final_invoice', 'reservation_id' => (string) $r->id];
+        $this->invoiceWebhook($meta, 'in_lost')->assertOk();
+        $r = $r->fresh();
+        $this->assertSame('in_lost', $r->final_invoice_id);
+        $this->assertNotNull($r->final_paid_at);
+        $paidAt = $r->final_paid_at;
+        $this->travel(5)->minutes();
+        $this->invoiceWebhook($meta, 'in_lost')->assertOk();
+        $this->assertEquals($paidAt, $r->fresh()->final_paid_at);
+    }
+
+    public function test_paid_webhook_with_a_different_invoice_id_is_ignored(): void
+    {
+        $r = $this->completed(3, 200);
+        $this->as($this->staff('admin'))->postJson("/admin/in-person/reservations/{$r->id}/final-invoice")->assertOk();
+        Log::spy();
+        $this->invoiceWebhook(['type' => 'in_person_final_invoice', 'reservation_id' => (string) $r->id], 'in_other')->assertOk();
+        $r = $r->fresh();
+        $this->assertSame('in_final_1', $r->final_invoice_id);
+        $this->assertNull($r->final_paid_at);
+        Log::shouldHaveReceived('warning')->withArgs(fn ($m) => str_contains($m, 'does not match'))->once();
     }
 
     public function test_final_authz_and_customer_visibility(): void

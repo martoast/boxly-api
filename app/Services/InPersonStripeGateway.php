@@ -21,6 +21,12 @@ interface InPersonStripeGateway
      */
     public function createAndSendInvoice(string $customerId, array $invoiceParams, array $lines, string $idempotencyKey): object;
 
+    /**
+     * The sent (open or paid) final invoice of a reservation, found by its metadata, or null when none exists.
+     * Returns an object with id, hosted_invoice_url, status and amount_due (cents). Throws when Stripe cannot be asked.
+     */
+    public function findInvoiceByReservation(int $reservationId): ?object;
+
     /** Delete a draft invoice / void a finalized one. Failures are logged, never thrown. */
     public function discardInvoice(string $invoiceId): void;
 }

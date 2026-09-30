@@ -224,6 +224,23 @@ class AdminInPersonController extends Controller
         return response()->json(['success' => true, 'data' => $reservation->fresh('user')->toApi(true)]);
     }
 
+    public function retryFinalInvoice($id)
+    {
+        $reservation = ShoppingReservation::with('user')->findOrFail($id);
+        try {
+            $outcome = $this->service->retryFinalInvoice($reservation);
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error('In-person stuck final invoice check failed', ['reservation' => $reservation->reservation_number, 'error' => $e->getMessage()]);
+
+            return response()->json(['success' => false, 'message' => 'no pudimos verificar Stripe. Inténtalo de nuevo en unos minutos.'], 502);
+        }
+        if ($outcome === null) {
+            return response()->json(['success' => false, 'message' => 'Esta factura final no está atorada (debe llevar más de 10 minutos generándose sin guardarse)'], 422);
+        }
+
+        return response()->json(['success' => true, 'outcome' => $outcome, 'message' => $outcome === 'recovered' ? 'Factura recuperada: ya existía en Stripe y quedó guardada' : 'Liberada: ya puedes generar la factura final de nuevo', 'data' => $reservation->fresh('user')->toApi(true)]);
+    }
+
     public function cancel(Request $request, $id)
     {
         $data = $request->validate(['reason' => 'required|string|max:1000']);

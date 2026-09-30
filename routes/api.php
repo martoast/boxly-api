@@ -454,6 +454,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/reservations/{id}/complete', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'complete'])->whereNumber('id');
             Route::get('/reservations/{id}', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'reservation'])->whereNumber('id');
             Route::post('/reservations/{id}/final-invoice', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'finalInvoice'])->whereNumber('id');
+            Route::post('/reservations/{id}/retry-final-invoice', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'retryFinalInvoice'])->whereNumber('id');
         });
 
         Route::prefix('management')->group(function () {
@@ -767,6 +768,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/reservations/{id}/complete', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'complete'])->whereNumber('id');
             Route::get('/reservations/{id}', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'reservation'])->whereNumber('id');
             Route::post('/reservations/{id}/final-invoice', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'finalInvoice'])->whereNumber('id');
+            Route::post('/reservations/{id}/retry-final-invoice', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'retryFinalInvoice'])->whereNumber('id');
         });
 
         // Customer lookup — needed by the "create PR for customer" form.

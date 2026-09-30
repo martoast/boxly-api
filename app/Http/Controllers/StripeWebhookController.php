@@ -384,7 +384,7 @@ class StripeWebhookController extends Controller
 
         // 5. In-person reservation final invoice
         if ($type === 'in_person_final_invoice' && isset($metadata['reservation_id'])) {
-            app(\App\Services\InPersonReservationService::class)->markFinalPaid($metadata['reservation_id']);
+            app(\App\Services\InPersonReservationService::class)->markFinalPaid($metadata['reservation_id'], $invoice->id ?? null, $invoice->hosted_invoice_url ?? null);
             return;
         }
 
