@@ -38,6 +38,13 @@ class ProductV1
         'current_price', 'list_price', 'availability', 'observed_at',
     ];
 
+    /**
+     * Keys a producer MAY add on top of the frozen set. `price_from`: the
+     * store's tile priced a range ("$37.00 - $180.00", "Options from $9.97"),
+     * so current_price is its low end and the app says "desde" (2026-09-30).
+     */
+    public const OPTIONAL_KEYS = ['price_from'];
+
     public const AVAILABILITY = ['in_stock', 'out_of_stock', 'preorder', 'backorder', 'unknown'];
 
     /** Frozen field bounds. */
@@ -71,8 +78,9 @@ class ProductV1
                 return null;
             }
 
-            // EXACT key set, both directions: no extras, and nothing missing.
-            $keys = array_keys($p);
+            // EXACT key set, both directions: no extras, and nothing missing
+            // (the OPTIONAL_KEYS aside, each validated below).
+            $keys = array_values(array_diff(array_keys($p), self::OPTIONAL_KEYS));
             sort($keys);
             $expected = self::KEYS;
             sort($expected);
@@ -110,6 +118,10 @@ class ProductV1
                 return null;
             }
 
+            if (array_key_exists('price_from', $p) && ! is_bool($p['price_from'])) {
+                return null;
+            }
+
             $current = self::moneyOrFalse($p['current_price']);
             $list = self::moneyOrFalse($p['list_price']);
             if ($current === false || $list === false) {
@@ -119,7 +131,7 @@ class ProductV1
             // Rebuilt from validated scalars in the frozen key order — never the
             // caller's array, so no attacker-owned reference survives the
             // boundary and the persisted order is stable across producers.
-            $out[] = [
+            $row = [
                 'store'         => $store,
                 'store_id'      => $storeId,
                 'title'         => $title,
@@ -130,6 +142,11 @@ class ProductV1
                 'availability'  => $p['availability'],
                 'observed_at'   => $observedAt,
             ];
+            // Only a true flag on a priced product is carried; false/absent keeps the frozen shape.
+            if (($p['price_from'] ?? false) === true && $current !== null) {
+                $row['price_from'] = true;
+            }
+            $out[] = $row;
         }
 
         return $out;

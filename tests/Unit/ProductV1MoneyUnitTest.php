@@ -298,4 +298,21 @@ class ProductV1MoneyUnitTest extends TestCase
     {
         $this->assertNull(ProductV1::boundStrict([$this->product(['store_id' => 'NOT A SLUG'])]));
     }
+
+    /** The optional price_from flag (a price-range tile): carried when true, refused when not a boolean, other extras still refused. */
+    public function test_price_from_is_an_optional_boolean_carried_only_when_true(): void
+    {
+        $priced = ['current_price' => ['amount' => 37.0, 'currency' => 'USD']];
+
+        $bounded = ProductV1::boundStrict([$this->product($priced + ['price_from' => true])]);
+        $this->assertNotNull($bounded);
+        $this->assertTrue($bounded[0]['price_from']);
+
+        $bounded = ProductV1::boundStrict([$this->product($priced + ['price_from' => false])]);
+        $this->assertSame(ProductV1::KEYS, array_keys($bounded[0]));
+
+        $this->assertSame(ProductV1::KEYS, array_keys(ProductV1::boundStrict([$this->product(['price_from' => true])])[0]), 'no price, no flag');
+        $this->assertNull(ProductV1::boundStrict([$this->product($priced + ['price_from' => 'yes'])]));
+        $this->assertNull(ProductV1::boundStrict([$this->product($priced + ['surprise' => true])]));
+    }
 }

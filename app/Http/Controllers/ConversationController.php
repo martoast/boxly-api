@@ -317,6 +317,8 @@ class ConversationController extends Controller
                         'price'   => $p['price'] ?? $p['price_usd'] ?? $money['price'],
                         'was'     => $p['was'] ?? $money['was'],
                         'on_sale' => $p['on_sale'] ?? $money['on_sale'],
+                        // A price-range tile: the price is its low end ("desde").
+                        'price_from' => ($p['price_from'] ?? false) === true,
                         'image'   => $img,
                         'url'     => $url,
                         'snippet' => $p['snippet'] ?? null,
