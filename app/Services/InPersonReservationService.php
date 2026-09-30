@@ -333,7 +333,7 @@ class InPersonReservationService
     /** Reservations the team still has to refund by hand (failed slot_taken refund, or cancelled after paying). */
     public function pendingRefunds()
     {
-        return ShoppingReservation::with('user')->whereNull('refunded_at')
+        return ShoppingReservation::with('user')->whereNull('refunded_at')->whereNull('refund_waived_at')
             ->where(fn ($q) => $q->where('status', ShoppingReservation::SLOT_TAKEN)
                 ->orWhere(fn ($q) => $q->where('status', ShoppingReservation::CANCELLED)->whereNotNull('paid_at')))
             ->orderByDesc('starts_at')->orderByDesc('id')->get();
@@ -348,6 +348,21 @@ class InPersonReservationService
         if ($reservation->refunded_at === null) {
             $reservation->update(['refunded_at' => now()]);
         }
+
+        return true;
+    }
+
+    /** Team decides no refund is owed. Idempotent; false unless the reservation needs (or already had waived) a refund. */
+    public function waiveRefund(ShoppingReservation $reservation): bool
+    {
+        if ($reservation->refund_waived_at !== null) {
+            return true;
+        }
+        if (! $reservation->refundPending()) {
+            return false;
+        }
+        ShoppingReservation::where('id', $reservation->id)->whereNull('refund_waived_at')->whereNull('refunded_at')
+            ->update(['refund_waived_at' => now()]);
 
         return true;
     }
@@ -388,7 +403,10 @@ class InPersonReservationService
     /**
      * Bill the visit: hours + commission - what was paid up front. A zero/negative total is
      * settled without an invoice. Returns null when done, else the reason it was refused
-     * (422 for the caller); throws on a Stripe failure with nothing stored.
+     * (422 for the caller). The row is claimed atomically FIRST so only one caller can ever create
+     * the Stripe invoice. Throws on a Stripe failure (claim released, draft discarded, nothing
+     * stored) or InPersonInvoiceSentButUnrecorded when the invoice was sent but could not be saved
+     * (claim kept so nobody sends a second one).
      */
     public function createFinalInvoice(ShoppingReservation $reservation): ?string
     {
@@ -396,37 +414,73 @@ class InPersonReservationService
         if (! $final) {
             return 'Solo se puede facturar una reserva completada con horas y gasto registrados';
         }
-        if ($reservation->final_invoice_id || $reservation->final_paid_at) {
-            return 'Esta reserva ya tiene factura final';
-        }
+        $taken = 'Esta factura final ya se está generando o ya fue enviada';
+        $claimable = fn () => ShoppingReservation::where('id', $reservation->id)->where('status', ShoppingReservation::COMPLETED)
+            ->whereNull('final_invoice_id')->whereNull('final_paid_at')->whereNull('final_invoice_claimed_at');
 
         if ($final['total_usd'] <= 0) {
-            $reservation->update(['final_paid_at' => now(), 'final_amount_usd' => 0]);
+            $now = now();
+            $won = $claimable()->update(['final_invoice_claimed_at' => $now, 'final_paid_at' => $now, 'final_amount_usd' => 0]);
 
-            return null;
+            return $won === 1 ? null : $taken;
+        }
+
+        $claimedAt = now();
+        if ($claimable()->update(['final_invoice_claimed_at' => $claimedAt]) !== 1) {
+            return $taken;
         }
 
         $cents = fn (float $usd) => (int) round($usd * 100);
         $pct = rtrim(rtrim(number_format($final['commission_percent'], 1, '.', ''), '0'), '.');
         $lines = [
-            ['description' => sprintf('Compra personal: %s h trabajadas / hours worked', $final['hours_worked'] + 0), 'amount' => $cents($final['hours_fee_usd'])],
-            ['description' => sprintf('Comisión Boxly / Boxly commission (%s%% de $%.2f)', $pct, $final['amount_spent_usd']), 'amount' => $cents($final['commission_usd'])],
-            ['description' => 'Reserva pagada / Reservation already paid', 'amount' => -$cents($final['credit_usd'])],
+            ['key' => 'hours', 'description' => sprintf('Compra personal: %s h trabajadas / hours worked', $final['hours_worked'] + 0), 'amount' => $cents($final['hours_fee_usd'])],
+            ['key' => 'commission', 'description' => sprintf('Comisión Boxly / Boxly commission (%s%% de $%.2f)', $pct, $final['amount_spent_usd']), 'amount' => $cents($final['commission_usd'])],
+            ['key' => 'credit', 'description' => 'Reserva pagada / Reservation already paid', 'amount' => -$cents($final['credit_usd'])],
         ];
         $lines = array_values(array_filter($lines, fn ($l) => $l['amount'] !== 0));
 
-        $reservation->loadMissing('user');
-        $invoice = $this->stripe->createAndSendInvoice($reservation->user->stripeShoppingCustomerId(), [
-            'description' => 'Compra personal Las Américas ' . $reservation->reservation_number,
-            'metadata' => ['type' => 'in_person_final_invoice', 'reservation_id' => (string) $reservation->id, 'reservation_number' => $reservation->reservation_number],
-        ], $lines);
+        // Stripe keeps an idempotency key's response for 24 h, including for an invoice we voided after a
+        // failure; the claim time makes each claimed attempt a fresh key while still de-duping network retries.
+        $key = 'in-person-final-' . $reservation->id . '-' . $claimedAt->timestamp;
+        foreach ($lines as &$line) {
+            $line['idempotency_key'] = $key . '-' . $line['key'];
+        }
+        unset($line);
 
-        $reservation->update([
-            'final_invoice_id' => $invoice->id,
-            'final_invoice_url' => $invoice->hosted_invoice_url,
-            'final_amount_usd' => $final['total_usd'],
-            'final_invoice_sent_at' => now(),
-        ]);
+        try {
+            $reservation->loadMissing('user');
+            $invoice = $this->stripe->createAndSendInvoice($reservation->user->stripeShoppingCustomerId(), [
+                'description' => 'Compra personal Las Américas ' . $reservation->reservation_number,
+                'metadata' => ['type' => 'in_person_final_invoice', 'reservation_id' => (string) $reservation->id, 'reservation_number' => $reservation->reservation_number],
+            ], $lines, $key);
+        } catch (\Throwable $e) {
+            if ($e instanceof InPersonInvoiceFailed && $e->invoiceId) {
+                $this->stripe->discardInvoice($e->invoiceId);
+            }
+            ShoppingReservation::where('id', $reservation->id)->whereNull('final_invoice_id')->update(['final_invoice_claimed_at' => null]);
+
+            throw $e;
+        }
+
+        $saved = false;
+        for ($try = 1; $try <= 3 && ! $saved; $try++) {
+            try {
+                $reservation->update([
+                    'final_invoice_id' => $invoice->id,
+                    'final_invoice_url' => $invoice->hosted_invoice_url,
+                    'final_amount_usd' => $final['total_usd'],
+                    'final_invoice_sent_at' => now(),
+                ]);
+                $saved = true;
+            } catch (\Throwable $e) {
+                Log::warning('In-person final invoice sent but saving it failed', ['reservation' => $reservation->reservation_number, 'invoice' => $invoice->id, 'try' => $try, 'error' => $e->getMessage()]);
+            }
+        }
+        if (! $saved) {
+            Log::critical('In-person final invoice SENT to the customer but NOT recorded; claim kept, do not regenerate', ['reservation' => $reservation->reservation_number, 'reservation_id' => $reservation->id, 'stripe_invoice_id' => $invoice->id]);
+
+            throw new InPersonInvoiceSentButUnrecorded($invoice->id);
+        }
         $this->queue($reservation->user, new InPersonFinalInvoice($reservation->fresh(['user'])));
 
         return null;

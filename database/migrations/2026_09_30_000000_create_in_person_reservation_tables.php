@@ -44,6 +44,7 @@ return new class extends Migration
                 $table->string('stripe_invoice_id')->nullable();
                 $table->timestamp('paid_at')->nullable();
                 $table->timestamp('refunded_at')->nullable();
+                $table->timestamp('refund_waived_at')->nullable(); // team decided no refund is owed
                 $table->string('slot_taken_reason')->nullable(); // hour_unavailable|paid_first
                 $table->text('customer_notes')->nullable();
                 $table->timestamp('confirmation_sent_at')->nullable();
@@ -56,6 +57,7 @@ return new class extends Migration
                 $table->decimal('final_amount_usd', 10, 2)->nullable();
                 $table->timestamp('final_invoice_sent_at')->nullable();
                 $table->timestamp('final_paid_at')->nullable();
+                $table->timestamp('final_invoice_claimed_at')->nullable(); // atomic claim: one caller generates the final invoice
                 $table->foreignId('purchase_request_id')->nullable()->constrained()->nullOnDelete();
                 $table->timestamps();
                 $table->index(['starts_at', 'status']);

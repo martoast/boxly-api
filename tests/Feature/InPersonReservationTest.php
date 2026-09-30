@@ -31,7 +31,9 @@ class FakeInPersonGateway implements InPersonStripeGateway
     public bool $failExpire = false;
     public bool $failRefund = false;
     public bool $failInvoice = false;
-    public array $invoices = []; // ['customer' =>, 'params' =>, 'lines' =>]
+    public array $invoices = []; // ['customer' =>, 'params' =>, 'lines' =>, 'key' =>]
+    public array $discarded = [];
+    public ?string $orphanInvoice = null; // when failInvoice: the Stripe invoice that already exists
 
     public function createCheckoutSession(array $params): object
     {
@@ -60,12 +62,17 @@ class FakeInPersonGateway implements InPersonStripeGateway
             'payment_intent' => $p['payment_intent'] ?? null, 'invoice' => $p['invoice'] ?? null];
     }
 
-    public function createAndSendInvoice(string $customerId, array $invoiceParams, array $lines): object
+    public function discardInvoice(string $invoiceId): void
+    {
+        $this->discarded[] = $invoiceId;
+    }
+
+    public function createAndSendInvoice(string $customerId, array $invoiceParams, array $lines, string $idempotencyKey): object
     {
         if ($this->failInvoice) {
-            throw new \RuntimeException('invoice failed');
+            throw new \App\Services\InPersonInvoiceFailed($this->orphanInvoice, new \RuntimeException('invoice failed'));
         }
-        $this->invoices[] = ['customer' => $customerId, 'params' => $invoiceParams, 'lines' => $lines];
+        $this->invoices[] = ['customer' => $customerId, 'params' => $invoiceParams, 'lines' => $lines, 'key' => $idempotencyKey];
         $id = 'in_final_' . count($this->invoices);
 
         return (object) ['id' => $id, 'hosted_invoice_url' => "https://invoice.stripe.test/$id"];
@@ -1013,7 +1020,188 @@ class InPersonReservationTest extends LiveShoppingTestCase
         $res = $this->as($this->customer())->getJson('/in-person/availability')->assertOk();
         $this->assertEquals((float) config('services.in_person.hourly_rate_usd'), $res->json('hourly_rate_usd'));
         $this->assertSame((int) config('services.in_person.max_hours'), $res->json('max_hours'));
+        $this->assertEquals((float) config('services.in_person.commission_percent'), $res->json('commission_percent'));
         $this->assertSame([], $res->json('data'));
+    }
+
+    // ---------- final invoice claim / idempotency ----------
+
+    private function finalUrl(ShoppingReservation $r): string
+    {
+        return "/admin/in-person/reservations/{$r->id}/final-invoice";
+    }
+
+    public function test_second_final_invoice_call_is_refused_and_only_one_invoice_is_created(): void
+    {
+        $r = $this->completed(3, 200);
+        $a = $this->staff('admin');
+        // A concurrent caller already holds the claim (Stripe not reached yet): the second is refused.
+        ShoppingReservation::where('id', $r->id)->update(['final_invoice_claimed_at' => now()]);
+        $this->as($a)->postJson($this->finalUrl($r))->assertStatus(422);
+        $this->assertCount(0, $this->stripe->invoices);
+        ShoppingReservation::where('id', $r->id)->update(['final_invoice_claimed_at' => null]);
+        $this->as($a)->postJson($this->finalUrl($r))->assertOk();
+        $this->as($this->staff('admin'))->postJson($this->finalUrl($r))->assertStatus(422);
+        $this->assertCount(1, $this->stripe->invoices);
+        $this->assertNotNull($r->fresh()->final_invoice_claimed_at);
+    }
+
+    public function test_final_invoice_passes_idempotency_keys(): void
+    {
+        $r = $this->completed(3, 200);
+        $this->as($this->staff('admin'))->postJson($this->finalUrl($r))->assertOk();
+        $inv = $this->stripe->invoices[0];
+        $this->assertStringStartsWith("in-person-final-{$r->id}-", $inv['key']);
+        $this->assertSame([$inv['key'] . '-hours', $inv['key'] . '-commission', $inv['key'] . '-credit'], array_column($inv['lines'], 'idempotency_key'));
+    }
+
+    public function test_stripe_failure_discards_the_orphan_releases_the_claim_and_retry_works(): void
+    {
+        $r = $this->completed(3, 200);
+        $this->stripe->failInvoice = true;
+        $this->stripe->orphanInvoice = 'in_orphan';
+        $this->as($this->staff('admin'))->postJson($this->finalUrl($r))->assertStatus(502);
+        $this->assertSame(['in_orphan'], $this->stripe->discarded);
+        $r = $r->fresh();
+        $this->assertNull($r->final_invoice_claimed_at);
+        $this->assertNull($r->final_invoice_id);
+
+        $this->stripe->failInvoice = false;
+        $this->as($this->staff('admin'))->postJson($this->finalUrl($r))->assertOk();
+        $this->assertCount(1, $this->stripe->invoices);
+        $this->assertSame(['in_orphan'], $this->stripe->discarded);
+    }
+
+    public function test_stripe_failure_without_an_invoice_discards_nothing(): void
+    {
+        $r = $this->completed(3, 200);
+        $this->stripe->failInvoice = true;
+        $this->as($this->staff('admin'))->postJson($this->finalUrl($r))->assertStatus(502);
+        $this->assertSame([], $this->stripe->discarded);
+        $this->assertNull($r->fresh()->final_invoice_claimed_at);
+    }
+
+    public function test_db_failure_after_send_keeps_the_claim_logs_critical_and_never_sends_a_second_invoice(): void
+    {
+        $r = $this->completed(3, 200);
+        Log::spy();
+        $calls = 0;
+        ShoppingReservation::updating(function () use (&$calls) {
+            $calls++;
+            throw new \RuntimeException('db down');
+        });
+        $res = $this->as($this->staff('admin'))->postJson($this->finalUrl($r))->assertStatus(502);
+        $this->assertStringContainsString('in_final_1', $res->json('message'));
+        $this->assertStringContainsString('desarrollo', $res->json('message'));
+        $this->assertSame(3, $calls);
+        Log::shouldHaveReceived('critical')->withArgs(fn ($m, $ctx) => $ctx['stripe_invoice_id'] === 'in_final_1')->once();
+        $r = $r->fresh();
+        $this->assertNotNull($r->final_invoice_claimed_at);
+        $this->assertNull($r->final_invoice_id);
+        Mail::assertNotQueued(InPersonFinalInvoice::class);
+
+        ShoppingReservation::flushEventListeners();
+        $this->as($this->staff('admin'))->postJson($this->finalUrl($r))->assertStatus(422);
+        $this->assertCount(1, $this->stripe->invoices);
+    }
+
+    public function test_settled_branch_has_one_winner(): void
+    {
+        $r = $this->completed(0.5, 5);
+        $a = $this->staff('admin');
+        $this->assertNull($this->svc()->createFinalInvoice($r->fresh('user')));
+        // a second caller holding a stale copy of the row loses
+        $this->assertNotNull($this->svc()->createFinalInvoice($r));
+        $this->as($a)->postJson($this->finalUrl($r))->assertStatus(422);
+        $r = $r->fresh();
+        $this->assertNotNull($r->final_paid_at);
+        $this->assertEquals(0, $r->final_amount_usd);
+        $this->assertCount(0, $this->stripe->invoices);
+    }
+
+    // ---------- refund waiver + customer payload ----------
+
+    public function test_waive_refund_authz_idempotent_wrong_kind_and_leaves_the_pending_list(): void
+    {
+        $failed = $this->slotTakenLoser(true);
+        $this->open('2026-10-05', [11]);
+        $confirmed = $this->reserve($this->customer(), '2026-10-05', 11);
+        $this->pay($confirmed, 'pi_d');
+        $team = $this->staff('employee', 'shopping');
+
+        $this->as($this->customer())->postJson("/shopping/in-person/reservations/{$failed->id}/waive-refund")->assertStatus(403);
+        $this->as($team)->postJson("/admin/in-person/reservations/{$failed->id}/waive-refund")->assertStatus(403);
+        $this->as($team)->postJson("/shopping/in-person/reservations/{$confirmed->id}/waive-refund")->assertStatus(422);
+        $this->as($team)->postJson('/shopping/in-person/reservations/99999/waive-refund')->assertStatus(404);
+
+        $res = $this->as($team)->postJson("/shopping/in-person/reservations/{$failed->id}/waive-refund")->assertOk();
+        $this->assertNotNull($res->json('data.refund_waived_at'));
+        $this->assertFalse($res->json('data.team_refund_pending'));
+        $this->assertFalse($res->json('data.refund_pending'));
+        $stamp = $failed->fresh()->refund_waived_at;
+        $this->travel(5)->minutes();
+        $this->as($this->staff('admin'))->postJson("/admin/in-person/reservations/{$failed->id}/waive-refund")->assertOk();
+        $this->assertEquals($stamp, $failed->fresh()->refund_waived_at);
+        $this->assertSame([], $this->as($team)->getJson('/shopping/in-person/reservations/pending-refunds')->json('data'));
+        $this->as($team)->postJson("/shopping/in-person/reservations/{$failed->id}/mark-refunded")->assertStatus(422);
+        $this->assertNull($failed->fresh()->refunded_at);
+    }
+
+    public function test_waive_refund_refused_when_already_refunded(): void
+    {
+        $done = $this->slotTakenLoser();
+        $this->as($this->staff('admin'))->postJson("/admin/in-person/reservations/{$done->id}/waive-refund")->assertStatus(422);
+    }
+
+    public function test_customer_payload_refund_fields_follow_the_rule_and_team_keeps_its_own(): void
+    {
+        $this->open('2026-10-04', [11]);
+        $u = $this->customer();
+        $c = $this->reserve($u, '2026-10-04', 11);
+        $this->pay($c, 'pi_c');
+        $this->svc()->cancel($c->fresh('user'), 'sorry');
+        $team = $this->staff('employee', 'shopping');
+
+        $cust = $this->as($u)->getJson('/in-person/reservations/' . $c->reservation_number)->assertOk();
+        $this->assertFalse($cust->json('data.refund_pending'));
+        $this->assertFalse($cust->json('data.refunded'));
+        $this->assertArrayNotHasKey('team_refund_pending', $cust->json('data'));
+        $t = $this->as($team)->getJson("/shopping/in-person/reservations/{$c->id}")->assertOk();
+        $this->assertTrue($t->json('data.team_refund_pending'));
+        $this->assertFalse($t->json('data.refund_pending'));
+        $this->assertNull($t->json('data.refund_waived_at'));
+        $this->assertStringNotContainsString('eembols', (new InPersonReservationCancelled($c->fresh('user')))->render());
+
+        $this->as($team)->postJson("/shopping/in-person/reservations/{$c->id}/mark-refunded")->assertOk();
+        $cust = $this->as($u)->getJson('/in-person/reservations/' . $c->reservation_number)->json('data');
+        $this->assertTrue($cust['refunded']);
+        $this->assertFalse($cust['refund_pending']);
+
+        $loser = $this->slotTakenLoser(true);
+        $this->assertTrue($this->as($loser->user)->getJson('/in-person/reservations/' . $loser->reservation_number)->json('data.refund_pending'));
+        $this->as($team)->postJson("/shopping/in-person/reservations/{$loser->id}/waive-refund")->assertOk();
+        $this->assertFalse($this->as($loser->user)->getJson('/in-person/reservations/' . $loser->reservation_number)->json('data.refund_pending'));
+        $this->assertStringNotContainsString('está en proceso', (new InPersonSlotTaken($loser->fresh('user')))->render());
+    }
+
+    public function test_customer_list_hides_expired_and_abandoned_pending_rows(): void
+    {
+        $u = $this->customer();
+        $this->open('2026-10-03', [11, 12, 13, 14]);
+        $fresh = $this->reserve($u, '2026-10-03', 11);
+        $old = $this->reserve($u, '2026-10-03', 12);
+        $expired = $this->reserve($u, '2026-10-03', 13);
+        $paid = $this->reserve($u, '2026-10-03', 14);
+        $this->pay($paid, 'pi_p');
+        ShoppingReservation::where('id', $old->id)->update(['created_at' => now()->subHours(2)]);
+        ShoppingReservation::where('id', $expired->id)->update(['status' => 'expired']);
+        ShoppingReservation::where('id', $paid->id)->update(['created_at' => now()->subDays(2)]);
+
+        $numbers = array_column($this->as($u)->getJson('/in-person/reservations')->assertOk()->json('data'), 'reservation_number');
+        sort($numbers);
+        $want = [$fresh->reservation_number, $paid->reservation_number];
+        sort($want);
+        $this->assertSame($want, $numbers);
     }
 
     public function test_checkout_session_is_card_only(): void

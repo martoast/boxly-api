@@ -190,6 +190,16 @@ class AdminInPersonController extends Controller
         return response()->json(['success' => true, 'data' => $reservation->fresh('user')->toApi(true)]);
     }
 
+    public function waiveRefund($id)
+    {
+        $reservation = ShoppingReservation::with('user')->findOrFail($id);
+        if (! $this->service->waiveRefund($reservation)) {
+            return response()->json(['success' => false, 'message' => 'Esta reserva no requiere reembolso'], 422);
+        }
+
+        return response()->json(['success' => true, 'data' => $reservation->fresh('user')->toApi(true)]);
+    }
+
     public function reservation($id)
     {
         return response()->json(['success' => true, 'data' => ShoppingReservation::with('user')->findOrFail($id)->toApi(true)]);
@@ -200,6 +210,8 @@ class AdminInPersonController extends Controller
         $reservation = ShoppingReservation::with('user')->findOrFail($id);
         try {
             $refused = $this->service->createFinalInvoice($reservation);
+        } catch (\App\Services\InPersonInvoiceSentButUnrecorded $e) {
+            return response()->json(['success' => false, 'message' => 'La factura SÍ se envió al cliente en Stripe (' . $e->invoiceId . ') pero no pudimos guardarla. NO la vuelvas a generar; contacta a desarrollo.'], 502);
         } catch (\Throwable $e) {
             \Illuminate\Support\Facades\Log::error('In-person final invoice failed', ['reservation' => $reservation->reservation_number, 'error' => $e->getMessage()]);
 

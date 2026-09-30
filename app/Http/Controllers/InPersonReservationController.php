@@ -26,6 +26,7 @@ class InPersonReservationController extends Controller
         return response()->json(['success' => true, 'data' => $this->service->availability($from, $to),
             'hourly_rate_usd' => (float) config('services.in_person.hourly_rate_usd'),
             'max_hours' => $this->service->maxHours(),
+            'commission_percent' => (float) config('services.in_person.commission_percent'),
         ]);
     }
 
@@ -61,7 +62,11 @@ class InPersonReservationController extends Controller
 
     public function index(Request $request)
     {
-        $list = ShoppingReservation::where('user_id', $request->user()->id)->orderByDesc('starts_at')->orderByDesc('id')->get();
+        // Abandoned checkouts (expired, or unpaid for over an hour) are noise to the customer.
+        $list = ShoppingReservation::where('user_id', $request->user()->id)
+            ->where('status', '!=', ShoppingReservation::EXPIRED)
+            ->where(fn ($q) => $q->where('status', '!=', ShoppingReservation::PENDING)->orWhere('created_at', '>=', now()->subHour()))
+            ->orderByDesc('starts_at')->orderByDesc('id')->get();
 
         return response()->json(['success' => true, 'data' => $list->map->toApi()->values()]);
     }

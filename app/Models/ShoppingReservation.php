@@ -24,6 +24,7 @@ class ShoppingReservation extends Model
         'starts_at' => 'datetime',
         'paid_at' => 'datetime',
         'refunded_at' => 'datetime',
+        'refund_waived_at' => 'datetime',
         'confirmation_sent_at' => 'datetime',
         'cancelled_at' => 'datetime',
         'completed_at' => 'datetime',
@@ -34,7 +35,8 @@ class ShoppingReservation extends Model
     /** Paid money that must go back to the customer: slot_taken, or cancelled after paying. */
     public function needsRefund(): bool
     {
-        return $this->status === self::SLOT_TAKEN || ($this->status === self::CANCELLED && $this->paid_at !== null);
+        return $this->refund_waived_at === null
+            && ($this->status === self::SLOT_TAKEN || ($this->status === self::CANCELLED && $this->paid_at !== null));
     }
 
     public function refundPending(): bool
@@ -138,7 +140,8 @@ class ShoppingReservation extends Model
             'whatsapp' => config('services.in_person.whatsapp'),
             'refunded' => $this->refunded_at !== null,
             'slot_taken_reason' => $this->slot_taken_reason,
-            'refund_pending' => $this->refundPending(),
+            // Customer view: only a slot_taken loser is told a refund is coming; a cancellation shows nothing until refunded.
+            'refund_pending' => $this->status === self::SLOT_TAKEN && $this->refunded_at === null && $this->refund_waived_at === null,
             'completed_at' => $this->completed_at?->toIso8601String(),
             'final' => $this->final(),
             'events' => $this->events(),
@@ -148,6 +151,8 @@ class ShoppingReservation extends Model
             $data += [
                 'id' => $this->id,
                 'refunded_at' => $this->refunded_at?->toIso8601String(),
+                'refund_waived_at' => $this->refund_waived_at?->toIso8601String(),
+                'team_refund_pending' => $this->refundPending(),
                 'stripe_payment_intent_id' => $this->stripe_payment_intent_id,
                 'cancel_reason' => $this->cancel_reason,
                 'hours_worked' => $this->hours_worked !== null ? (float) $this->hours_worked : null,

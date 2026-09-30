@@ -29,12 +29,16 @@
         @if($locale === 'es')
             @if($refunded)
                 Ya te reembolsamos tus ${{ $amount }} USD; van en camino de regreso a tu tarjeta. Puedes elegir otro horario cuando quieras.
+            @elseif($r->refund_waived_at)
+                Puedes elegir otro horario cuando quieras.
             @else
                 Tu reembolso de ${{ $amount }} USD está en proceso; te contactaremos por WhatsApp para confirmártelo. Puedes elegir otro horario cuando quieras.
             @endif
         @else
             @if($refunded)
                 We refunded your ${{ $amount }} USD; it is on its way back to your card. You can pick another time whenever you like.
+            @elseif($r->refund_waived_at)
+                You can pick another time whenever you like.
             @else
                 Your ${{ $amount }} USD refund is being processed; we will contact you on WhatsApp to confirm it. You can pick another time whenever you like.
             @endif
