@@ -50,6 +50,8 @@ return [
         'cart',
         'cart/*',
         'shopping-trips/*',
+        'in-person',   // hourly personal-shopping reservations (customer availability, reservations, success page)
+        'in-person/*',
         'affiliate',
         'affiliate/*',
         'campaign/*',
