@@ -447,6 +447,8 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::put('/slots', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'updateSlots']);
             Route::post('/slots/copy-week', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'copyWeek']);
             Route::get('/reservations', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'reservations']);
+            Route::get('/reservations/pending-refunds', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'pendingRefunds']);
+            Route::post('/reservations/{id}/mark-refunded', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'markRefunded'])->whereNumber('id');
             Route::post('/reservations/{id}/cancel', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'cancel'])->whereNumber('id');
             Route::post('/reservations/{id}/complete', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'complete'])->whereNumber('id');
             Route::get('/reservations/{id}', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'reservation'])->whereNumber('id');
@@ -757,6 +759,8 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::put('/slots', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'updateSlots']);
             Route::post('/slots/copy-week', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'copyWeek']);
             Route::get('/reservations', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'reservations']);
+            Route::get('/reservations/pending-refunds', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'pendingRefunds']);
+            Route::post('/reservations/{id}/mark-refunded', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'markRefunded'])->whereNumber('id');
             Route::post('/reservations/{id}/cancel', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'cancel'])->whereNumber('id');
             Route::post('/reservations/{id}/complete', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'complete'])->whereNumber('id');
             Route::get('/reservations/{id}', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'reservation'])->whereNumber('id');

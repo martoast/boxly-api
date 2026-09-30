@@ -68,7 +68,7 @@ class StripeWebhookController extends Controller
             $this->handleInvoicePaid($event);
         }
 
-        if ($event->type === 'checkout.session.completed') {
+        if (in_array($event->type, ['checkout.session.completed', 'checkout.session.async_payment_succeeded'], true)) {
             $this->handleCheckoutSessionCompleted($event);
         }
 

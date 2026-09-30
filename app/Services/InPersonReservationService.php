@@ -152,6 +152,7 @@ class InPersonReservationService
                         ],
                     ],
                 ]],
+                'payment_method_types' => ['card'],
                 'invoice_creation' => ['enabled' => true],
                 'metadata' => $meta,
                 'payment_intent_data' => ['metadata' => $meta],
@@ -180,7 +181,7 @@ class InPersonReservationService
             return;
         }
 
-        $this->confirm($reservation, $session->payment_intent ?? null, $session->invoice ?? null);
+        $this->confirm($reservation, $session->payment_intent ?? null, $session->invoice ?? null, $session->id ?? null);
     }
 
     public function markExpired(object $session): void
@@ -198,11 +199,20 @@ class InPersonReservationService
      * does nothing. If an hour is already locked (or was removed meanwhile) the
      * transaction rolls back and the reservation becomes slot_taken and is refunded.
      */
-    public function confirm(ShoppingReservation $reservation, ?string $paymentIntent, ?string $invoice): void
+    public function confirm(ShoppingReservation $reservation, ?string $paymentIntent, ?string $invoice, ?string $sessionId = null): void
     {
+        if ($sessionId && $reservation->stripe_checkout_session_id && $sessionId !== $reservation->stripe_checkout_session_id) {
+            Log::warning('In-person confirm ignored: checkout session does not belong to the reservation', [
+                'reservation' => $reservation->reservation_number, 'session' => $sessionId, 'expected' => $reservation->stripe_checkout_session_id,
+            ]);
+
+            return;
+        }
+
         $confirmed = false;
+        $reason = ShoppingReservation::REASON_PAID_FIRST;
         try {
-            DB::transaction(function () use ($reservation, $paymentIntent, $invoice, &$confirmed) {
+            DB::transaction(function () use ($reservation, $paymentIntent, $invoice, &$confirmed, &$reason) {
                 $flipped = ShoppingReservation::where('id', $reservation->id)
                     ->where('status', ShoppingReservation::PENDING)
                     ->update([
@@ -217,8 +227,9 @@ class InPersonReservationService
                 }
 
                 $times = array_map(fn ($i) => $reservation->starts_at->copy()->addHours($i), range(0, $reservation->hours_reserved - 1));
-                $slots = ShoppingSlot::where('location', ShoppingSlot::LOCATION)->whereIn('starts_at', $times)->get();
+                $slots = ShoppingSlot::where('location', ShoppingSlot::LOCATION)->whereIn('starts_at', $times)->orderBy('starts_at')->get();
                 if ($slots->count() !== count($times)) {
+                    $reason = ShoppingReservation::REASON_HOUR_UNAVAILABLE;
                     throw new \DomainException('An hour of the reservation is no longer offered');
                 }
                 foreach ($slots as $slot) {
@@ -231,7 +242,7 @@ class InPersonReservationService
                 $confirmed = true;
             });
         } catch (UniqueConstraintViolationException|\DomainException $e) {
-            $this->slotTaken($reservation, $paymentIntent);
+            $this->slotTaken($reservation, $paymentIntent, $e instanceof \DomainException ? ShoppingReservation::REASON_HOUR_UNAVAILABLE : ShoppingReservation::REASON_PAID_FIRST);
 
             return;
         }
@@ -241,11 +252,11 @@ class InPersonReservationService
         }
     }
 
-    private function slotTaken(ShoppingReservation $reservation, ?string $paymentIntent): void
+    private function slotTaken(ShoppingReservation $reservation, ?string $paymentIntent, string $reason): void
     {
         $flipped = ShoppingReservation::where('id', $reservation->id)
             ->where('status', ShoppingReservation::PENDING)
-            ->update(['status' => ShoppingReservation::SLOT_TAKEN, 'paid_at' => now(), 'stripe_payment_intent_id' => $paymentIntent]);
+            ->update(['status' => ShoppingReservation::SLOT_TAKEN, 'slot_taken_reason' => $reason, 'paid_at' => now(), 'stripe_payment_intent_id' => $paymentIntent]);
         if ($flipped !== 1) {
             return;
         }
@@ -310,13 +321,35 @@ class InPersonReservationService
         try {
             $session = $this->stripe->retrieveSession($reservation->stripe_checkout_session_id);
             if (($session->payment_status ?? null) === 'paid') {
-                $this->confirm($reservation, $session->payment_intent ?? null, $session->invoice ?? null);
+                $this->confirm($reservation, $session->payment_intent ?? null, $session->invoice ?? null, $reservation->stripe_checkout_session_id);
             }
         } catch (\Throwable $e) {
             Log::warning('In-person success-page session check failed', ['reservation' => $reservation->reservation_number, 'error' => $e->getMessage()]);
         }
 
         return $reservation->fresh(['user']);
+    }
+
+    /** Reservations the team still has to refund by hand (failed slot_taken refund, or cancelled after paying). */
+    public function pendingRefunds()
+    {
+        return ShoppingReservation::with('user')->whereNull('refunded_at')
+            ->where(fn ($q) => $q->where('status', ShoppingReservation::SLOT_TAKEN)
+                ->orWhere(fn ($q) => $q->where('status', ShoppingReservation::CANCELLED)->whereNotNull('paid_at')))
+            ->orderByDesc('starts_at')->orderByDesc('id')->get();
+    }
+
+    /** Stamp refunded_at on a refund-needing reservation. Idempotent; false when it is not that kind. */
+    public function markRefunded(ShoppingReservation $reservation): bool
+    {
+        if (! $reservation->needsRefund()) {
+            return false;
+        }
+        if ($reservation->refunded_at === null) {
+            $reservation->update(['refunded_at' => now()]);
+        }
+
+        return true;
     }
 
     /** Cancel a confirmed reservation and free its hours. Returns false if it was not confirmed. */

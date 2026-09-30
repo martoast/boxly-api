@@ -15,6 +15,9 @@ class ShoppingReservation extends Model
     public const EXPIRED = 'expired';
     public const COMPLETED = 'completed';
 
+    public const REASON_HOUR_UNAVAILABLE = 'hour_unavailable';
+    public const REASON_PAID_FIRST = 'paid_first';
+
     protected $guarded = [];
 
     protected $casts = [
@@ -27,6 +30,17 @@ class ShoppingReservation extends Model
         'final_invoice_sent_at' => 'datetime',
         'final_paid_at' => 'datetime',
     ];
+
+    /** Paid money that must go back to the customer: slot_taken, or cancelled after paying. */
+    public function needsRefund(): bool
+    {
+        return $this->status === self::SLOT_TAKEN || ($this->status === self::CANCELLED && $this->paid_at !== null);
+    }
+
+    public function refundPending(): bool
+    {
+        return $this->needsRefund() && $this->refunded_at === null;
+    }
 
     public function user(): BelongsTo
     {
@@ -123,6 +137,8 @@ class ShoppingReservation extends Model
             'customer_notes' => $this->customer_notes,
             'whatsapp' => config('services.in_person.whatsapp'),
             'refunded' => $this->refunded_at !== null,
+            'slot_taken_reason' => $this->slot_taken_reason,
+            'refund_pending' => $this->refundPending(),
             'completed_at' => $this->completed_at?->toIso8601String(),
             'final' => $this->final(),
             'events' => $this->events(),

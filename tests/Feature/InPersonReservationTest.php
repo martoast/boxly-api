@@ -133,10 +133,10 @@ class InPersonReservationTest extends LiveShoppingTestCase
         return $this->svc()->createReservation($u, $date, sprintf('%02d:00', $hour), $hours, null)[0];
     }
 
-    private function webhook(string $type, ShoppingReservation $r, string $pi = 'pi_1', string $invoice = 'in_1')
+    private function webhook(string $type, ShoppingReservation $r, string $pi = 'pi_1', string $invoice = 'in_1', ?string $session = null)
     {
         $payload = json_encode(['id' => 'evt_' . uniqid(), 'object' => 'event', 'type' => $type, 'data' => ['object' => [
-            'id' => $r->stripe_checkout_session_id, 'object' => 'checkout.session', 'payment_status' => 'paid',
+            'id' => $session ?? $r->stripe_checkout_session_id, 'object' => 'checkout.session', 'payment_status' => 'paid',
             'payment_intent' => $pi, 'invoice' => $invoice,
             'metadata' => ['type' => 'in_person_reservation', 'reservation_id' => (string) $r->id],
         ]]]);
@@ -869,5 +869,191 @@ class InPersonReservationTest extends LiveShoppingTestCase
         $this->assertSame('in_person.event.paid', $events[1]['label_key']);
         $this->assertStringEndsWith('+00:00', $events[0]['at']);
         $this->assertSame($events, collect($events)->sortBy('at')->values()->all());
+    }
+
+    // ---------- review fixes: every path after Stripe ----------
+
+    private function slotTakenLoser(bool $failRefund = false): ShoppingReservation
+    {
+        $this->open('2026-10-03', [11]);
+        $ra = $this->reserve($this->customer(), '2026-10-03', 11);
+        $rb = $this->reserve($this->customer(['preferred_language' => 'es']), '2026-10-03', 11);
+        $this->pay($ra, 'pi_a');
+        $this->stripe->failRefund = $failRefund;
+        $this->pay($rb, 'pi_b');
+
+        return $rb->fresh('user');
+    }
+
+    public function test_paid_with_webhook_already_processed_show_returns_confirmed(): void
+    {
+        $this->open('2026-10-03', [11]);
+        $u = $this->customer();
+        $r = $this->reserve($u, '2026-10-03', 11);
+        $this->pay($r);
+        $this->as($u)->getJson('/in-person/reservations/' . $r->reservation_number)
+            ->assertOk()->assertJsonPath('data.status', 'confirmed')->assertJsonPath('data.refund_pending', false);
+        Mail::assertQueued(InPersonReservationConfirmed::class, 1);
+    }
+
+    public function test_paid_but_webhook_late_show_confirms_via_confirm_if_paid(): void
+    {
+        $this->open('2026-10-03', [11]);
+        $u = $this->customer();
+        $r = $this->reserve($u, '2026-10-03', 11);
+        $this->stripe->paid[$r->stripe_checkout_session_id] = ['payment_intent' => 'pi_late', 'invoice' => 'in_late'];
+        $this->as($u)->getJson('/in-person/reservations/' . $r->reservation_number)->assertOk()->assertJsonPath('data.status', 'confirmed');
+        $this->assertSame('pi_late', $r->fresh()->stripe_payment_intent_id);
+        $this->pay($r, 'pi_late');   // the webhook arriving afterwards is a no-op
+        Mail::assertQueued(InPersonReservationConfirmed::class, 1);
+        $this->assertSame(1, $this->activeLocks());
+    }
+
+    public function test_slot_taken_refunded_reports_paid_first_and_no_pending_refund(): void
+    {
+        $rb = $this->slotTakenLoser();
+        $res = $this->as($rb->user)->getJson('/in-person/reservations/' . $rb->reservation_number)->assertOk();
+        $this->assertSame('slot_taken', $res->json('data.status'));
+        $this->assertSame('paid_first', $res->json('data.slot_taken_reason'));
+        $this->assertFalse($res->json('data.refund_pending'));
+        $this->assertTrue($res->json('data.refunded'));
+        $team = $this->staff('employee', 'shopping');
+        $this->assertSame([], $this->as($team)->getJson('/shopping/in-person/reservations/pending-refunds')->assertOk()->json('data'));
+        $html = (new InPersonSlotTaken($rb))->render();
+        $this->assertStringContainsString('Otra persona pagó', $html);
+        $this->assertStringContainsString('Ya te reembolsamos', $html);
+    }
+
+    public function test_slot_taken_with_refund_failure_is_pending_and_mail_says_so(): void
+    {
+        $rb = $this->slotTakenLoser(true);
+        $res = $this->as($rb->user)->getJson('/in-person/reservations/' . $rb->reservation_number)->assertOk();
+        $this->assertTrue($res->json('data.refund_pending'));
+        $this->assertFalse($res->json('data.refunded'));
+        $team = $this->staff('employee', 'shopping');
+        foreach (['/shopping', '/admin'] as $prefix) {
+            $who = $prefix === '/admin' ? $this->staff('admin') : $team;
+            $list = $this->as($who)->getJson("$prefix/in-person/reservations/pending-refunds")->assertOk()->json('data');
+            $this->assertSame([$rb->reservation_number], array_column($list, 'reservation_number'));
+            $this->assertTrue($list[0]['refund_pending']);
+        }
+        $html = (new InPersonSlotTaken($rb))->render();
+        $this->assertStringContainsString('está en proceso', $html);
+        $this->assertStringContainsString('WhatsApp', $html);
+        $this->assertStringNotContainsString('Ya te reembolsamos', $html);
+        $rb->user->update(['preferred_language' => 'en']);
+        $en = (new InPersonSlotTaken($rb->fresh('user')))->render();
+        $this->assertStringContainsString('being processed', $en);
+        $this->assertStringNotContainsString('We refunded', $en);
+    }
+
+    public function test_hour_unavailable_reason_when_the_hour_was_removed_before_payment(): void
+    {
+        $this->open('2026-10-03', [11]);
+        $u = $this->customer(['preferred_language' => 'en']);
+        $r = $this->reserve($u, '2026-10-03', 11);
+        ShoppingSlot::query()->delete();
+        $this->pay($r, 'pi_x');
+        $r = $r->fresh('user');
+        $this->assertSame('slot_taken', $r->status);
+        $this->assertSame('hour_unavailable', $r->slot_taken_reason);
+        $this->assertSame(['pi_x'], $this->stripe->refunded);
+        $html = (new InPersonSlotTaken($r))->render();
+        $this->assertStringContainsString('no longer available', $html);
+        $this->assertStringNotContainsString('Someone else paid', $html);
+    }
+
+    public function test_pending_refunds_and_mark_refunded(): void
+    {
+        $failed = $this->slotTakenLoser(true);
+        // cancelled after paying: confirmed, then cancelled by the team
+        $this->open('2026-10-04', [11]);
+        $cancelled = $this->reserve($this->customer(), '2026-10-04', 11);
+        $this->pay($cancelled, 'pi_c');
+        $this->assertTrue($this->svc()->cancel($cancelled->fresh('user'), 'sorry'));
+        // a refunded one and a confirmed one must not appear
+        $this->open('2026-10-05', [11]);
+        $confirmed = $this->reserve($this->customer(), '2026-10-05', 11);
+        $this->pay($confirmed, 'pi_d');
+
+        $team = $this->staff('employee', 'shopping');
+        $this->as($this->customer())->getJson('/shopping/in-person/reservations/pending-refunds')->assertStatus(403);
+        $this->as($this->customer())->postJson("/shopping/in-person/reservations/{$failed->id}/mark-refunded")->assertStatus(403);
+        $this->as($this->staff('employee', 'shopping'))->getJson('/admin/in-person/reservations/pending-refunds')->assertStatus(403);
+
+        $list = $this->as($team)->getJson('/shopping/in-person/reservations/pending-refunds')->assertOk()->json('data');
+        // newest first (by starts_at): Oct 4 (cancelled) before Oct 3 (slot_taken)
+        $this->assertSame([$cancelled->reservation_number, $failed->reservation_number], array_column($list, 'reservation_number'));
+
+        $this->as($team)->postJson("/shopping/in-person/reservations/{$confirmed->id}/mark-refunded")->assertStatus(422);
+        $first = $this->as($team)->postJson("/shopping/in-person/reservations/{$failed->id}/mark-refunded")->assertOk();
+        $this->assertFalse($first->json('data.refund_pending'));
+        $stamp = $failed->fresh()->refunded_at;
+        $this->assertNotNull($stamp);
+        $this->travel(5)->minutes();
+        $this->as($team)->postJson("/shopping/in-person/reservations/{$failed->id}/mark-refunded")->assertOk();
+        $this->assertEquals($stamp, $failed->fresh()->refunded_at);
+        $this->as($this->staff('admin'))->postJson("/admin/in-person/reservations/{$cancelled->id}/mark-refunded")->assertOk();
+        $this->assertSame([], $this->as($team)->getJson('/shopping/in-person/reservations/pending-refunds')->json('data'));
+        $this->as($team)->postJson('/shopping/in-person/reservations/99999/mark-refunded')->assertStatus(404);
+    }
+
+    public function test_show_unknown_foreign_and_unauthenticated(): void
+    {
+        $this->open('2026-10-03', [11]);
+        $r = $this->reserve($this->customer(), '2026-10-03', 11);
+        $this->as($this->customer())->getJson('/in-person/reservations/' . $r->reservation_number)->assertStatus(404);
+        $this->as($this->customer())->getJson('/in-person/reservations/RV-2026-9999')->assertStatus(404);
+        $this->app['auth']->forgetGuards();
+        $this->getJson('/in-person/reservations/' . $r->reservation_number)->assertStatus(401);
+    }
+
+    public function test_availability_includes_rate_and_max_hours(): void
+    {
+        $res = $this->as($this->customer())->getJson('/in-person/availability')->assertOk();
+        $this->assertEquals((float) config('services.in_person.hourly_rate_usd'), $res->json('hourly_rate_usd'));
+        $this->assertSame((int) config('services.in_person.max_hours'), $res->json('max_hours'));
+        $this->assertSame([], $res->json('data'));
+    }
+
+    public function test_checkout_session_is_card_only(): void
+    {
+        $this->open('2026-10-03', [11]);
+        $this->reserve($this->customer(), '2026-10-03', 11);
+        $this->assertSame(['card'], $this->stripe->created[0]['payment_method_types']);
+    }
+
+    public function test_async_payment_succeeded_confirms_once(): void
+    {
+        $this->open('2026-10-03', [11]);
+        $r = $this->reserve($this->customer(), '2026-10-03', 11);
+        $this->webhook('checkout.session.async_payment_succeeded', $r)->assertOk();
+        $this->webhook('checkout.session.async_payment_succeeded', $r)->assertOk();
+        $this->pay($r);
+        $this->assertSame('confirmed', $r->fresh()->status);
+        $this->assertSame(1, $this->activeLocks());
+        Mail::assertQueued(InPersonReservationConfirmed::class, 1);
+    }
+
+    public function test_session_id_mismatch_is_ignored_safely(): void
+    {
+        Log::spy();
+        $this->open('2026-10-03', [11]);
+        $r = $this->reserve($this->customer(), '2026-10-03', 11);
+        $this->webhook('checkout.session.completed', $r, 'pi_1', 'in_1', 'cs_other')->assertOk();
+        $this->assertSame('pending_payment', $r->fresh()->status);
+        $this->assertSame(0, $this->activeLocks());
+        Log::shouldHaveReceived('warning')->withArgs(fn ($m) => str_contains($m, 'does not belong'))->once();
+        $this->pay($r);   // the right session still confirms
+        $this->assertSame('confirmed', $r->fresh()->status);
+    }
+
+    public function test_manager_alert_has_whatsapp_link_only_with_a_phone(): void
+    {
+        $this->open('2026-10-03', [11, 12]);
+        $with = $this->reserve($this->customer(['phone' => '+52 (664) 111-2222']), '2026-10-03', 11)->fresh('user');
+        $without = $this->reserve($this->customer(['phone' => null]), '2026-10-03', 12)->fresh('user');
+        $this->assertStringContainsString('https://wa.me/526641112222', (new InPersonReservationManagerAlert($with))->render());
+        $this->assertStringNotContainsString(' · <a href="https://wa.me/', (new InPersonReservationManagerAlert($without))->render());
     }
 }

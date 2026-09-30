@@ -175,6 +175,21 @@ class AdminInPersonController extends Controller
         return response()->json(['success' => true, 'data' => $query->orderBy('starts_at')->get()->map->toApi(true)->values()]);
     }
 
+    public function pendingRefunds()
+    {
+        return response()->json(['success' => true, 'data' => $this->service->pendingRefunds()->map->toApi(true)->values()]);
+    }
+
+    public function markRefunded($id)
+    {
+        $reservation = ShoppingReservation::with('user')->findOrFail($id);
+        if (! $this->service->markRefunded($reservation)) {
+            return response()->json(['success' => false, 'message' => 'Esta reserva no requiere reembolso'], 422);
+        }
+
+        return response()->json(['success' => true, 'data' => $reservation->fresh('user')->toApi(true)]);
+    }
+
     public function reservation($id)
     {
         return response()->json(['success' => true, 'data' => ShoppingReservation::with('user')->findOrFail($id)->toApi(true)]);

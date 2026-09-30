@@ -31,7 +31,7 @@ return new class extends Migration
             Schema::create('shopping_reservations', function (Blueprint $table) {
                 $table->id();
                 $table->string('reservation_number')->unique();
-                $table->foreignId('user_id')->constrained()->cascadeOnDelete();
+                $table->foreignId('user_id')->constrained()->restrictOnDelete();
                 $table->dateTime('starts_at'); // UTC, start of the first reserved hour
                 $table->unsignedTinyInteger('hours_reserved');
                 $table->decimal('hours_worked', 4, 2)->nullable();
@@ -44,6 +44,7 @@ return new class extends Migration
                 $table->string('stripe_invoice_id')->nullable();
                 $table->timestamp('paid_at')->nullable();
                 $table->timestamp('refunded_at')->nullable();
+                $table->string('slot_taken_reason')->nullable(); // hour_unavailable|paid_first
                 $table->text('customer_notes')->nullable();
                 $table->timestamp('confirmation_sent_at')->nullable();
                 $table->timestamp('cancelled_at')->nullable();
