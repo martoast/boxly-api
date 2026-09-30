@@ -102,6 +102,12 @@ return [
      */
     'in_person' => [
         'per_store_fee_usd' => env('BOXLY_IN_PERSON_PER_STORE_FEE_USD', 10),
+        // Hourly reservations (shopping_slots): $30 first hour up front, then hours + 10% of the spend.
+        'hourly_rate_usd' => env('BOXLY_IN_PERSON_HOURLY_RATE_USD', 30),
+        'commission_percent' => env('BOXLY_IN_PERSON_COMMISSION_PERCENT', 10),
+        'max_hours' => env('BOXLY_IN_PERSON_MAX_HOURS', 6),
+        'whatsapp' => env('BOXLY_IN_PERSON_WHATSAPP', '16194937969'),
+        'timezone' => env('BOXLY_IN_PERSON_TIMEZONE', 'America/Los_Angeles'),
     ],
 
     'nu_bank' => [

@@ -72,6 +72,13 @@ class StripeWebhookController extends Controller
             $this->handleCheckoutSessionCompleted($event);
         }
 
+        if ($event->type === 'checkout.session.expired') {
+            $session = $event->data->object;
+            if (($session->metadata->type ?? null) === 'in_person_reservation') {
+                app(\App\Services\InPersonReservationService::class)->markExpired($session);
+            }
+        }
+
         return response()->json(['status' => 'success']);
     }
 
@@ -113,6 +120,10 @@ class StripeWebhookController extends Controller
 
         if ($type === 'in_person_deposit' && isset($metadata['purchase_request_id'])) {
             $this->handleInPersonDepositPaid($session, $metadata);
+        }
+
+        if ($type === 'in_person_reservation' && isset($metadata['reservation_id']) && ($session->payment_status ?? 'paid') === 'paid') {
+            app(\App\Services\InPersonReservationService::class)->handlePaidSession($session);
         }
 
         if ($type === 'trip_booking' && isset($metadata['shopping_trip_booking_id'])) {

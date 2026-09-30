@@ -322,6 +322,13 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/book', [\App\Http\Controllers\ShoppingTripBookingController::class, 'store']);
     });
 
+    // In-person hourly reservations (customer): open hours, reserve + pay the first hour, read it back.
+    Route::prefix('in-person')->group(function () {
+        Route::get('/availability', [\App\Http\Controllers\InPersonReservationController::class, 'availability']);
+        Route::post('/reservations', [\App\Http\Controllers\InPersonReservationController::class, 'store']);
+        Route::get('/reservations/{number}', [\App\Http\Controllers\InPersonReservationController::class, 'show']);
+    });
+
     Route::prefix('orders')->group(function () {
         Route::get('/', [OrderController::class, 'index']);
         Route::post('/', [OrderController::class, 'create']);
@@ -431,6 +438,16 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/{shoppingTrip}', [AdminShoppingTripsController::class, 'show']);
             Route::put('/{shoppingTrip}', [AdminShoppingTripsController::class, 'update']);
             Route::delete('/{shoppingTrip}', [AdminShoppingTripsController::class, 'destroy']);
+        });
+
+        // In-person hourly reservations: the team publishes open hours, sees who booked, cancels/completes.
+        Route::prefix('in-person')->group(function () {
+            Route::get('/slots', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'slots']);
+            Route::put('/slots', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'updateSlots']);
+            Route::post('/slots/copy-week', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'copyWeek']);
+            Route::get('/reservations', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'reservations']);
+            Route::post('/reservations/{id}/cancel', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'cancel'])->whereNumber('id');
+            Route::post('/reservations/{id}/complete', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'complete'])->whereNumber('id');
         });
 
         Route::prefix('management')->group(function () {
@@ -729,6 +746,16 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/{shoppingTrip}', [AdminShoppingTripsController::class, 'show']);
             Route::put('/{shoppingTrip}', [AdminShoppingTripsController::class, 'update']);
             Route::delete('/{shoppingTrip}', [AdminShoppingTripsController::class, 'destroy']);
+        });
+
+        // In-person hourly reservations: the team publishes open hours, sees who booked, cancels/completes.
+        Route::prefix('in-person')->group(function () {
+            Route::get('/slots', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'slots']);
+            Route::put('/slots', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'updateSlots']);
+            Route::post('/slots/copy-week', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'copyWeek']);
+            Route::get('/reservations', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'reservations']);
+            Route::post('/reservations/{id}/cancel', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'cancel'])->whereNumber('id');
+            Route::post('/reservations/{id}/complete', [\App\Http\Controllers\Admin\AdminInPersonController::class, 'complete'])->whereNumber('id');
         });
 
         // Customer lookup — needed by the "create PR for customer" form.
