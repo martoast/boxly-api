@@ -18,13 +18,20 @@ use Illuminate\Support\Facades\Mail;
  */
 class StoreQuoteInvoice
 {
+    /** The invoice's money (billable stores + Boxly's commission, rounded cents); the customer summary uses it too. */
+    public static function totals(Collection $quotes): array
+    {
+        $storesCents = (int) $quotes->filter(fn (StoreQuote $q) => in_array($q->status, StoreQuote::BILLABLE, true))->sum('total_cents');
+        $feePercent = (float) config('services.commission.default_percent', 15);
+        $feeCents = (int) round($storesCents * $feePercent / 100);
+
+        return ['stores_cents' => $storesCents, 'fee_percent' => $feePercent, 'fee_cents' => $feeCents, 'total_cents' => $storesCents + $feeCents];
+    }
+
     public function send(PurchaseRequest $pr, Collection $quotes): void
     {
         $billable = $quotes->filter(fn (StoreQuote $q) => in_array($q->status, StoreQuote::BILLABLE, true))->values();
-        $storesCents = (int) $billable->sum('total_cents');
-        $feePercent = (float) config('services.commission.default_percent', 15);
-        $feeCents = (int) round($storesCents * $feePercent / 100);
-        $totalCents = $storesCents + $feeCents;
+        ['stores_cents' => $storesCents, 'fee_percent' => $feePercent, 'fee_cents' => $feeCents, 'total_cents' => $totalCents] = self::totals($quotes);
 
         $user = $pr->user;
         $customer = $user->stripeShoppingCustomerId();

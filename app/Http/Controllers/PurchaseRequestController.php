@@ -258,6 +258,7 @@ class PurchaseRequestController extends Controller
         $purchaseRequest->load(['items', 'shoppingTrip', 'stores']);
         $payload = $purchaseRequest->toArray();
         $payload['store_quotes'] = \App\Models\StoreQuote::payloadFor($purchaseRequest, false);
+        $payload['checkout_summary'] = \App\Services\CartQuotes::checkoutSummary($purchaseRequest);
 
         if ($purchaseRequest->isInPerson()) {
             $payload['in_person_breakdown'] = $purchaseRequest->inPersonStoreBreakdown()

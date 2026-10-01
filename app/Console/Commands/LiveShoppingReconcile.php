@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\LiveShoppingSession;
+use App\Services\CartQuotes;
 use App\Services\CartSync;
 use App\Services\LiveShoppingEngine;
 use Illuminate\Console\Command;
@@ -116,6 +117,11 @@ class LiveShoppingReconcile extends Command
         // again. A store whose sync holds the key just returns, so this never doubles a run.
         if (CartSync::enabled() && Schema::hasColumn('live_shopping_sessions', 'cart_active_key')) {
             CartSync::redispatchStalled();
+        }
+
+        // One store at a time: send a request's next store when the chain stalled (crash between terminals, lost job).
+        if (CartQuotes::configured()) {
+            CartQuotes::reconcile();
         }
 
         return self::SUCCESS;

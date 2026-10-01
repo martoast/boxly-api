@@ -11,6 +11,7 @@ use App\Models\PurchaseRequestItem;
 use App\Models\StoreQuote;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * C5 — Finalizar → a checkout quote per store (engine) → automatic invoice.
@@ -31,20 +32,64 @@ class CartQuotes
             && CartSync::enabled();
     }
 
-    /** At finalize (inside its transaction): one row + one job per store of the cart. */
+    /** At finalize (inside its transaction): one row per store in the order the shopper added them, and only the first store starts. */
     public static function start(Cart $cart, PurchaseRequest $pr): void
     {
         $stores = CartItem::where('cart_id', $cart->id)
-            ->select('store_id', DB::raw('MAX(store_name) as store_name'))
+            ->select('store_id', DB::raw('MAX(store_name) as store_name'), DB::raw('MIN(id) as first_item_id'))
             ->groupBy('store_id')
-            ->orderBy('store_id')
+            ->orderBy('first_item_id')
             ->get();
         foreach ($stores as $store) {
-            $quote = StoreQuote::firstOrCreate(
+            StoreQuote::firstOrCreate(
                 ['purchase_request_id' => $pr->id, 'store_id' => $store->store_id],
                 ['cart_id' => $cart->id, 'store_name' => $store->store_name, 'status' => StoreQuote::STATUS_PENDING],
             );
-            self::dispatch($quote);
+        }
+        self::dispatchNext($pr->id);
+    }
+
+    /**
+     * One store at a time: start the request's first pending quote (by id) unless one is running or already in flight
+     * (pending with dispatched_at set; the reconcile re-sends a stale one). The claim is a conditional UPDATE, so of
+     * two racing callers only the winner dispatches.
+     */
+    public static function dispatchNext(int $purchaseRequestId): void
+    {
+        $quotes = StoreQuote::where('purchase_request_id', $purchaseRequestId);
+        $guarded = Schema::hasColumn('store_quotes', 'dispatched_at');
+        if ((clone $quotes)->where(fn ($q) => $guarded
+            ? $q->where('status', StoreQuote::STATUS_RUNNING)->orWhere(fn ($p) => $p->where('status', StoreQuote::STATUS_PENDING)->whereNotNull('dispatched_at'))
+            : $q->where('status', StoreQuote::STATUS_RUNNING))->exists()) {
+            return;
+        }
+        $next = $quotes->where('status', StoreQuote::STATUS_PENDING)->orderBy('id')->first();
+        if (! $next) {
+            return;
+        }
+        if ($guarded && StoreQuote::where('id', $next->id)->where('status', StoreQuote::STATUS_PENDING)->whereNull('dispatched_at')
+            ->update(['dispatched_at' => now()]) === 0) {
+            return;
+        }
+        self::dispatch($next);
+    }
+
+    /** Crash between a terminal and the next dispatch, or a lost queue job: send each stalled request's next store (every minute). */
+    public static function reconcile(): void
+    {
+        if (! Schema::hasTable('store_quotes') || ! Schema::hasColumn('store_quotes', 'dispatched_at')) {
+            return;
+        }
+        $ids = StoreQuote::where('status', StoreQuote::STATUS_PENDING)->distinct()->pluck('purchase_request_id');
+        foreach ($ids as $id) {
+            if (StoreQuote::where('purchase_request_id', $id)->where('status', StoreQuote::STATUS_RUNNING)->exists()) {
+                continue;
+            }
+            $first = StoreQuote::where('purchase_request_id', $id)->where('status', StoreQuote::STATUS_PENDING)->orderBy('id')->first();
+            if ($first && $first->dispatched_at !== null && $first->dispatched_at->lt(now()->subMinutes(10))) {
+                StoreQuote::where('id', $first->id)->where('status', StoreQuote::STATUS_PENDING)->update(['dispatched_at' => null]);
+            }
+            self::dispatchNext($id);
         }
     }
 
@@ -106,11 +151,7 @@ class CartQuotes
         if (! $quote) {
             return;
         }
-        StoreQuote::where('purchase_request_id', $quote->purchase_request_id)
-            ->where('status', StoreQuote::STATUS_PENDING)
-            ->orderBy('id')
-            ->get()
-            ->each(fn (StoreQuote $next) => self::dispatch($next));
+        self::dispatchNext($quote->purchase_request_id);
 
         self::maybeInvoice($quote->purchase_request_id);
     }
@@ -205,6 +246,56 @@ class CartQuotes
         }
 
         return null;
+    }
+
+    /**
+     * The shopper's final summary (customer payload): null until every store settled. Commission and total come from
+     * the same function as the invoice (StoreQuoteInvoice::totals), so they cannot drift.
+     */
+    public static function checkoutSummary(PurchaseRequest $pr): ?array
+    {
+        if (! Schema::hasTable('store_quotes')) {
+            return null;
+        }
+        $quotes = StoreQuote::where('purchase_request_id', $pr->id)->orderBy('id')->get();
+        if ($quotes->isEmpty() || $quotes->contains(fn (StoreQuote $q) => ! $q->isTerminal())) {
+            return null;
+        }
+        $totals = StoreQuoteInvoice::totals($quotes);
+
+        return [
+            'stores' => $quotes->map(function (StoreQuote $q) {
+                $included = in_array($q->status, StoreQuote::BILLABLE, true);
+
+                return [
+                    'store_id'   => $q->store_id,
+                    'store_name' => $q->store_name,
+                    'status'     => $q->status,
+                    'included'   => $included,
+                    'reason'     => $included ? null : $q->dropReason(),
+                    'lines'      => CartItem::where('cart_id', $q->cart_id)->where('store_id', $q->store_id)->orderBy('id')->get()
+                        ->map(fn (CartItem $i) => [
+                            'title'            => CartItem::cleanTitle((string) $i->title),
+                            'variants'         => $i->variants,
+                            'quantity'         => $i->quantity,
+                            'unit_price_cents' => $i->price !== null ? (int) round($i->price * 100) : null,
+                            'state'            => $i->sync_status ?: 'ok',
+                        ])->all(),
+                    'merchandise_cents' => $q->merchandise_cents,
+                    'discounts_cents'   => $q->discounts_cents,
+                    'shipping_cents'    => $q->shipping_cents,
+                    'tax_cents'         => $q->tax_cents,
+                    'fees_cents'        => $q->fees_cents,
+                    'total_cents'       => $q->total_cents,
+                ];
+            })->values()->all(),
+            'stores_total_cents'  => $totals['stores_cents'],
+            'commission_percent'  => $totals['fee_percent'],
+            'commission_cents'    => $totals['fee_cents'],
+            'total_cents'         => $totals['total_cents'],
+            'invoice_total_cents' => $pr->stripe_invoice_id && $pr->total_usd !== null ? (int) round($pr->total_usd * 100) : null,
+            'invoiced'            => (bool) $pr->stripe_invoice_id,
+        ];
     }
 
     /**

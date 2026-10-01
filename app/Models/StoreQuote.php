@@ -28,7 +28,7 @@ class StoreQuote extends Model
         'purchase_request_id', 'cart_id', 'store_id', 'store_name', 'status', 'live_shopping_session_id',
         'attempts', 'currency', 'merchandise_cents', 'discounts_cents', 'shipping_cents', 'tax_cents',
         'fees_cents', 'total_cents', 'estimated', 'destination_verified', 'checkout_stage', 'evidence',
-        'observed_at', 'error_code',
+        'observed_at', 'error_code', 'dispatched_at',
     ];
 
     protected $casts = [
@@ -36,6 +36,7 @@ class StoreQuote extends Model
         'destination_verified' => 'boolean',
         'evidence' => 'array',
         'observed_at' => 'datetime',
+        'dispatched_at' => 'datetime',
         'attempts' => 'integer',
     ];
 
@@ -70,6 +71,7 @@ class StoreQuote extends Model
                 'observed_at' => optional($q->observed_at)->toIso8601String(),
                 // The store browser taking this quote right now (watchable in the chat).
                 'live_session_id' => $q->status === self::STATUS_RUNNING ? $q->live_shopping_session_id : null,
+                'reason'      => $q->dropReason(),
             ];
             foreach (self::MONEY as $part) {
                 $row["{$part}_cents"] = $q->{"{$part}_cents"};
@@ -86,6 +88,21 @@ class StoreQuote extends Model
 
             return $row;
         })->values()->all();
+    }
+
+    /** Short Spanish reason a store is not in the invoice (customers never see error_code); null unless failed. */
+    public function dropReason(): ?string
+    {
+        if ($this->status !== self::STATUS_FAILED) {
+            return null;
+        }
+
+        return match (true) {
+            $this->error_code === 'no_quotable_items'              => 'No había productos que se pudieran cotizar',
+            $this->error_code === 'quote_unverified'               => 'No se pudo verificar el total en la tienda',
+            str_starts_with((string) $this->error_code, 'gave_up_') => 'La tienda no respondió a tiempo',
+            default                                                => 'No se pudo cotizar esta tienda',
+        };
     }
 
     public function isTerminal(): bool
