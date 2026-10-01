@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Jobs\SyncStoreCartJob;
+use App\Models\Cart;
 use App\Models\Conversation;
 use App\Models\LiveShoppingSession;
 use App\Models\LiveShoppingWebhookReceipt;
@@ -296,7 +298,10 @@ class LiveShoppingController extends Controller
             return response()->json(['success' => true, 'preopen' => 'skipped'], 202);
         }
         try {
-            $state = $this->engine->preopen($data['store_id'], CartSync::customerRef($request->user()->id), $data['product_url']);
+            // The customer's open cart at that store: the pre-open clears every other line from the store bag.
+            $cartId = Cart::where('user_id', $request->user()->id)->where('status', Cart::STATUS_OPEN)->value('id');
+            $keep = $cartId ? SyncStoreCartJob::keepFor($cartId, $data['store_id'], true) : [];
+            $state = $this->engine->preopen($data['store_id'], CartSync::customerRef($request->user()->id), $data['product_url'], $keep);
         } catch (\Throwable $e) {
             Log::info('live-shopping preopen not started', ['store' => $data['store_id'], 'error' => $e->getMessage()]);
             $state = 'skipped';

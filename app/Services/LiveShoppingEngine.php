@@ -180,14 +180,14 @@ class LiveShoppingEngine
      * cart browser for that store in the background and the "Agregar" a moment later adopts it. Best-effort: returns
      * the engine's preopen state ('started' | 'already' | 'skipped') and never waits more than 3 s.
      */
-    public function preopen(string $storeId, string $customerRef, string $productUrl): string
+    public function preopen(string $storeId, string $customerRef, string $productUrl, array $keep = []): string
     {
         $data = $this->post('/v1/preopen', [
             'schema_version' => self::SCHEMA_VERSION,
             'store_id'       => $storeId,
             'customer_ref'   => $customerRef,
             'product_url'    => $productUrl,
-        ], [], 3);
+        ] + ($keep !== [] ? ['keep' => $keep] : []), [], 3);
 
         return (string) ($data['preopen'] ?? 'skipped');
     }

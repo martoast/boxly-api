@@ -185,21 +185,31 @@ class SyncStoreCartJob implements ShouldQueue
 
         CartItem::whereIn('id', $ids)->update(['sync_status' => 'syncing', 'sync_note' => null, 'updated_at' => now()]);
 
-        // This cart's lines already in the store bag: the engine clears every OTHER line before the add (Alex 2026-10-01:
-        // nothing carries over from other customers or older chats), so it must know which ones are ours.
-        $keep = CartItem::where('cart_id', $cart->id)
-            ->where('store_id', $this->storeId)
-            ->where('sync_status', 'in_store_cart')
+        $keep = self::keepFor($cart->id, $this->storeId);
+
+        return [$cart, $session, $selections, $keep];
+    }
+
+    /**
+     * This cart's lines already in the store bag at that store (`cart.keep`): the engine clears every OTHER line from
+     * the store bag before an add or a pre-open (Alex 2026-10-01: nothing carries over from other customers or older
+     * chats), so it must know which ones are ours. The keep contract has no search (`find`). An add keeps the lines
+     * already in the bag; a pre-open keeps EVERY item of the cart at that store, whatever its sync state, because it
+     * runs alongside syncs and an add that just finished may not be marked in_store_cart yet.
+     */
+    public static function keepFor(int $cartId, string $storeId, bool $anyState = false): array
+    {
+        return CartItem::where('cart_id', $cartId)
+            ->where('store_id', $storeId)
+            ->when(! $anyState, fn ($q) => $q->where('sync_status', 'in_store_cart'))
             ->orderBy('id')
             ->limit(self::MAX_SELECTIONS)
             ->get()
             ->map(fn (CartItem $item) => self::selection($item))
             ->filter()
-            ->map(fn (array $line) => array_diff_key($line, ['find' => true]))   // the keep contract has no search
+            ->map(fn (array $line) => array_diff_key($line, ['find' => true]))
             ->values()
             ->all();
-
-        return [$cart, $session, $selections, $keep];
     }
 
     /**
