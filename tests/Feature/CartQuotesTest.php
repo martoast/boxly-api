@@ -143,13 +143,13 @@ class CartQuotesTest extends LiveShoppingTestCase
     }
 
     /** Deliver a quote terminal for a store's running quote session through the real webhook. */
-    private function deliverQuote(StoreQuote $quote, array $block, int $n): void
+    private function deliverQuote(StoreQuote $quote, array $block, int $n, array $states = []): void
     {
         $this->runJob($quote);
         $quote = $quote->fresh();
         $session = LiveShoppingSession::find($quote->live_shopping_session_id);
         $lines = CartItem::where('cart_id', $quote->cart_id)->where('store_id', $quote->store_id)->get()
-            ->map(fn ($i) => ['selection_id' => 'ci-' . $i->id, 'state' => 'in_store_cart', 'availability' => 'in_stock', 'observed_quantity' => 1, 'note' => null])->all();
+            ->map(fn ($i) => ['selection_id' => 'ci-' . $i->id, 'state' => $states[$i->id] ?? 'in_store_cart', 'availability' => 'in_stock', 'observed_quantity' => 1, 'note' => null])->all();
         $body = $this->body([
             'delivery_id' => "dlv_q{$n}", 'session_id' => $session->engine_session_id, 'conversation_id' => '0', 'products' => [],
             'result' => ['outcome' => 'completed', 'products' => [], 'error_code' => null,
@@ -407,7 +407,7 @@ class CartQuotesTest extends LiveShoppingTestCase
         $this->deliverQuote($nike, $this->quoteBlock('verified', 10774), 2);
 
         $this->assertCount(1, $this->invoices);
-        $this->assertSame(['gap' => 3664, 'nike' => 10774], $this->invoices[0]['stores']);
+        $this->assertSame(['nike' => 10774, 'gap' => 3664], $this->invoices[0]['stores'], 'invoice stores in add order');
         $this->assertSame(PurchaseRequest::STATUS_QUOTED, $pr->fresh()->status);
         $this->assertSame('in_store_cart', CartItem::where('store_id', 'nike')->first()->sync_status);
 
@@ -515,6 +515,160 @@ class CartQuotesTest extends LiveShoppingTestCase
         $this->assertNull(LiveShoppingEngine::cartQuote($this->quoteBlock('verified', 5728, ['tax' => 3.88])), 'money must be integer cents');
         $this->assertNull(LiveShoppingEngine::cartQuote($this->quoteBlock('verified', 5728, ['destination_verified' => false])));
         $this->assertNotNull(LiveShoppingEngine::cartQuote($this->quoteBlock('failed', null)));
+    }
+
+    public function test_customer_payload_rows_are_in_add_order_not_store_id_order(): void
+    {
+        $pr = $this->finalizedAddOrder();   // nike, gap, adidas
+        $this->assertSame(['nike', 'gap', 'adidas'], array_column(StoreQuote::payloadFor($pr, false), 'store_id'));
+        $this->assertSame(['nike', 'gap', 'adidas'], array_column(StoreQuote::payloadFor($pr, true), 'store_id'));
+    }
+
+    private function oldPendingRow(string $prStatus): StoreQuote
+    {
+        $pr = $this->finalizedAddOrder();
+        $pr->forceFill(['status' => $prStatus])->save();
+        StoreQuote::where('purchase_request_id', $pr->id)->where('id', '!=', StoreQuote::orderBy('id')->value('id'))->delete();
+        $q = StoreQuote::orderBy('id')->first();
+        $q->forceFill(['dispatched_at' => null, 'created_at' => now()->subDays(40)])->save();   // an old prod row
+
+        return $q;
+    }
+
+    public function test_reconcile_never_revives_an_old_row_of_a_closed_request_but_does_recent_ones_of_live_ones(): void
+    {
+        $q = $this->oldPendingRow(PurchaseRequest::STATUS_CANCELLED);
+        Queue::fake();
+        CartQuotes::reconcile();
+        Queue::assertNothingPushed();
+        $this->assertNull($q->fresh()->dispatched_at);
+
+        $q->purchaseRequest->forceFill(['status' => PurchaseRequest::STATUS_PENDING_REVIEW])->save();
+        CartQuotes::reconcile();   // live request but the row is 40 days old and never dispatched
+        Queue::assertNothingPushed();
+
+        $q->forceFill(['created_at' => now()->subHour()])->save();
+        CartQuotes::reconcile();
+        Queue::assertPushed(QuoteStoreCartJob::class, 1);
+    }
+
+    public function test_claim_refuses_a_closed_request_without_touching_the_engine(): void
+    {
+        $pr = $this->finalizedAddOrder();
+        $pr->forceFill(['status' => PurchaseRequest::STATUS_CANCELLED])->save();
+        $nike = StoreQuote::orderBy('id')->first();
+        $this->fakeEngine();
+        $this->sent = [];
+        Queue::fake();
+        (new QuoteStoreCartJob($nike->id))->withFakeQueueInteractions()->handle(app(LiveShoppingEngine::class));
+        $this->assertSame('failed', $nike->fresh()->status);
+        $this->assertSame('request_closed', $nike->fresh()->error_code);
+        $this->assertSame([], $this->sent);
+        $this->assertSame(0, LiveShoppingSession::count());
+        $this->assertSame([], $this->invoices);
+        $this->assertSame(PurchaseRequest::STATUS_CANCELLED, $pr->fresh()->status);
+    }
+
+    public function test_a_missing_cart_fails_the_quote_and_advances(): void
+    {
+        $this->finalizedAddOrder();
+        $nike = StoreQuote::orderBy('id')->first();
+        Schema::disableForeignKeyConstraints();
+        StoreQuote::where('id', $nike->id)->update(['cart_id' => 999999]);   // the cart is gone
+        Schema::enableForeignKeyConstraints();
+        Queue::fake();
+        (new QuoteStoreCartJob($nike->id))->withFakeQueueInteractions()->handle(app(LiveShoppingEngine::class));
+        $this->assertSame('cart_missing', $nike->fresh()->error_code);
+        Queue::assertPushed(QuoteStoreCartJob::class, fn ($j) => $j->storeQuoteId === StoreQuote::where('store_id', 'gap')->value('id'));
+    }
+
+    public function test_a_retrying_job_refreshes_dispatched_at_so_reconcile_leaves_it_alone(): void
+    {
+        $this->finalizedAddOrder();
+        $nike = StoreQuote::orderBy('id')->first();
+        $nike->forceFill(['dispatched_at' => now()->subMinutes(30)])->save();
+        $this->fakeEngine('nike', ['ok' => false, 'error' => ['code' => 'engine_busy']], 503);
+        Queue::fake();
+        (new QuoteStoreCartJob($nike->id))->withFakeQueueInteractions()->handle(app(LiveShoppingEngine::class));
+        $nike = $nike->fresh();
+        $this->assertSame('pending', $nike->status);
+        $this->assertTrue($nike->dispatched_at->gt(now()->subMinute()), 'refreshed on the retry');
+        Queue::fake();
+        CartQuotes::reconcile();
+        Queue::assertNothingPushed();
+    }
+
+    public function test_giving_up_does_not_clobber_a_row_a_duplicate_set_running(): void
+    {
+        $this->finalizedAddOrder();
+        $nike = StoreQuote::orderBy('id')->first();
+        $nike->forceFill(['status' => 'running'])->save();
+        $job = (new QuoteStoreCartJob($nike->id))->withFakeQueueInteractions();
+        $job->tries = 1;
+        $call = new \ReflectionMethod($job, 'retryLater');
+        Queue::fake();
+        $call->invoke($job, 'engine_busy');
+        $this->assertSame('running', $nike->fresh()->status);
+        Queue::assertNothingPushed();
+
+        $nike->forceFill(['status' => 'pending'])->save();
+        $call->invoke($job, 'engine_busy');
+        $this->assertSame('gave_up_engine_busy', $nike->fresh()->error_code);
+        Queue::assertPushed(QuoteStoreCartJob::class, 1);   // advanced to the next store
+    }
+
+    public function test_dispatch_next_starts_exactly_one_store_when_called_repeatedly(): void
+    {
+        $this->finalizedAddOrder();
+        StoreQuote::query()->update(['dispatched_at' => null]);
+        Queue::fake();
+        $id = PurchaseRequest::value('id');
+        CartQuotes::dispatchNext($id);
+        CartQuotes::dispatchNext($id);
+        Queue::assertPushed(QuoteStoreCartJob::class, 1);
+        $this->assertSame(1, StoreQuote::whereNotNull('dispatched_at')->count());
+    }
+
+    public function test_the_summary_tells_the_app_whether_the_invoice_is_automatic_or_manual(): void
+    {
+        [, $pr] = $this->finalizedTwoStores();
+        $this->deliverQuote(StoreQuote::where('store_id', 'gap')->first(), $this->quoteBlock('verified', 3664), 1);
+        $this->deliverQuote(StoreQuote::where('store_id', 'nike')->first(), $this->quoteBlock('verified', 5000), 2);
+        $s = CartQuotes::checkoutSummary($pr->fresh());
+        $this->assertSame('auto', $s['invoice_mode']);
+        $this->assertNull($s['manual_reason']);
+    }
+
+    public function test_the_summary_is_manual_when_every_store_failed_or_a_total_is_over_the_limit(): void
+    {
+        [, $pr] = $this->finalizedTwoStores();
+        $this->deliverQuote(StoreQuote::where('store_id', 'gap')->first(), $this->quoteBlock('failed', null), 1);
+        $this->deliverQuote(StoreQuote::where('store_id', 'nike')->first(), $this->quoteBlock('failed', null), 2);
+        $s = CartQuotes::checkoutSummary($pr->fresh());
+        $this->assertSame('manual', $s['invoice_mode']);
+        $this->assertSame('Nuestro equipo te confirmará el total', $s['manual_reason']);
+
+        StoreQuote::query()->delete();
+        PurchaseRequest::query()->delete();
+        CartItem::query()->delete();
+        Cart::query()->delete();
+        User::query()->delete();
+        [, $pr] = $this->finalizedTwoStores();
+        $this->deliverQuote(StoreQuote::where('store_id', 'gap')->first(), $this->quoteBlock('verified', 3664), 3);
+        $this->deliverQuote(StoreQuote::where('store_id', 'nike')->first(), $this->quoteBlock('verified', 160000), 4);
+        $s = CartQuotes::checkoutSummary($pr->fresh());
+        $this->assertSame('manual', $s['invoice_mode']);
+        $this->assertStringNotContainsString('límite', (string) $s['manual_reason']);
+    }
+
+    public function test_a_partial_stores_unavailable_items_carry_state_unavailable_in_the_summary(): void
+    {
+        [, $pr] = $this->finalizedTwoStores();
+        $b = CartItem::where('store_id', 'nike')->orderBy('id')->get()[1];
+        $this->deliverQuote(StoreQuote::where('store_id', 'gap')->first(), $this->quoteBlock('verified', 3664), 1);
+        $this->deliverQuote(StoreQuote::where('store_id', 'nike')->first(), $this->quoteBlock('partial', 5000), 2, [$b->id => 'unavailable']);
+        $lines = CartQuotes::checkoutSummary($pr->fresh())['stores'][0]['lines'];
+        $this->assertSame(['in_store_cart', 'unavailable'], array_column($lines, 'state'), 'state comes from the cart item sync_status');
     }
 }
 

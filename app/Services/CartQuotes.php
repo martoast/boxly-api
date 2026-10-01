@@ -56,22 +56,26 @@ class CartQuotes
      */
     public static function dispatchNext(int $purchaseRequestId): void
     {
-        $quotes = StoreQuote::where('purchase_request_id', $purchaseRequestId);
-        $guarded = Schema::hasColumn('store_quotes', 'dispatched_at');
-        if ((clone $quotes)->where(fn ($q) => $guarded
-            ? $q->where('status', StoreQuote::STATUS_RUNNING)->orWhere(fn ($p) => $p->where('status', StoreQuote::STATUS_PENDING)->whereNotNull('dispatched_at'))
-            : $q->where('status', StoreQuote::STATUS_RUNNING))->exists()) {
-            return;
-        }
-        $next = $quotes->where('status', StoreQuote::STATUS_PENDING)->orderBy('id')->first();
-        if (! $next) {
-            return;
-        }
-        if ($guarded && StoreQuote::where('id', $next->id)->where('status', StoreQuote::STATUS_PENDING)->whereNull('dispatched_at')
-            ->update(['dispatched_at' => now()]) === 0) {
-            return;
-        }
-        self::dispatch($next);
+        // Under the request's row lock, so a webhook settle and the reconcile cannot both pass the in-flight check.
+        DB::transaction(function () use ($purchaseRequestId) {
+            PurchaseRequest::where('id', $purchaseRequestId)->lockForUpdate()->first();
+            $quotes = StoreQuote::where('purchase_request_id', $purchaseRequestId);
+            $guarded = Schema::hasColumn('store_quotes', 'dispatched_at');
+            if ((clone $quotes)->where(fn ($q) => $guarded
+                ? $q->where('status', StoreQuote::STATUS_RUNNING)->orWhere(fn ($p) => $p->where('status', StoreQuote::STATUS_PENDING)->whereNotNull('dispatched_at'))
+                : $q->where('status', StoreQuote::STATUS_RUNNING))->exists()) {
+                return;
+            }
+            $next = $quotes->where('status', StoreQuote::STATUS_PENDING)->orderBy('id')->first();
+            if (! $next) {
+                return;
+            }
+            if ($guarded && StoreQuote::where('id', $next->id)->where('status', StoreQuote::STATUS_PENDING)->whereNull('dispatched_at')
+                ->update(['dispatched_at' => now()]) === 0) {
+                return;
+            }
+            self::dispatch($next);   // afterCommit: the job starts once the claim is committed
+        });
     }
 
     /** Crash between a terminal and the next dispatch, or a lost queue job: send each stalled request's next store (every minute). */
@@ -80,7 +84,12 @@ class CartQuotes
         if (! Schema::hasTable('store_quotes') || ! Schema::hasColumn('store_quotes', 'dispatched_at')) {
             return;
         }
-        $ids = StoreQuote::where('status', StoreQuote::STATUS_PENDING)->distinct()->pluck('purchase_request_id');
+        // Only live requests: pending_review without an invoice, and quotes that were dispatched or are recent (old
+        // rows from before dispatched_at must never be revived).
+        $ids = StoreQuote::where('status', StoreQuote::STATUS_PENDING)
+            ->where(fn ($q) => $q->whereNotNull('dispatched_at')->orWhere('created_at', '>=', now()->subDay()))
+            ->whereIn('purchase_request_id', PurchaseRequest::where('status', PurchaseRequest::STATUS_PENDING_REVIEW)->whereNull('stripe_invoice_id')->select('id'))
+            ->distinct()->pluck('purchase_request_id');
         foreach ($ids as $id) {
             if (StoreQuote::where('purchase_request_id', $id)->where('status', StoreQuote::STATUS_RUNNING)->exists()) {
                 continue;
@@ -172,7 +181,7 @@ class CartQuotes
                 if (! $pr || $pr->status !== PurchaseRequest::STATUS_PENDING_REVIEW || $pr->stripe_invoice_id) {
                     return;
                 }
-                $quotes = StoreQuote::where('purchase_request_id', $pr->id)->orderBy('store_id')->get();
+                $quotes = StoreQuote::where('purchase_request_id', $pr->id)->orderBy('id')->get();
                 if ($quotes->isEmpty() || $quotes->contains(fn (StoreQuote $q) => ! $q->isTerminal())) {
                     return;
                 }
@@ -262,8 +271,12 @@ class CartQuotes
             return null;
         }
         $totals = StoreQuoteInvoice::totals($quotes);
+        $manual = ! $pr->stripe_invoice_id && self::manualReason($quotes) !== null;
 
         return [
+            'invoice_mode'   => $manual ? 'manual' : 'auto',
+            // Never the internal reason (limits, store names): the customer only needs to know the team confirms.
+            'manual_reason'  => $manual ? 'Nuestro equipo te confirmará el total' : null,
             'stores' => $quotes->map(function (StoreQuote $q) {
                 $included = in_array($q->status, StoreQuote::BILLABLE, true);
 

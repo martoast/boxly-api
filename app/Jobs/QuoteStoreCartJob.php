@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Models\CartItem;
 use App\Models\LiveShoppingSession;
+use App\Models\PurchaseRequest;
 use App\Models\StoreQuote;
 use App\Services\CartQuotes;
 use App\Services\CartSync;
@@ -121,9 +122,13 @@ class QuoteStoreCartJob implements ShouldQueue
         if (! $quote || $quote->status !== StoreQuote::STATUS_PENDING) {
             return null;
         }
+        $pr = $quote->purchaseRequest;
+        if (! $pr || $pr->status !== PurchaseRequest::STATUS_PENDING_REVIEW || $pr->stripe_invoice_id) {
+            return $this->settleFailed($quote, 'request_closed');
+        }
         $cart = $quote->cart;
         if (! $cart) {
-            return null;
+            return $this->settleFailed($quote, 'cart_missing');
         }
         $key = CartSync::activeKey($cart->id, $quote->store_id);
         if (LiveShoppingSession::where('cart_active_key', $key)->exists()) {
@@ -140,10 +145,7 @@ class QuoteStoreCartJob implements ShouldQueue
             ->values()
             ->all();
         if ($selections === []) {
-            $quote->forceFill(['status' => StoreQuote::STATUS_FAILED, 'error_code' => 'no_quotable_items'])->save();
-            DB::afterCommit(fn () => CartQuotes::afterQuoteSettled($quote->fresh()));
-
-            return null;
+            return $this->settleFailed($quote, 'no_quotable_items');
         }
 
         try {
@@ -176,6 +178,15 @@ class QuoteStoreCartJob implements ShouldQueue
         return [$quote, $session, $selections, $cart];
     }
 
+    /** Settle the claimed (pending) row as failed, no engine session, and advance the request after commit. */
+    private function settleFailed(StoreQuote $quote, string $code): null
+    {
+        $quote->forceFill(['status' => StoreQuote::STATUS_FAILED, 'error_code' => $code])->save();
+        DB::afterCommit(fn () => CartQuotes::afterQuoteSettled($quote->fresh()));
+
+        return null;
+    }
+
     /** The create did not start a session: end the row, release the key, and put the quote back or fail it. */
     private function abandon(StoreQuote $quote, LiveShoppingSession $session, bool $retryable, string $code): void
     {
@@ -192,23 +203,25 @@ class QuoteStoreCartJob implements ShouldQueue
                 'status'     => $retryable ? StoreQuote::STATUS_PENDING : StoreQuote::STATUS_FAILED,
                 'error_code' => preg_match('/^[a-z0-9_]{1,40}$/', $code) === 1 ? $code : 'engine_unavailable',
                 'updated_at' => now(),
-            ]);
+            ] + ($retryable ? ['dispatched_at' => now()] : []));
         });
     }
 
-    /** Retry after 30–60 s; after the last attempt the store is failed (manual quote). */
+    /** Retry after 30–60 s (refreshing the in-flight stamp so the reconcile leaves it alone); after the last attempt the store is failed (manual quote). */
     private function retryLater(string $reason): void
     {
         if ($this->attempts() < $this->tries) {
+            StoreQuote::where('id', $this->storeQuoteId)->where('status', StoreQuote::STATUS_PENDING)->update(['dispatched_at' => now()]);
             $this->release(in_array($reason, ['engine_busy', 'not_accepting', 'worker_ready_timeout', 'create_response_timeout'], true) ? random_int(3, 6) : random_int(30, 60));
 
             return;
         }
-        $quote = StoreQuote::find($this->storeQuoteId);
-        if ($quote && $quote->status === StoreQuote::STATUS_PENDING) {
-            $quote->forceFill(['status' => StoreQuote::STATUS_FAILED, 'error_code' => 'gave_up_' . substr($reason, 0, 50)])->save();
-            Log::warning('store quote gave up after retries', ['store_quote_id' => $quote->id, 'reason' => $reason]);
-            CartQuotes::afterQuoteSettled($quote->fresh());
+        // Conditional: a duplicate job may already have the row running — never overwrite that.
+        $changed = StoreQuote::where('id', $this->storeQuoteId)->where('status', StoreQuote::STATUS_PENDING)
+            ->update(['status' => StoreQuote::STATUS_FAILED, 'error_code' => 'gave_up_' . substr($reason, 0, 50), 'updated_at' => now()]);
+        if ($changed > 0) {
+            Log::warning('store quote gave up after retries', ['store_quote_id' => $this->storeQuoteId, 'reason' => $reason]);
+            CartQuotes::afterQuoteSettled(StoreQuote::find($this->storeQuoteId));
         }
     }
 }

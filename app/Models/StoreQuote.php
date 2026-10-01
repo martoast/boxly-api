@@ -61,7 +61,7 @@ class StoreQuote extends Model
             return [];
         }
 
-        return $pr->storeQuotes()->get()->map(function (self $q) use ($forTeam) {
+        return $pr->storeQuotes()->reorder('id')->get()->map(function (self $q) use ($forTeam) {
             $row = [
                 'store_id'    => $q->store_id,
                 'store_name'  => $q->store_name,
