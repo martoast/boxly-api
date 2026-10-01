@@ -91,7 +91,15 @@ class CartController extends Controller
                 ->lockForUpdate()
                 ->first();
 
-            if ($item) {
+            if ($item && in_array($item->sync_status, ['failed', 'unavailable'], true)) {
+                // The shopper picked again a line the store could not take: try it again, never one unit more
+                // (live VS 2026-10-01: the retry made the line ×2, the chat's ×1 PATCHed it back mid-run, and the
+                // store got the item twice).
+                $sync = CartSync::enabled();
+                if ($sync) {
+                    $item->update(['sync_status' => 'pending', 'sync_note' => null]);
+                }
+            } elseif ($item) {
                 // Same product, same selection: one line, more units.
                 $newQuantity = min(CartItem::MAX_QUANTITY, $item->quantity + $quantity);
                 // C3: more units must reach the store cart too.

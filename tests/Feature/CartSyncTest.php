@@ -354,6 +354,29 @@ class CartSyncTest extends LiveShoppingTestCase
             ->assertStatus(409)->assertJsonPath('code', 'not_controllable');
     }
 
+    public function test_picking_again_a_line_the_store_could_not_take_retries_it_without_one_more_unit(): void
+    {
+        // Live VS 2026-10-01: the retry bumped the failed line to ×2, the chat PATCHed it back to ×1 mid-run, and the
+        // store got the item twice. A failed (or unavailable) line picked again is tried again at its own quantity.
+        Queue::fake();
+        $u = User::factory()->createQuietly();
+        $id = $this->actingAs($u)->postJson('/cart/items', $this->item())->assertStatus(201)->json('data.item.id');
+        CartItem::whereKey($id)->update(['sync_status' => 'failed', 'sync_note' => CartSync::FAILED_NOTE]);
+        Queue::fake();
+
+        $this->actingAs($u)->postJson('/cart/items', $this->item())->assertStatus(201);
+
+        $item = CartItem::find($id);
+        $this->assertSame(1, $item->quantity);
+        $this->assertSame('pending', $item->sync_status);
+        $this->assertNull($item->sync_note);
+        Queue::assertPushed(SyncStoreCartJob::class, 1);
+        // A line already in the store bag still takes one more unit (unchanged).
+        CartItem::whereKey($id)->update(['sync_status' => 'in_store_cart']);
+        $this->actingAs($u)->postJson('/cart/items', $this->item())->assertStatus(201);
+        $this->assertSame(2, CartItem::find($id)->quantity);
+    }
+
     public function test_engine_busy_puts_items_back_to_pending_and_releases_the_job_with_backoff(): void
     {
         // The shipped default is a real queue (setUp runs inline for the other tests).
