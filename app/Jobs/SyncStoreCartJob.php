@@ -61,7 +61,7 @@ class SyncStoreCartJob implements ShouldQueue
         if ($claim === null) {
             return;
         }
-        [$cart, $session, $selections] = $claim;
+        [$cart, $session, $selections, $keep] = $claim;
 
         try {
             $engineSession = $engine->createSession(
@@ -75,7 +75,7 @@ class SyncStoreCartJob implements ShouldQueue
                     'customer_ref' => CartSync::customerRef($cart->user_id),
                     'operation'    => 'add',
                     'selections'   => $selections,
-                ],
+                ] + ($keep !== [] ? ['keep' => $keep] : []),
             );
         } catch (LiveShoppingEngineException $e) {
             $retryable = $e->status === 503 || in_array($e->getMessage(), self::RETRYABLE_CODES, true);
@@ -185,7 +185,21 @@ class SyncStoreCartJob implements ShouldQueue
 
         CartItem::whereIn('id', $ids)->update(['sync_status' => 'syncing', 'sync_note' => null, 'updated_at' => now()]);
 
-        return [$cart, $session, $selections];
+        // This cart's lines already in the store bag: the engine clears every OTHER line before the add (Alex 2026-10-01:
+        // nothing carries over from other customers or older chats), so it must know which ones are ours.
+        $keep = CartItem::where('cart_id', $cart->id)
+            ->where('store_id', $this->storeId)
+            ->where('sync_status', 'in_store_cart')
+            ->orderBy('id')
+            ->limit(self::MAX_SELECTIONS)
+            ->get()
+            ->map(fn (CartItem $item) => self::selection($item))
+            ->filter()
+            ->map(fn (array $line) => array_diff_key($line, ['find' => true]))   // the keep contract has no search
+            ->values()
+            ->all();
+
+        return [$cart, $session, $selections, $keep];
     }
 
     /**

@@ -219,6 +219,31 @@ class CartSyncTest extends LiveShoppingTestCase
         $this->assertNull($item->image_url);
     }
 
+    public function test_a_later_add_sends_the_carts_lines_already_in_the_store_bag_as_keep(): void
+    {
+        // The engine clears every other line from the store bag before an add; this cart's own earlier lines stay.
+        $u = User::factory()->create();
+        $this->fakeEngine();
+        $this->actingAs($u)->postJson('/cart/items', $this->item())->assertStatus(201);
+        $first = CartItem::first();
+        $this->deliverAndProcess($this->cartDelivery([$this->line($first)]));
+        $this->assertSame('in_store_cart', $first->refresh()->sync_status);
+
+        $this->fakeEngine(['ok' => true, 'data' => ['schema_version' => 1, 'session' => $this->engineSession(['id' => 'eng_c2'])]]);
+        $this->actingAs($u)->postJson('/cart/items', $this->item(['title' => 'Nike Club Hoodie', 'product_url' => 'https://www.nike.com/t/club-hoodie']))->assertStatus(201);
+        $creates = collect($this->sent)->filter(fn ($r) => str_ends_with($r['url'], '/v1/sessions'))->values();
+        $this->assertCount(1, $creates);
+        $cart = json_decode($creates[0]['body'], true)['cart'];
+        $this->assertSame(['Nike Club Hoodie'], array_column($cart['selections'], 'title'));
+        $this->assertSame([[
+            'selection_id' => 'ci-' . $first->id,
+            'url'          => 'https://www.nike.com/t/tech-fleece',
+            'title'        => 'Nike Tech Fleece',
+            'quantity'     => 1,
+            'variants'     => ['size' => 'L'],
+        ]], $cart['keep']);
+    }
+
     public function test_flag_off_dispatches_nothing_and_changes_nothing(): void
     {
         $this->configureEngine(['cart_sync' => false]);
