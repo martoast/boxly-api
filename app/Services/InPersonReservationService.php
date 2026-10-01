@@ -146,7 +146,7 @@ class InPersonReservationService
                         'unit_amount' => (int) round($rate * 100),
                         'product_data' => [
                             'name' => sprintf(
-                                'Reserva de compra personal — Las Américas — %s %s (primera hora; total reservado: %d h)',
+                                'Reserva de compra personal — San Diego — %s %s (primera hora; total reservado: %d h)',
                                 $date, $reservation->startLabel(), $hours,
                             ),
                         ],
@@ -450,7 +450,7 @@ class InPersonReservationService
         try {
             $reservation->loadMissing('user');
             $invoice = $this->stripe->createAndSendInvoice($reservation->user->stripeShoppingCustomerId(), [
-                'description' => 'Compra personal Las Américas ' . $reservation->reservation_number,
+                'description' => 'Compra personal San Diego ' . $reservation->reservation_number,
                 'metadata' => ['type' => 'in_person_final_invoice', 'reservation_id' => (string) $reservation->id, 'reservation_number' => $reservation->reservation_number],
             ], $lines, $key);
         } catch (\Throwable $e) {

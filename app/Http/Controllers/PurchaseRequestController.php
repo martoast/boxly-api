@@ -202,7 +202,7 @@ class PurchaseRequestController extends Controller
                         'product_data' => [
                             'name'        => 'Boxly — Reserva de visita en persona',
                             'description' => sprintf(
-                                '%d tienda(s) en Las Américas el %s · Solicitud %s',
+                                '%d tienda(s) en San Diego el %s · Solicitud %s',
                                 (int) $purchaseRequest->in_person_store_count,
                                 $tripDateFormatted,
                                 $purchaseRequest->request_number,
@@ -467,7 +467,7 @@ class PurchaseRequestController extends Controller
                         'product_data' => [
                             'name'        => "Boxly — Reserva de visita en persona",
                             'description' => sprintf(
-                                '%d tienda(s) en Las Américas el %s · Solicitud %s',
+                                '%d tienda(s) en San Diego el %s · Solicitud %s',
                                 $storeCount,
                                 $tripDateFormatted,
                                 $pr->request_number,

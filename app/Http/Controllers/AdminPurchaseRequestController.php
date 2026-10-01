@@ -992,7 +992,7 @@ class AdminPurchaseRequestController extends Controller
             $invoiceDescription = "Boxly — Solicitud de Compra {$purchaseRequest->request_number}";
             if ($purchaseRequest->isInPerson()) {
                 $invoiceDescription .= sprintf(
-                    ' — Compra en persona Las Américas (reserva de $%.2f USD ya pagada)',
+                    ' — Compra en persona San Diego (reserva de $%.2f USD ya pagada)',
                     (float) ($purchaseRequest->deposit_amount_usd ?? 0),
                 );
             }

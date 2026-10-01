@@ -14,7 +14,7 @@
     </h2>
     <p style="color: #666; margin: 0 0 20px;">
         @if($isInPerson)
-            Un cliente agendó una compra en persona en Las Américas. Planéala antes de la fecha de la visita.
+            Un cliente agendó una compra en persona en San Diego. Planéala antes de la fecha de la visita.
         @else
             Un cliente acaba de crear una solicitud de compra asistida. Revísala y mándale una cotización.
         @endif

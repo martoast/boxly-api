@@ -8,7 +8,7 @@
     <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
         <tr><td style="padding: 6px 0; color: #666; width: 160px;">{{ $locale === 'es' ? 'Fecha' : 'Date' }}</td><td style="padding: 6px 0; font-weight: 600;">{{ $r->dateLabel($locale) }}</td></tr>
         <tr><td style="padding: 6px 0; color: #666;">{{ $locale === 'es' ? 'Horario' : 'Time' }}</td><td style="padding: 6px 0; font-weight: 600;">{{ $r->startLabel() }} – {{ $r->endLabel() }} ({{ $r->hours_reserved }} h) · {{ $locale === 'es' ? 'hora de California' : 'California time' }}</td></tr>
-        <tr><td style="padding: 6px 0; color: #666;">{{ $locale === 'es' ? 'Lugar' : 'Place' }}</td><td style="padding: 6px 0;">Las Americas Premium Outlets</td></tr>
+        <tr><td style="padding: 6px 0; color: #666;">{{ $locale === 'es' ? 'Lugar' : 'Place' }}</td><td style="padding: 6px 0;">San Diego, California</td></tr>
         <tr><td style="padding: 6px 0; color: #666;">{{ $locale === 'es' ? 'Reserva' : 'Reservation' }}</td><td style="padding: 6px 0;">{{ $r->reservation_number }}</td></tr>
         <tr><td style="padding: 6px 0; color: #666;">{{ $locale === 'es' ? 'Pagado hoy' : 'Paid today' }}</td><td style="padding: 6px 0;">${{ number_format($r->amount_usd, 2) }} USD</td></tr>
     </table>

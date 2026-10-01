@@ -92,7 +92,7 @@ class InPersonDeposit
 
         $product = $stripe->products->create([
             'name'        => 'Boxly — Compra en persona (por tienda)',
-            'description' => 'Reserva de visita a una tienda en Las Américas. Se cobra por cada tienda que el equipo Boxly visita.',
+            'description' => 'Reserva de visita a una tienda en San Diego. Se cobra por cada tienda que el equipo Boxly visita.',
             'metadata'    => ['boxly_kind' => 'in_person_per_store_fee'],
         ]);
 

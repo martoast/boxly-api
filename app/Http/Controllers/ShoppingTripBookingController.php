@@ -102,7 +102,7 @@ class ShoppingTripBookingController extends Controller
                         'product_data' => [
                             'name'        => 'Boxly — Reserva de visita en persona',
                             'description' => sprintf(
-                                '%d tienda(s) en Las Américas el %s · Reserva %s',
+                                '%d tienda(s) en San Diego el %s · Reserva %s',
                                 $storeCount,
                                 $tripDate,
                                 $booking->booking_number,
