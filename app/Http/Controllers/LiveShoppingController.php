@@ -282,6 +282,29 @@ class LiveShoppingController extends Controller
      * assistant (see LiveShoppingEngine::catalog). Same 503 gate as every other
      * live-shopping route when the feature is off.
      */
+    /**
+     * The picker opened for a product: ask the engine to pre-open this customer's cart browser for its store (so the
+     * add-to-cart starts at once). Fire-and-forget for the app: always 202, an engine refusal or outage is only logged.
+     */
+    public function preopen(Request $request)
+    {
+        $data = $request->validate([
+            'store_id'    => ['required', 'string', 'regex:/^[a-z0-9][a-z0-9_-]{0,39}$/'],
+            'product_url' => ['required', 'string', 'max:2000', 'starts_with:https://'],
+        ]);
+        if (! CartSync::enabled() || ! $this->engine->configured()) {
+            return response()->json(['success' => true, 'preopen' => 'skipped'], 202);
+        }
+        try {
+            $state = $this->engine->preopen($data['store_id'], CartSync::customerRef($request->user()->id), $data['product_url']);
+        } catch (\Throwable $e) {
+            Log::info('live-shopping preopen not started', ['store' => $data['store_id'], 'error' => $e->getMessage()]);
+            $state = 'skipped';
+        }
+
+        return response()->json(['success' => true, 'preopen' => $state], 202);
+    }
+
     public function stores()
     {
         if ($disabled = $this->disabled()) {

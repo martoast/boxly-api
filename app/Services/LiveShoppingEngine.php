@@ -175,6 +175,23 @@ class LiveShoppingEngine
         return $now;
     }
 
+    /**
+     * PRE-OPEN (engine docs/PREOPEN_CONTRACT.md): the shopper opened a product's picker, so the engine may start their
+     * cart browser for that store in the background and the "Agregar" a moment later adopts it. Best-effort: returns
+     * the engine's preopen state ('started' | 'already' | 'skipped') and never waits more than 3 s.
+     */
+    public function preopen(string $storeId, string $customerRef, string $productUrl): string
+    {
+        $data = $this->post('/v1/preopen', [
+            'schema_version' => self::SCHEMA_VERSION,
+            'store_id'       => $storeId,
+            'customer_ref'   => $customerRef,
+            'product_url'    => $productUrl,
+        ], [], 3);
+
+        return (string) ($data['preopen'] ?? 'skipped');
+    }
+
     public function viewerTicket(string $engineSessionId, int $userId, bool $input = false): array
     {
         // The id came from the engine, but it lands in a URL path: encode it so
@@ -533,7 +550,7 @@ class LiveShoppingEngine
      * sent. Re-encoding between signing and sending is the classic way to ship a
      * signature that never verifies.
      */
-    private function post(string $path, array $body, array $extraHeaders = []): array
+    private function post(string $path, array $body, array $extraHeaders = [], ?int $timeoutSeconds = null): array
     {
         if (! $this->configured()) {
             throw LiveShoppingEngineException::unavailable('not_configured');
@@ -561,7 +578,7 @@ class LiveShoppingEngine
             $response = Http::withHeaders($headers)
                 // The chat is interactive: a hung engine must never hold a web
                 // worker open waiting for it.
-                ->timeout($this->clamp((int) config('services.live_shopping_engine.timeout', 8), 1, 30))
+                ->timeout($timeoutSeconds ?? $this->clamp((int) config('services.live_shopping_engine.timeout', 8), 1, 30))
                 ->connectTimeout(5)
                 ->withBody($raw, 'application/json')
                 ->post($this->baseUrl() . $path);

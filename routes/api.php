@@ -812,6 +812,9 @@ Route::middleware('auth:sanctum')->group(function () {
         // the only list the assistant may route a live session to.
         Route::get('/stores', [\App\Http\Controllers\LiveShoppingController::class, 'stores'])
             ->middleware('throttle:60,1');
+        // The picker opened: pre-open the customer's cart browser for that store (best-effort, always 202).
+        Route::post('/preopen', [\App\Http\Controllers\LiveShoppingController::class, 'preopen'])
+            ->middleware('throttle:20,1');
         Route::get('/sessions/{session}', [\App\Http\Controllers\LiveShoppingController::class, 'show'])
             ->middleware('throttle:60,1');
         // POST, not GET: minting a ticket is state-changing and issues a
