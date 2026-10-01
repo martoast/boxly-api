@@ -27,6 +27,9 @@ class CartController extends Controller
 {
     private const STORE_ID_REGEX = '/^[a-z0-9][a-z0-9_-]{0,39}$/';
 
+    /** Shown when a line is changed while the store's cart is taking it. */
+    public const SYNCING_NOTE = 'Estamos agregando este producto en la tienda; podrás cambiarlo en cuanto termine.';
+
     /** Our variant keys → the Spanish option labels the rest of the PR pipeline uses. */
     private const OPTION_LABELS = [
         'size' => 'Talla', 'talla' => 'Talla',
@@ -99,6 +102,9 @@ class CartController extends Controller
                 if ($sync) {
                     $item->update(['sync_status' => 'pending', 'sync_note' => null]);
                 }
+            } elseif ($item && $item->sync_status === 'syncing') {
+                // More units of a line the store's cart is taking right now: not mid-add (see updateItem).
+                throw ValidationException::withMessages(['item' => self::SYNCING_NOTE]);
             } elseif ($item) {
                 // Same product, same selection: one line, more units.
                 $newQuantity = min(CartItem::MAX_QUANTITY, $item->quantity + $quantity);
@@ -151,6 +157,17 @@ class CartController extends Controller
         ]);
 
         $item = $this->ownOpenItem($request->user()->id, $id);
+
+        // While the store's cart is taking this line, its quantity and options stay as they are: a change mid-add
+        // dropped that run's result and added the item twice (live VS 2026-10-01).
+        $changesQuantity = array_key_exists('quantity', $data) && (int) $data['quantity'] !== $item->quantity;
+        $changesVariants = array_key_exists('variants', $data)
+            && CartItem::variantsKey($this->normalizeVariants($data['variants'])) !== $item->variants_key;
+        if ($item->sync_status === 'syncing' && ($changesQuantity || $changesVariants)) {
+            throw ValidationException::withMessages([
+                'item' => self::SYNCING_NOTE,
+            ]);
+        }
 
         $changes = [];
         if (array_key_exists('quantity', $data)) {

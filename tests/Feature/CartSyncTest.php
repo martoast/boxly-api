@@ -377,6 +377,32 @@ class CartSyncTest extends LiveShoppingTestCase
         $this->assertSame(2, CartItem::find($id)->quantity);
     }
 
+    public function test_a_line_the_store_is_taking_cannot_be_changed_until_the_add_ends(): void
+    {
+        // Live VS 2026-10-01: a change mid-add dropped that run's result and the item was added twice.
+        Queue::fake();
+        $u = User::factory()->createQuietly();
+        $id = $this->actingAs($u)->postJson('/cart/items', $this->item(['variants' => ['size' => 'M']]))->assertStatus(201)->json('data.item.id');
+        CartItem::whereKey($id)->update(['sync_status' => 'syncing']);
+        Queue::fake();
+
+        $this->actingAs($u)->patchJson("/cart/items/{$id}", ['quantity' => 2])->assertStatus(422)->assertJsonPath('errors.item.0', \App\Http\Controllers\CartController::SYNCING_NOTE);
+        $this->actingAs($u)->patchJson("/cart/items/{$id}", ['variants' => ['size' => 'L']])->assertStatus(422);
+        $this->actingAs($u)->postJson('/cart/items', $this->item(['variants' => ['size' => 'M']]))->assertStatus(422);
+        // The same values are no change: allowed, and nothing is re-sent.
+        $this->actingAs($u)->patchJson("/cart/items/{$id}", ['quantity' => 1, 'variants' => ['size' => 'M']])->assertOk();
+
+        $item = CartItem::find($id);
+        $this->assertSame(1, $item->quantity);
+        $this->assertSame('syncing', $item->sync_status);
+        Queue::assertNothingPushed();
+
+        // Once the store has it, changes work again.
+        CartItem::whereKey($id)->update(['sync_status' => 'in_store_cart']);
+        $this->actingAs($u)->patchJson("/cart/items/{$id}", ['quantity' => 2])->assertOk();
+        $this->assertSame(2, CartItem::find($id)->quantity);
+    }
+
     public function test_engine_busy_puts_items_back_to_pending_and_releases_the_job_with_backoff(): void
     {
         // The shipped default is a real queue (setUp runs inline for the other tests).
