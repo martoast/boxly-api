@@ -99,7 +99,7 @@ class ApiDocsController extends Controller
             }
         }
 
-        return Str::limit(implode(' ', $lines), 240);
+        return Str::limit(implode(' ', $lines), 700);
     }
 
     /** Rules of a FormRequest the method type-hints (best effort: rules() may need the live request). */

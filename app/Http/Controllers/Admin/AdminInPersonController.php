@@ -31,6 +31,11 @@ class AdminInPersonController extends Controller
         ];
     }
 
+    /**
+     * The personal-shopping hours published for a date range: query ?from=YYYY-MM-DD&to=YYYY-MM-DD (default today → +60 days).
+     * Each slot is one hour, {id, date, start_time "HH:MM", end_time, status "open"|"booked", reservation}. All times are
+     * California (Pacific) local time; bookable hours run 09:00–18:00 (the last hour starts at 17:00).
+     */
     public function slots(Request $request)
     {
         [$from, $to] = $this->range($request);
@@ -54,7 +59,7 @@ class AdminInPersonController extends Controller
         })->values()]]);
     }
 
-    /** Validates a list of {date, start_time} hours on the hour, 06:00-22:00 start. */
+    /** Validates a list of {date, start_time} hours on the hour, 09:00–17:00 start (US business hours, ends by 18:00). */
     private function validateHours(Request $request, string $key): array
     {
         $request->validate([
@@ -71,6 +76,12 @@ class AdminInPersonController extends Controller
         return $request->input($key, []);
     }
 
+    /**
+     * Open and close personal-shopping hours. Body: {"add": [{"date": "YYYY-MM-DD", "start_time": "HH:00"}, …], "remove": [same]}
+     * — either list may be omitted. One entry = one hour, California time, on the hour from 09:00 to 17:00 (ends 18:00); past
+     * hours are refused. Adding an hour that is already open is harmless. An hour with a confirmed reservation cannot be
+     * removed (422 with the reservation number: cancel the reservation first). Answers {added, removed}.
+     */
     public function updateSlots(Request $request)
     {
         $add = $this->validateHours($request, 'add');
@@ -115,6 +126,10 @@ class AdminInPersonController extends Controller
         return response()->json(['success' => true, 'data' => ['added' => $added, 'removed' => $removed]]);
     }
 
+    /**
+     * Copy every hour of one week (Monday from_week_start) onto other weeks (weeks: list of Mondays, up to 26). Past hours
+     * and the source week itself are skipped; hours already open stay. Answers {copied, skipped: [{week_start, reason}]}.
+     */
     public function copyWeek(Request $request)
     {
         $data = $request->validate([
@@ -163,6 +178,10 @@ class AdminInPersonController extends Controller
         return response()->json(['success' => true, 'data' => ['copied' => $copied, 'skipped' => $skipped]]);
     }
 
+    /**
+     * Personal-shopping reservations in a date range: query ?from=YYYY-MM-DD&to=YYYY-MM-DD (default today → +60 days) and
+     * optional ?status= (pending_payment, confirmed, completed, cancelled, slot_taken, expired), with the customer.
+     */
     public function reservations(Request $request)
     {
         [$from, $to] = $this->range($request);

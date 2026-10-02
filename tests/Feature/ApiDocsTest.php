@@ -68,6 +68,18 @@ class ApiDocsTest extends LiveShoppingTestCase
         $this->assertArrayHasKey('weeks', $copy['fields']);
     }
 
+    public function test_a_shopping_manager_learns_how_to_set_hours(): void
+    {
+        // Alex 2026-10-02: the shopping manager's agent sets her hours from these docs alone.
+        $md = $this->actingAs($this->user(User::ROLE_EMPLOYEE, User::TEAM_SHOPPING), 'sanctum')
+            ->get('/me/api-docs?format=md')->assertOk()->getContent();
+
+        $this->assertStringContainsString('`PUT /shopping/in-person/slots`', $md);
+        $this->assertStringContainsString('"add": [{"date": "YYYY-MM-DD", "start_time": "HH:00"}', $md);
+        $this->assertStringContainsString('09:00 to 17:00', $md);
+        $this->assertStringContainsString('`GET /shopping/in-person/slots` — The personal-shopping hours published', $md);
+    }
+
     public function test_markdown_format(): void
     {
         $res = $this->actingAs($this->user(User::ROLE_ADMIN), 'sanctum')->get('/me/api-docs?format=md')->assertOk();
