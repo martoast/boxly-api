@@ -43,7 +43,8 @@ class ApiDocsController extends Controller
         ksort($groups);
 
         $data = [
-            'base_url' => $request->getSchemeAndHttpHost(),
+            // Behind Cloudflare the request arrives as http: the public API is always https (local dev keeps http).
+            'base_url' => (preg_match('/^(localhost|127\.)/', $request->getHost()) ? 'http://' : 'https://') . $request->getHttpHost(),
             'auth' => 'Send "Authorization: Bearer <your API key>" and "Accept: application/json" on every request. A key can do exactly what its owner can do in the app.',
             'notes' => [
                 'Routes are served at the root: no /api prefix.',
