@@ -27,6 +27,17 @@ class ApiKeyTest extends LiveShoppingTestCase
             '--path'  => 'database/migrations/2026_04_30_000000_create_personal_access_tokens_table.php',
             '--force' => true,
         ]);
+        $this->artisan('migrate', ['--path' => 'database/migrations/2026_04_29_000007_add_team_to_users.php', '--force' => true]);
+        // The users.role enum check (customer|admin on SQLite; prod MySQL also allows employee) would refuse staff rows.
+        \Illuminate\Support\Facades\DB::statement('PRAGMA ignore_check_constraints = ON');
+    }
+
+    private function shoppingManager(): User
+    {
+        return User::create([
+            'name' => 'Shopper', 'email' => 'shopper@boxly.test',
+            'password' => bcrypt('secret'), 'role' => User::ROLE_EMPLOYEE, 'team' => User::TEAM_SHOPPING,
+        ]);
     }
 
     private function admin(): User
@@ -82,6 +93,23 @@ class ApiKeyTest extends LiveShoppingTestCase
             ->getStatusCode();
 
         $this->assertNotContains($status, [401, 403], 'an admin key must reach /admin/*');
+    }
+
+    public function test_a_shopping_manager_creates_a_key_that_reaches_shopping_but_not_admin(): void
+    {
+        $manager = $this->shoppingManager();
+
+        $key = $this->actingAs($manager, 'sanctum')
+            ->postJson('/me/api-keys', ['name' => 'my-ai'])
+            ->assertStatus(201)
+            ->json('data.key');
+        $this->assertNotEmpty($key);
+        $this->app['auth']->forgetGuards();
+
+        // The key is the manager's own token: their role's routes, never the admin surface.
+        $this->withHeader('Authorization', "Bearer {$key}")->getJson('/me/api-docs')->assertOk();
+        $this->app['auth']->forgetGuards();
+        $this->withHeader('Authorization', "Bearer {$key}")->getJson('/admin/users/'.$manager->id.'/cli-tokens')->assertStatus(403);
     }
 
     public function test_a_customer_key_cannot_reach_the_admin_surface(): void

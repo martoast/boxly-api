@@ -21,8 +21,9 @@ use Illuminate\Validation\Rule;
  * an `abilities` field that nothing enforces would look like security without
  * being it. When scopes arrive they need a middleware calling tokenCan().
  *
- * Admin-only for now (see routes/api.php) — customer-facing keys are a later
- * pass and want their own rate limiting and docs first.
+ * Admins and shopping managers (see routes/api.php): a shopping manager's key is
+ * their own token, so it reaches the shopping routes and never /admin/*.
+ * Customer-facing keys are a later pass and want their own rate limiting first.
  */
 class ApiKeyController extends Controller
 {

@@ -1,7 +1,12 @@
 # Boxly API keys
 
 Programmatic access to the Boxly API using a key you issue yourself from the
-web app. **Admin accounts only** for now.
+web app. **Admins and shopping managers.** A key can do exactly what its owner
+can do: a shopping manager's key reaches `/shopping/*`, never `/admin/*`.
+
+**Every route your key can call:** `GET /me/api-docs` (JSON) or
+`GET /me/api-docs?format=md` (Markdown) — generated from the live routes. Give
+your AI the key and that URL; it learns everything from there.
 
 ## What a key is
 

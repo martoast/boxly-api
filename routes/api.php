@@ -188,8 +188,10 @@ Route::middleware('auth:sanctum')->group(function () {
     // reaches exactly what its owner reaches in the app — the admin surface
     // below is already auth:sanctum + admin. Admin-only for now; customer keys
     // are a later pass. Full-access (`*`): scopes are not implemented yet.
-    Route::middleware('admin')->group(function () {
-        Route::get('/me/api-keys', [\App\Http\Controllers\ApiKeyController::class, 'index']);
+    // Admins and shopping managers (Alex 2026-10-01): 'shopping' admits both. A key is the owner's own
+    // token, so a shopping manager's key reaches the shopping routes and never /admin/*.
+    Route::middleware('shopping')->group(function () {
+        Route::get('/me/api-keys',[\App\Http\Controllers\ApiKeyController::class, 'index']);
         Route::post('/me/api-keys', [\App\Http\Controllers\ApiKeyController::class, 'store']);
         Route::delete('/me/api-keys/{id}', [\App\Http\Controllers\ApiKeyController::class, 'destroy']);
     });
