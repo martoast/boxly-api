@@ -193,6 +193,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/me/api-keys', [\App\Http\Controllers\ApiKeyController::class, 'store']);
         Route::delete('/me/api-keys/{id}', [\App\Http\Controllers\ApiKeyController::class, 'destroy']);
     });
+    // The routes the caller's key can reach (admins: admin + shopping; shopping managers: shopping).
+    Route::middleware('shopping')->get('/me/api-docs', [\App\Http\Controllers\ApiDocsController::class, 'show']);
 
     // AI shopping assistant — chat threads (history sidebar + resume)
     Route::prefix('conversations')->group(function () {
