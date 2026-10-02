@@ -63,7 +63,7 @@ class AdminInPersonController extends Controller
             "$key.*.start_time" => ['required', 'date_format:H:i', function ($attr, $value, $fail) {
                 $h = (int) substr($value, 0, 2);
                 if (substr($value, 3, 2) !== '00' || $h < InPersonReservationService::FIRST_HOUR || $h > InPersonReservationService::LAST_HOUR) {
-                    $fail('Las horas van de 06:00 a 22:00, en punto.');
+                    $fail('Las horas van de 09:00 a 18:00 (la última empieza a las 17:00), en punto.');
                 }
             }],
         ]);

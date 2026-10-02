@@ -209,14 +209,14 @@ class InPersonReservationTest extends LiveShoppingTestCase
 
     public function test_availability_uses_pacific_now_around_midnight(): void
     {
-        $this->open('2026-10-01', [22]);   // 22:00 PDT Oct 1
-        $this->open('2026-10-02', [6]);
-        // 23:30 PDT Oct 1 = 06:30 UTC Oct 2: the 22:00 hour is past, today (Pacific) is still Oct 1
-        $this->travelTo(now()->setDate(2026, 10, 2)->setTime(6, 30, 0));
+        $this->open('2026-10-01', [17]);   // 17:00 PDT Oct 1
+        $this->open('2026-10-02', [9]);
+        // 17:30 PDT Oct 1 = 00:30 UTC Oct 2: the 17:00 hour is past, today (Pacific) is still Oct 1
+        $this->travelTo(now()->setDate(2026, 10, 2)->setTime(0, 30, 0));
         $dates = array_column($this->as($this->customer())->getJson('/in-person/availability')->json('data'), 'date');
         $this->assertSame(['2026-10-02'], $dates);
-        // 21:30 PDT Oct 1 = 04:30 UTC Oct 2: the 22:00 hour is still offered
-        $this->travelTo(now()->setDate(2026, 10, 2)->setTime(4, 30, 0));
+        // 16:30 PDT Oct 1 = 23:30 UTC Oct 1: the 17:00 hour is still offered
+        $this->travelTo(now()->setDate(2026, 10, 1)->setTime(23, 30, 0));
         $dates = array_column($this->as($this->customer())->getJson('/in-person/availability')->json('data'), 'date');
         $this->assertSame(['2026-10-01', '2026-10-02'], $dates);
     }
@@ -278,12 +278,26 @@ class InPersonReservationTest extends LiveShoppingTestCase
 
     public function test_hours_bounds(): void
     {
-        $this->open('2026-10-03', range(8, 16));
+        $this->open('2026-10-03', range(9, 17));
         $u = $this->customer();
-        $post = fn ($h) => $this->as($u)->postJson('/in-person/reservations', ['date' => '2026-10-03', 'start_time' => '08:00', 'hours' => $h]);
+        $post = fn ($h) => $this->as($u)->postJson('/in-person/reservations', ['date' => '2026-10-03', 'start_time' => '09:00', 'hours' => $h]);
         $post(0)->assertStatus(422);
         $post(7)->assertStatus(422);
-        $post(6)->assertStatus(201)->assertJsonPath('data.end_time', '14:00');
+        $post(6)->assertStatus(201)->assertJsonPath('data.end_time', '15:00');
+    }
+
+    public function test_hours_outside_business_hours_are_never_offered_or_booked(): void
+    {
+        // Published before the 9–18 window (Alex 2026-10-02): 7:00 and 18:00–19:00 stay hidden.
+        $this->open('2026-10-03', [7, 8, 9, 17, 18, 19]);
+        $slots = $this->as($this->customer())->getJson('/in-person/availability')->json('data.0.slots');
+        $this->assertSame(['09:00', '17:00'], array_column($slots, 'start_time'));
+        $this->assertSame(1, $slots[1]['max_consecutive_hours']); // 17:00 cannot run past 18:00
+
+        $post = fn ($start, $h) => $this->as($this->customer())->postJson('/in-person/reservations', ['date' => '2026-10-03', 'start_time' => $start, 'hours' => $h]);
+        $post('07:00', 1)->assertStatus(422);
+        $post('17:00', 2)->assertStatus(422);
+        $post('18:00', 1)->assertStatus(422);
     }
 
     public function test_stripe_failure_returns_502_and_deletes_the_pending_row(): void
@@ -653,7 +667,7 @@ class InPersonReservationTest extends LiveShoppingTestCase
     public function test_availability_across_the_dst_change_lists_each_local_hour_once(): void
     {
         $t = $this->staff('employee', 'shopping');
-        $hours = [6, 7, 8, 9, 10, 11];
+        $hours = [9, 10, 11, 12, 13, 14];
         $this->as($t)->putJson('/shopping/in-person/slots', ['add' => array_merge(
             array_map(fn ($h) => ['date' => '2026-10-31', 'start_time' => sprintf('%02d:00', $h)], $hours),
             array_map(fn ($h) => ['date' => '2026-11-01', 'start_time' => sprintf('%02d:00', $h)], $hours),
@@ -663,7 +677,7 @@ class InPersonReservationTest extends LiveShoppingTestCase
         $data = $this->as($this->customer())->getJson('/in-person/availability?from=2026-10-26&to=2026-11-08')->assertOk()->json('data');
         $this->assertSame(['2026-10-31', '2026-11-01', '2026-11-02'], array_column($data, 'date'));
         foreach ($data as $day) {
-            $this->assertSame(['06:00', '07:00', '08:00', '09:00', '10:00', '11:00'], array_column($day['slots'], 'start_time'));
+            $this->assertSame(['09:00', '10:00', '11:00', '12:00', '13:00', '14:00'], array_column($day['slots'], 'start_time'));
             $this->assertCount(6, array_unique(array_column($day['slots'], 'id')));
             $this->assertSame(6, $day['slots'][0]['max_consecutive_hours']);
         }

@@ -24,8 +24,10 @@ use Illuminate\Support\Facades\Mail;
  */
 class InPersonReservationService
 {
-    public const FIRST_HOUR = 6;
-    public const LAST_HOUR = 22; // last slot starts at 22:00 and ends at 23:00
+    // US retail business hours (Alex 2026-10-02): no store opens before 9:00, and personal shopping ends ~2 h before
+    // a late close — so hours run 9:00–18:00 California time.
+    public const FIRST_HOUR = 9;
+    public const LAST_HOUR = 17; // last slot starts at 17:00 and ends at 18:00
 
     public function __construct(private InPersonStripeGateway $stripe) {}
 
@@ -70,7 +72,12 @@ class InPersonReservationService
         $byDate = [];
         foreach ($slots as $slot) {
             $local = $slot->local();
-            $byDate[$local->toDateString()][(int) $local->format('G')] = $slot->id;
+            $hour = (int) $local->format('G');
+            // Hours published before the 9–18 window existed are never offered (nor booked: hoursAvailable reads this).
+            if ($hour < self::FIRST_HOUR || $hour > self::LAST_HOUR) {
+                continue;
+            }
+            $byDate[$local->toDateString()][$hour] = $slot->id;
         }
 
         return $byDate;
