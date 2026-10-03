@@ -27,6 +27,8 @@ class AdminOrderController extends Controller
             'limit' => 'nullable|integer|min:1|max:500',
             'from_date' => 'nullable|date',
             'to_date' => 'nullable|date',
+            'paid_from' => 'nullable|date',
+            'paid_to' => 'nullable|date',
         ]);
 
         $perPage = $request->input('per_page') ?? $request->input('limit') ?? 20;
@@ -67,6 +69,19 @@ class AdminOrderController extends Controller
         }
         if ($request->has('to_date')) {
             $query->whereDate('created_at', '<=', $request->to_date);
+        }
+
+        // Filter by payment date (UTC days, like the dashboard). from_date/to_date
+        // filter on created_at, so an order created weeks ago and paid today was
+        // invisible to "who paid today".
+        if ($request->filled('paid_from')) {
+            $query->whereDate('paid_at', '>=', $request->paid_from);
+        }
+        if ($request->filled('paid_to')) {
+            $query->whereDate('paid_at', '<=', $request->paid_to);
+        }
+        if ($request->filled('paid_from') || $request->filled('paid_to')) {
+            $query->orderByDesc('paid_at');
         }
 
         $total = $query->count();
