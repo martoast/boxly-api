@@ -33,6 +33,42 @@ class CartItem extends Model
      * on the order and the invoice): a trailing product code in brackets ("(105560)", "[SKU 12-AB3]", "Style #K87")
      * and a trailing "| Store" page-title suffix are dropped. A name that would be left empty is kept as it was.
      */
+    /**
+     * The line's name follows the colour the shopper PICKED (Alex 2026-10-03: "Cropped Micro Plisse Jacket - Black" with White
+     * chosen; "if not the user will not trust it"). A card title "<name> - <colour>" names the colour of the page it came from;
+     * when that suffix is the colour in the product link's own handle (…-jacket-black), or the colour this line had before a
+     * change, it is replaced by the picked colour. Any other suffix ("Shorts - 5 Inch") is left alone.
+     */
+    public static function titleForColour(string $title, string $url, array $variants, ?string $previousColour = null): string
+    {
+        $colour = self::colourOf($variants);
+        if ($colour === null || ! preg_match('/^(.*\S)\s+[-\x{2013}\x{2014}]\s+([^-\x{2013}\x{2014}]+?)\s*$/u', $title, $m)) {
+            return $title;
+        }
+        [$base, $suffix] = [$m[1], $m[2]];
+        if (mb_strtolower($suffix) === mb_strtolower($colour)) {
+            return $title;
+        }
+        $slug = trim(preg_replace('/[^a-z0-9]+/', '-', strtolower(\Illuminate\Support\Str::ascii($suffix))), '-');
+        $handle = strtolower(basename((string) parse_url($url, PHP_URL_PATH)));
+        $inHandle = $slug !== '' && (str_ends_with($handle, '-' . $slug) || str_contains($handle, '-' . $slug . '-'));
+        $wasPicked = $previousColour !== null && mb_strtolower(trim($previousColour)) === mb_strtolower($suffix);
+
+        return $inHandle || $wasPicked ? $base . ' - ' . $colour : $title;
+    }
+
+    /** The colour a line's variants name, or null. */
+    public static function colourOf(?array $variants): ?string
+    {
+        foreach ((array) $variants as $k => $v) {
+            if (in_array(strtolower(trim((string) $k)), ['color', 'colour', 'colors', 'colours'], true) && trim((string) $v) !== '') {
+                return trim((string) $v);
+            }
+        }
+
+        return null;
+    }
+
     public static function cleanTitle(string $title): string
     {
         $clean = trim(preg_replace('/\s+/u', ' ', $title));

@@ -113,7 +113,7 @@ class CartController extends Controller
                     'store_name' => $data['store_name'] ?? null,
                     'product_url' => $url,
                     'product_url_hash' => $hash,
-                    'title' => CartItem::cleanTitle($data['title']),
+                    'title' => CartItem::titleForColour(CartItem::cleanTitle($data['title']), $url, $variants),
                     'image_url' => isset($data['image_url']) ? trim($data['image_url']) : null,
                     'price' => $data['price'] ?? null,
                     'currency' => 'USD',
@@ -187,6 +187,8 @@ class CartController extends Controller
 
             $changes['variants'] = $variants;
             $changes['variants_key'] = $key;
+            // a new colour renames the line too (its name follows the picked colour)
+            $changes['title'] = CartItem::titleForColour($item->title, $item->product_url, $variants, CartItem::colourOf($item->variants));
         }
 
         if ($changes) {

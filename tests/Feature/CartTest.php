@@ -482,4 +482,42 @@ class CartTest extends LiveShoppingTestCase
         $theirs = Conversation::create(['user_id' => $this->customer()->id, 'title' => 'x']);
         $this->actingAs($u)->getJson('/cart?conversation_id=' . $theirs->id)->assertJsonPath('data.id', $cartB);
     }
+
+    // ── the line's name follows the picked colour (Alex 2026-10-03: "Cropped Micro Plisse Jacket - Black", White picked) ──
+
+    public function test_the_name_follows_the_picked_colour(): void
+    {
+        $u = $this->customer();
+        $alo = fn (array $o = []) => $this->item(array_merge([
+            'store_id' => 'alo', 'store_name' => 'Alo Yoga', 'title' => 'Cropped Micro Plisse Jacket - Black',
+            'product_url' => 'https://www.aloyoga.com/products/w4675r-cropped-micro-plisse-jacket-black',
+        ], $o));
+
+        $r = $this->actingAs($u)->postJson('/cart/items', $alo(['variants' => ['Color' => 'White', 'Size' => 'M']]))->assertStatus(201);
+        $r->assertJsonPath('data.item.title', 'Cropped Micro Plisse Jacket - White');
+
+        // the same colour as the page: unchanged
+        $this->actingAs($u)->postJson('/cart/items', $alo(['variants' => ['Color' => 'Black', 'Size' => 'S']]))
+            ->assertJsonPath('data.item.title', 'Cropped Micro Plisse Jacket - Black');
+
+        // a later colour change renames it again (the old suffix was the previous pick)
+        $id = $r->json('data.item.id');
+        $this->actingAs($u)->patchJson("/cart/items/{$id}", ['variants' => ['Color' => 'Espresso', 'Size' => 'M']])
+            ->assertOk()->assertJsonPath('data.item.title', 'Cropped Micro Plisse Jacket - Espresso');
+    }
+
+    public function test_a_suffix_that_is_not_the_pages_colour_is_left_alone(): void
+    {
+        $u = $this->customer();
+        // "5 Inch" is not in the link's handle: never replaced
+        $this->actingAs($u)->postJson('/cart/items', $this->item([
+            'title' => 'Training Shorts - 5 Inch', 'product_url' => 'https://www.gymshark.com/products/training-shorts-black',
+            'variants' => ['Color' => 'Navy'],
+        ]))->assertJsonPath('data.item.title', 'Training Shorts - 5 Inch');
+        // no colour picked: unchanged
+        $this->actingAs($u)->postJson('/cart/items', $this->item([
+            'title' => 'Cropped Micro Plisse Jacket - Black', 'product_url' => 'https://www.aloyoga.com/products/w4675r-cropped-micro-plisse-jacket-black',
+            'variants' => ['Size' => 'M'],
+        ]))->assertJsonPath('data.item.title', 'Cropped Micro Plisse Jacket - Black');
+    }
 }

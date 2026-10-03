@@ -293,6 +293,8 @@ class CartQuotes
                             'quantity'         => $i->quantity,
                             'unit_price_cents' => $i->price !== null ? (int) round($i->price * 100) : null,
                             'state'            => $i->sync_status ?: 'ok',
+                            // the line's photo (the picked colour's when the store gave one): the invoice card shows it
+                            'image_url'        => $i->image_url,
                         ])->all(),
                     'merchandise_cents' => $q->merchandise_cents,
                     'discounts_cents'   => $q->discounts_cents,

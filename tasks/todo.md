@@ -41,3 +41,10 @@ chat and tapping Finalizar re-adds that chat's lines at checkout (the quote adds
 - CartController resolves every route by the request's conversation_id (owned chats only); none → latest open cart.
   addItem no longer joins another chat's cart; finalize closes only that chat's cart; preopen keeps only that chat's lines
   (a new chat keeps nothing). 5 new tests; full suite 450 OK (8 skipped as before).
+
+## Name follows the picked colour + photo on the invoice card (Alex 2026-10-03)
+- [x] CartItem::titleForColour: "<name> - <colour>" whose colour is the link handle's (or the line's previous pick) becomes the picked colour; applied on add and on a colour change
+- [x] checkout_summary lines carry image_url (the line's photo) for the invoice card
+- [x] Tests: Alex's jacket Black→White, same colour unchanged, colour change, "5 Inch" untouched, no colour untouched; summary line keys + photo
+### Review
+- One place (the cart API) fixes the name for the chat, the box, the purchase request and the invoice. Full suite 453 OK.

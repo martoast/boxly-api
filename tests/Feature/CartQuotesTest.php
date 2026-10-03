@@ -326,7 +326,10 @@ class CartQuotesTest extends LiveShoppingTestCase
         $this->assertSame(['partial', 'verified'], array_column($summary['stores'], 'status'));
         $this->assertSame([true, true], array_column($summary['stores'], 'included'));
         $this->assertCount(2, $summary['stores'][0]['lines']);
-        $this->assertSame(['title', 'variants', 'quantity', 'unit_price_cents', 'state'], array_keys($summary['stores'][0]['lines'][0]));
+        $this->assertSame(['title', 'variants', 'quantity', 'unit_price_cents', 'state', 'image_url'], array_keys($summary['stores'][0]['lines'][0]));
+        // each line carries its own photo for the invoice card (Alex 2026-10-03: "add the product image right there")
+        $first = $summary['stores'][0];
+        $this->assertSame(CartItem::where('store_id', $first['store_id'])->orderBy('id')->value('image_url'), $first['lines'][0]['image_url']);
         $this->assertSame(5000, $summary['stores'][0]['lines'][0]['unit_price_cents']);
         $this->assertSame('in_store_cart', $summary['stores'][0]['lines'][0]['state']);
         $this->assertSame(1001, $summary['stores'][0]['tax_cents']);
