@@ -64,12 +64,15 @@ class AdminOrderController extends Controller
             });
         }
 
-        // Filter by date range
-        if ($request->has('from_date')) {
-            $query->whereDate('created_at', '>=', $request->from_date);
+        // Filter by creation date. created_at is stored in UTC; `tz` (e.g.
+        // America/Tijuana) makes a day mean that local day. Without tz,
+        // nothing changes (UTC days, as before).
+        $tz = $request->input('tz', 'UTC');
+        if ($request->filled('from_date')) {
+            $query->where('created_at', '>=', \Carbon\Carbon::parse($request->from_date, $tz)->startOfDay()->utc());
         }
-        if ($request->has('to_date')) {
-            $query->whereDate('created_at', '<=', $request->to_date);
+        if ($request->filled('to_date')) {
+            $query->where('created_at', '<=', \Carbon\Carbon::parse($request->to_date, $tz)->endOfDay()->utc());
         }
 
         // Filter by payment date. from_date/to_date filter on created_at, so an
