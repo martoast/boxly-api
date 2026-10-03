@@ -293,13 +293,19 @@ class LiveShoppingController extends Controller
         $data = $request->validate([
             'store_id'    => ['required', 'string', 'regex:/^[a-z0-9][a-z0-9_-]{0,39}$/'],
             'product_url' => ['required', 'string', 'max:2000', 'starts_with:https://'],
+            'conversation_id' => ['nullable', 'integer'],
         ]);
         if (! CartSync::enabled() || ! $this->engine->configured()) {
             return response()->json(['success' => true, 'preopen' => 'skipped'], 202);
         }
         try {
-            // The customer's open cart at that store: the pre-open clears every other line from the store bag.
-            $cartId = Cart::where('user_id', $request->user()->id)->where('status', Cart::STATUS_OPEN)->value('id');
+            // THIS CHAT's open cart at that store (one cart per chat, Alex 2026-10-03): the pre-open clears every other line
+            // from the store bag — a new chat with no cart yet keeps nothing (a clean slate). No chat → the latest open cart.
+            $userId = $request->user()->id;
+            $chat = isset($data['conversation_id']) && Conversation::where('id', $data['conversation_id'])->where('user_id', $userId)->exists()
+                ? (int) $data['conversation_id'] : null;
+            $carts = Cart::where('user_id', $userId)->where('status', Cart::STATUS_OPEN);
+            $cartId = $chat ? $carts->where('conversation_key', $chat)->value('id') : $carts->orderByDesc('updated_at')->orderByDesc('id')->value('id');
             $keep = $cartId ? SyncStoreCartJob::keepFor($cartId, $data['store_id'], true) : [];
             $state = $this->engine->preopen($data['store_id'], CartSync::customerRef($request->user()->id), $data['product_url'], $keep);
         } catch (\Throwable $e) {

@@ -71,6 +71,10 @@ class CartTest extends LiveShoppingTestCase
             '--path'  => 'database/migrations/2026_09_23_000000_create_carts_tables.php',
             '--force' => true,
         ]);
+        $this->artisan('migrate', [
+            '--path'  => 'database/migrations/2026_10_03_000000_add_conversation_key_to_carts.php',
+            '--force' => true,
+        ]);
 
         Mail::fake();
         Storage::fake('spaces');
@@ -398,5 +402,84 @@ class CartTest extends LiveShoppingTestCase
         // The database, not just the controller, refuses a second open cart.
         $this->expectException(QueryException::class);
         Cart::create(['user_id' => $u->id, 'status' => 'open', 'active_slot' => 1]);
+    }
+
+    // ── one cart per chat (Alex 2026-10-03: a new chat is a new order) ─────
+
+    public function test_each_chat_has_its_own_cart_and_items_never_mix(): void
+    {
+        $u = $this->customer();
+        $a = Conversation::create(['user_id' => $u->id, 'title' => 'A']);
+        $b = Conversation::create(['user_id' => $u->id, 'title' => 'B']);
+
+        $cartA = $this->actingAs($u)->postJson('/cart/items', $this->item(['conversation_id' => $a->id]))->assertStatus(201)->json('data.cart.id');
+        // a brand-new chat with no item yet sees an EMPTY cart, not chat A's
+        $this->actingAs($u)->getJson('/cart?conversation_id=' . $b->id)->assertOk()->assertJsonPath('data.id', null)->assertJsonPath('data.items', []);
+        $cartB = $this->actingAs($u)->postJson('/cart/items', $this->item([
+            'conversation_id' => $b->id, 'product_url' => 'https://www.nike.com/t/cortez', 'title' => 'Cortez',
+        ]))->assertStatus(201)->json('data.cart.id');
+
+        $this->assertNotSame($cartA, $cartB);
+        $this->actingAs($u)->getJson('/cart?conversation_id=' . $a->id)->assertJsonPath('data.id', $cartA)
+            ->assertJsonPath('data.item_count', 1)->assertJsonPath('data.items.0.title', 'Air Max 90');
+        $this->actingAs($u)->getJson('/cart?conversation_id=' . $b->id)->assertJsonPath('data.id', $cartB)
+            ->assertJsonPath('data.item_count', 1)->assertJsonPath('data.items.0.title', 'Cortez');
+    }
+
+    public function test_finalize_orders_only_that_chats_cart(): void
+    {
+        $u = $this->customer();
+        $a = Conversation::create(['user_id' => $u->id, 'title' => 'A']);
+        $b = Conversation::create(['user_id' => $u->id, 'title' => 'B']);
+        $this->actingAs($u)->postJson('/cart/items', $this->item(['conversation_id' => $a->id]))->assertStatus(201);
+        $cartB = $this->actingAs($u)->postJson('/cart/items', $this->item([
+            'conversation_id' => $b->id, 'product_url' => 'https://www.nike.com/t/cortez', 'title' => 'Cortez',
+        ]))->json('data.cart.id');
+
+        $r = $this->actingAs($u)->postJson('/cart/finalize', ['conversation_id' => $b->id])->assertStatus(201);
+
+        $pr = PurchaseRequest::with('items')->findOrFail($r->json('data.purchase_request_id'));
+        $this->assertSame(['Cortez'], $pr->items->pluck('product_name')->all());
+        $this->assertSame($b->id, (int) $pr->conversation_id);
+        $this->assertSame(Cart::STATUS_FINALIZED, Cart::find($cartB)->status);
+        // chat A's cart is untouched and still open
+        $this->actingAs($u)->getJson('/cart?conversation_id=' . $a->id)->assertJsonPath('data.status', 'open')->assertJsonPath('data.item_count', 1);
+    }
+
+    public function test_an_add_after_finalize_in_the_same_chat_starts_a_fresh_cart(): void
+    {
+        $u = $this->customer();
+        $a = Conversation::create(['user_id' => $u->id, 'title' => 'A']);
+        $first = $this->actingAs($u)->postJson('/cart/items', $this->item(['conversation_id' => $a->id]))->json('data.cart.id');
+        $this->actingAs($u)->postJson('/cart/finalize', ['conversation_id' => $a->id])->assertStatus(201);
+
+        // the same chat, after Finalizar: an empty cart, then a NEW cart holding only the new item
+        $this->actingAs($u)->getJson('/cart?conversation_id=' . $a->id)->assertJsonPath('data.id', null);
+        $r = $this->actingAs($u)->postJson('/cart/items', $this->item([
+            'conversation_id' => $a->id, 'product_url' => 'https://www.nike.com/t/cortez', 'title' => 'Cortez',
+        ]))->assertStatus(201);
+        $this->assertNotSame($first, $r->json('data.cart.id'));
+        $r->assertJsonPath('data.cart.item_count', 1)->assertJsonPath('data.cart.items.0.title', 'Cortez');
+
+        $second = $this->actingAs($u)->postJson('/cart/finalize', ['conversation_id' => $a->id])->assertStatus(201);
+        $this->assertSame(2, PurchaseRequest::count());
+        $this->assertSame(['Cortez'], PurchaseRequest::with('items')->find($second->json('data.purchase_request_id'))->items->pluck('product_name')->all());
+    }
+
+    public function test_without_a_chat_the_latest_open_cart_is_used(): void
+    {
+        $u = $this->customer();
+        $a = Conversation::create(['user_id' => $u->id, 'title' => 'A']);
+        $b = Conversation::create(['user_id' => $u->id, 'title' => 'B']);
+        $this->actingAs($u)->postJson('/cart/items', $this->item(['conversation_id' => $a->id]))->assertStatus(201);
+        $this->travel(1)->minutes();
+        $cartB = $this->actingAs($u)->postJson('/cart/items', $this->item([
+            'conversation_id' => $b->id, 'product_url' => 'https://www.nike.com/t/cortez', 'title' => 'Cortez',
+        ]))->json('data.cart.id');
+
+        $this->actingAs($u)->getJson('/cart')->assertJsonPath('data.id', $cartB);
+        // another customer's chat id is ignored the same way
+        $theirs = Conversation::create(['user_id' => $this->customer()->id, 'title' => 'x']);
+        $this->actingAs($u)->getJson('/cart?conversation_id=' . $theirs->id)->assertJsonPath('data.id', $cartB);
     }
 }

@@ -16,9 +16,11 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
 
 /**
- * The Boxly cart — one persisted, multi-store list per customer that becomes ONE
- * purchase request on finalize. Chat, live shopping and the extension all add to
- * the same cart.
+ * The Boxly cart — one persisted, multi-store list per customer AND CHAT that
+ * becomes ONE purchase request on finalize (Alex 2026-10-03: a new chat is a new
+ * order; after Finalizar the same chat's next add opens a fresh cart). Every route
+ * takes an optional `conversation_id`; without one (the store-browse page, the
+ * extension, /app/cart) it is the customer's most recently updated open cart.
  *
  * Only the OPEN cart is ever addressable: items of a finalized cart are history
  * and 404 like anyone else's.
@@ -44,7 +46,7 @@ class CartController extends Controller
     {
         // Code can land before its migration during a deploy; "no cart yet" is
         // the honest answer until it does.
-        $cart = Schema::hasTable('carts') ? $this->openCart($request->user()->id) : null;
+        $cart = Schema::hasTable('carts') ? $this->openCart($request->user()->id, $this->chatId($request)) : null;
 
         return response()->json(['data' => $this->cartPayload($cart)]);
     }
@@ -72,18 +74,11 @@ class CartController extends Controller
         $quantity = (int) ($data['quantity'] ?? 1);
         $url = trim($data['product_url']);
 
-        // Only link a chat this customer actually owns; anything else is ignored.
-        $conversationId = $data['conversation_id'] ?? null;
-        if ($conversationId && ! Conversation::where('id', $conversationId)->where('user_id', $user->id)->exists()) {
-            $conversationId = null;
-        }
+        // Only a chat this customer actually owns; anything else is ignored.
+        $conversationId = $this->chatId($request);
 
         [$cart, $item, $sync] = DB::transaction(function () use ($user, $data, $variants, $quantity, $url, $conversationId) {
-            $cart = $this->openCartForWrite($user->id);
-
-            if ($conversationId && ! $cart->conversation_id) {
-                $cart->update(['conversation_id' => $conversationId]);
-            }
+            $cart = $this->openCartForWrite($user->id, $conversationId);
 
             $hash = CartItem::urlHash($url);
             $key = CartItem::variantsKey($variants);
@@ -229,17 +224,16 @@ class CartController extends Controller
     {
         $data = $request->validate([
             'notes' => 'nullable|string|max:2000',
+            'conversation_id' => 'nullable|integer',
         ]);
 
         $user = $request->user();
+        $conversationId = $this->chatId($request);
 
         DB::beginTransaction();
 
         try {
-            $cart = Cart::where('user_id', $user->id)
-                ->where('status', Cart::STATUS_OPEN)
-                ->lockForUpdate()
-                ->first();
+            $cart = $this->openCartQuery($user->id, $conversationId)->lockForUpdate()->first();
 
             $items = $cart ? $cart->items()->get() : collect();
             if ($items->isEmpty()) {
@@ -320,21 +314,42 @@ class CartController extends Controller
 
     // ── helpers ──────────────────────────────────────────────────────────
 
-    private function openCart(int $userId): ?Cart
+    /** The request's `conversation_id` (query or body) when this user owns that chat, else null. */
+    private function chatId(Request $request): ?int
     {
-        return Cart::where('user_id', $userId)->where('status', Cart::STATUS_OPEN)->first();
+        $id = $request->input('conversation_id');
+        if (! is_numeric($id) || (int) $id < 1) {
+            return null;
+        }
+
+        return Conversation::where('id', (int) $id)->where('user_id', $request->user()->id)->exists() ? (int) $id : null;
+    }
+
+    /** The open cart of this user's chat; no chat → the user's most recently updated open cart. */
+    private function openCartQuery(int $userId, ?int $conversationId)
+    {
+        $q = Cart::where('user_id', $userId)->where('status', Cart::STATUS_OPEN);
+
+        return $conversationId
+            ? $q->where('conversation_key', $conversationId)
+            : $q->orderByDesc('updated_at')->orderByDesc('id');
+    }
+
+    private function openCart(int $userId, ?int $conversationId = null): ?Cart
+    {
+        return $this->openCartQuery($userId, $conversationId)->first();
     }
 
     /**
-     * The user's open cart, locked, created if missing. Two concurrent first-adds
-     * both miss the SELECT; the unique (user_id, active_slot) index lets exactly
-     * one INSERT win, and the loser re-reads the winner's row. The insert runs in
-     * a savepoint so the losing INSERT does not poison the outer transaction
-     * (Postgres-style) — cheap insurance.
+     * The chat's open cart, locked, created if missing. Two concurrent first-adds
+     * both miss the SELECT; the unique (user_id, conversation_key, active_slot)
+     * index lets exactly one INSERT win, and the loser re-reads the winner's row.
+     * The insert runs in a savepoint so the losing INSERT does not poison the
+     * outer transaction (Postgres-style) — cheap insurance.
      */
-    private function openCartForWrite(int $userId): Cart
+    private function openCartForWrite(int $userId, ?int $conversationId = null): Cart
     {
-        $cart = Cart::where('user_id', $userId)->where('status', Cart::STATUS_OPEN)->lockForUpdate()->first();
+        $cart = $this->openCartQuery($userId, $conversationId)->lockForUpdate()->first();
         if ($cart) {
             return $cart;
         }
@@ -344,9 +359,11 @@ class CartController extends Controller
                 'user_id' => $userId,
                 'status' => Cart::STATUS_OPEN,
                 'active_slot' => 1,
+                'conversation_id' => $conversationId,
+                'conversation_key' => $conversationId ?? 0,
             ]));
         } catch (QueryException $e) {
-            $cart = Cart::where('user_id', $userId)->where('status', Cart::STATUS_OPEN)->lockForUpdate()->first();
+            $cart = $this->openCartQuery($userId, $conversationId)->lockForUpdate()->first();
             if (! $cart) {
                 throw $e;
             }
