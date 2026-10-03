@@ -28,6 +28,8 @@ class InPersonReservationService
     // a late close — so hours run 9:00–18:00 California time.
     public const FIRST_HOUR = 9;
     public const LAST_HOUR = 17; // last slot starts at 17:00 and ends at 18:00
+    // Customers book up to 4 weeks ahead (Alex 2026-10-02): today + 27 days, Pacific.
+    public const BOOKING_DAYS = 28;
 
     public function __construct(private InPersonStripeGateway $stripe) {}
 
@@ -61,7 +63,9 @@ class InPersonReservationService
     /** Open, future slots with no CONFIRMED reservation: local date => [local hour => slot id]. */
     public function availableByDate(string $from, string $to): array
     {
-        [$start, $end] = $this->utcRange($from, $to);
+        // Never past the booking window, whatever range is asked (it also bounds hoursAvailable).
+        $last = $this->now()->addDays(self::BOOKING_DAYS - 1)->toDateString();
+        [$start, $end] = $this->utcRange($from, min($to, $last));
         $slots = ShoppingSlot::where('location', ShoppingSlot::LOCATION)
             ->where('starts_at', '>=', $start)->where('starts_at', '<', $end)
             ->where('starts_at', '>', now())

@@ -286,6 +286,24 @@ class InPersonReservationTest extends LiveShoppingTestCase
         $post(6)->assertStatus(201)->assertJsonPath('data.end_time', '15:00');
     }
 
+    public function test_customers_book_up_to_four_weeks_ahead(): void
+    {
+        $today = $this->svc()->now();
+        $lastDay = $today->copy()->addDays(27)->toDateString();
+        $tooFar = $today->copy()->addDays(28)->toDateString();
+        $this->open($lastDay, [10]);
+        $this->open($tooFar, [10]);
+
+        $dates = array_column($this->as($this->customer())->getJson('/in-person/availability')->json('data'), 'date');
+        $this->assertSame([$lastDay], $dates);
+        // Asking for a wider range does not widen the window.
+        $dates = array_column($this->as($this->customer())->getJson("/in-person/availability?to={$tooFar}")->json('data'), 'date');
+        $this->assertSame([$lastDay], $dates);
+
+        $this->as($this->customer())->postJson('/in-person/reservations', ['date' => $tooFar, 'start_time' => '10:00', 'hours' => 1])->assertStatus(422);
+        $this->as($this->customer())->postJson('/in-person/reservations', ['date' => $lastDay, 'start_time' => '10:00', 'hours' => 1])->assertStatus(201);
+    }
+
     public function test_hours_outside_business_hours_are_never_offered_or_booked(): void
     {
         // Published before the 9–18 window (Alex 2026-10-02): 7:00 and 18:00–19:00 stay hidden.
@@ -666,6 +684,8 @@ class InPersonReservationTest extends LiveShoppingTestCase
 
     public function test_availability_across_the_dst_change_lists_each_local_hour_once(): void
     {
+        // Inside the 4-week booking window of the DST weekend.
+        $this->travelTo(\Carbon\Carbon::parse('2026-10-20 12:00:00', 'UTC'));
         $t = $this->staff('employee', 'shopping');
         $hours = [9, 10, 11, 12, 13, 14];
         $this->as($t)->putJson('/shopping/in-person/slots', ['add' => array_merge(

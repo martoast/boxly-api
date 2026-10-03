@@ -21,7 +21,7 @@ class InPersonReservationController extends Controller
         $request->validate(['from' => 'nullable|date_format:Y-m-d', 'to' => 'nullable|date_format:Y-m-d']);
         $today = $this->service->now();
         $from = $request->input('from', $today->toDateString());
-        $to = $request->input('to', $today->copy()->addDays(60)->toDateString());
+        $to = $request->input('to', $today->copy()->addDays(InPersonReservationService::BOOKING_DAYS - 1)->toDateString());
 
         return response()->json(['success' => true, 'data' => $this->service->availability($from, $to),
             'hourly_rate_usd' => (float) config('services.in_person.hourly_rate_usd'),
