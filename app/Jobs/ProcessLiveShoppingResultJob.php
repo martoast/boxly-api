@@ -81,6 +81,12 @@ class ProcessLiveShoppingResultJob implements ShouldQueue
                     'horizon'     => $horizon,
                 ]);
 
+                // The engine may have run an add the API gave up on: what it put in the store's cart is still true.
+                $rescued = \App\Services\CartSync::rescueOrphanedCart($payload['result']['cart'] ?? null);
+                if ($rescued > 0) {
+                    Log::warning('live-shopping orphaned cart result: lines settled in_store_cart', ['delivery_id' => $receipt->delivery_id, 'items' => $rescued]);
+                }
+
                 $this->close($receipt, LiveShoppingWebhookReceipt::STATUS_FAILED, 'orphaned');
 
                 return;

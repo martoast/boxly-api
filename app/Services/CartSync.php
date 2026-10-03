@@ -129,6 +129,32 @@ class CartSync
         }
     }
 
+    /**
+     * An ORPHANED cart result — the engine ran an add whose create the API had already abandoned (an error on the
+     * create call), so no session row knows its engine id. A line the engine reports IN THE STORE'S CART still lands on
+     * its item while that item is waiting (pending/failed), so the retry never adds it a second time (live Alo
+     * 2026-10-03: the orphaned 'in_store_cart' was dropped, the line stayed pending and the retry pressed Add again).
+     * Only that state, only the cart and items it names. Returns how many items it settled.
+     */
+    public static function rescueOrphanedCart(?array $cart): int
+    {
+        if (! is_array($cart) || ! preg_match('/^cart-(\d+)$/', (string) ($cart['cart_ref'] ?? ''), $m)) {
+            return 0;
+        }
+        $settled = 0;
+        foreach ($cart['lines'] ?? [] as $line) {
+            $id = substr((string) ($line['selection_id'] ?? ''), 3);
+            if (($line['state'] ?? null) !== 'in_store_cart' || ! ctype_digit($id)) {
+                continue;
+            }
+            $settled += CartItem::where('id', (int) $id)->where('cart_id', (int) $m[1])
+                ->whereIn('sync_status', ['pending', 'failed'])
+                ->update(['sync_status' => 'in_store_cart', 'sync_note' => null, 'updated_at' => now()]);
+        }
+
+        return $settled;
+    }
+
     /** Whether cart_items has sync_failures (older schemas in tests do not). */
     private static function countsFailures(): bool
     {

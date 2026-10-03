@@ -261,6 +261,31 @@ class CartSyncTest extends LiveShoppingTestCase
         $this->assertSame('pending', CartItem::find($id)->sync_status);
     }
 
+    public function test_an_orphaned_in_store_cart_result_settles_the_waiting_line_so_the_retry_never_adds_twice(): void
+    {
+        // Live Alo 2026-10-03: the create call failed on the API side (the line went back to pending and the session row
+        // was abandoned) while the engine ran the add; its result had no session to land on and the retry added it again.
+        $this->engineBusy();
+        $u = User::factory()->createQuietly();
+        $this->actingAs($u)->postJson('/cart/items', $this->item())->assertStatus(201);
+        $item = CartItem::first();
+        $this->assertSame('pending', $item->fresh()->sync_status);
+
+        $this->deliver($this->cartDelivery([$this->line($item)], ['session_id' => 'eng_abandoned']))->assertStatus(202);
+        $receipt = LiveShoppingWebhookReceipt::latest('id')->first();
+        $receipt->forceFill(['received_at' => now()->subHour()])->save();   // past the orphan horizon
+        (new ProcessLiveShoppingResultJob($receipt->id))->handle();
+
+        $this->assertSame('in_store_cart', $item->fresh()->sync_status);
+        $this->assertSame('orphaned', $receipt->fresh()->error_code);
+
+        // Only an in-cart line, only its own cart: a failed line or another cart's ref never touches it.
+        $item->refresh()->forceFill(['sync_status' => 'pending'])->save();
+        $this->assertSame(0, CartSync::rescueOrphanedCart(['cart_ref' => 'cart-' . ($item->cart_id + 99), 'lines' => [['selection_id' => 'ci-' . $item->id, 'state' => 'in_store_cart']]]));
+        $this->assertSame(0, CartSync::rescueOrphanedCart(['cart_ref' => 'cart-' . $item->cart_id, 'lines' => [['selection_id' => 'ci-' . $item->id, 'state' => 'failed']]]));
+        $this->assertSame('pending', $item->fresh()->sync_status);
+    }
+
     public function test_an_add_creates_a_cart_session_with_the_exact_contract_body(): void
     {
         $this->fakeEngine();
