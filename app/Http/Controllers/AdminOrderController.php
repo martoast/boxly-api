@@ -29,6 +29,7 @@ class AdminOrderController extends Controller
             'to_date' => 'nullable|date',
             'paid_from' => 'nullable|date',
             'paid_to' => 'nullable|date',
+            'tz' => 'nullable|timezone',
         ]);
 
         $perPage = $request->input('per_page') ?? $request->input('limit') ?? 20;
@@ -71,14 +72,16 @@ class AdminOrderController extends Controller
             $query->whereDate('created_at', '<=', $request->to_date);
         }
 
-        // Filter by payment date (UTC days, like the dashboard). from_date/to_date
-        // filter on created_at, so an order created weeks ago and paid today was
-        // invisible to "who paid today".
+        // Filter by payment date. from_date/to_date filter on created_at, so an
+        // order created weeks ago and paid today was invisible to "who paid today".
+        // paid_at is stored in UTC; `tz` (e.g. America/Tijuana) makes a day mean
+        // that local day — without it a Tijuana evening payment lands on tomorrow.
+        $tz = $request->input('tz', 'UTC');
         if ($request->filled('paid_from')) {
-            $query->whereDate('paid_at', '>=', $request->paid_from);
+            $query->where('paid_at', '>=', \Carbon\Carbon::parse($request->paid_from, $tz)->startOfDay()->utc());
         }
         if ($request->filled('paid_to')) {
-            $query->whereDate('paid_at', '<=', $request->paid_to);
+            $query->where('paid_at', '<=', \Carbon\Carbon::parse($request->paid_to, $tz)->endOfDay()->utc());
         }
         if ($request->filled('paid_from') || $request->filled('paid_to')) {
             $query->orderByDesc('paid_at');
