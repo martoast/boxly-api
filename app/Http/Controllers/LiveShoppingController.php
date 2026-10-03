@@ -307,6 +307,12 @@ class LiveShoppingController extends Controller
             $carts = Cart::where('user_id', $userId)->where('status', Cart::STATUS_OPEN);
             $cartId = $chat ? $carts->where('conversation_key', $chat)->value('id') : $carts->orderByDesc('updated_at')->orderByDesc('id')->value('id');
             $keep = $cartId ? SyncStoreCartJob::keepFor($cartId, $data['store_id'], true) : [];
+            // A named chat always sends its keep, even empty (a new chat: a clean store bag, cleared during the pick — live
+            // Gymshark 2026-10-03: without it the dwell only planned and the add made the whole bag trip again, ~16 s).
+            // No chat (older callers): an empty keep is not sent, as before.
+            if (! $chat && $keep === []) {
+                $keep = null;
+            }
             $state = $this->engine->preopen($data['store_id'], CartSync::customerRef($request->user()->id), $data['product_url'], $keep);
         } catch (\Throwable $e) {
             Log::info('live-shopping preopen not started', ['store' => $data['store_id'], 'error' => $e->getMessage()]);

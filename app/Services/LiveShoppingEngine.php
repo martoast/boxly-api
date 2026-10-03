@@ -180,14 +180,16 @@ class LiveShoppingEngine
      * cart browser for that store in the background and the "Agregar" a moment later adopts it. Best-effort: returns
      * the engine's preopen state ('started' | 'already' | 'skipped') and never waits more than 3 s.
      */
-    public function preopen(string $storeId, string $customerRef, string $productUrl, array $keep = []): string
+    public function preopen(string $storeId, string $customerRef, string $productUrl, ?array $keep = null): string
     {
+        // `keep` null = not sent (the engine's dwell only reads the bag); an array, even an empty one, is sent: the dwell then
+        // clears every other line itself, and the add skips its own bag trip (one cart per chat: a new chat keeps nothing)
         $data = $this->post('/v1/preopen', [
             'schema_version' => self::SCHEMA_VERSION,
             'store_id'       => $storeId,
             'customer_ref'   => $customerRef,
             'product_url'    => $productUrl,
-        ] + ($keep !== [] ? ['keep' => $keep] : []), [], 3);
+        ] + ($keep !== null ? ['keep' => array_values($keep)] : []), [], 3);
 
         return (string) ($data['preopen'] ?? 'skipped');
     }
