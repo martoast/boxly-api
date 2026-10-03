@@ -68,6 +68,14 @@ class ProcessLiveShoppingResultJob implements ShouldQueue
                 // first. Marking it processed here would drop a real result
                 // forever, so a young receipt stays retryable and the drainer
                 // brings it back.
+                // An add the API gave up on (an error on its create call) may still have run: a line the engine put in the
+                // store's cart settles NOW, while it is pending — not after the horizon, when a retry may already have
+                // added it again (live Alo 2026-10-03: retry 3 min later, horizon 5 min). A line some session is syncing
+                // (the early-delivery race) is never touched.
+                $rescued = \App\Services\CartSync::rescueOrphanedCart($payload['result']['cart'] ?? null);
+                if ($rescued > 0) {
+                    Log::warning('live-shopping unmatched cart result: lines settled in_store_cart', ['delivery_id' => $receipt->delivery_id, 'items' => $rescued]);
+                }
                 $horizon = $this->orphanHorizon();
                 if ($receipt->received_at && $receipt->received_at->gt(now()->subSeconds($horizon))) {
                     $receipt->forceFill(['attempts' => $receipt->attempts + 1])->save();
@@ -80,12 +88,6 @@ class ProcessLiveShoppingResultJob implements ShouldQueue
                     'attempts'    => $receipt->attempts,
                     'horizon'     => $horizon,
                 ]);
-
-                // The engine may have run an add the API gave up on: what it put in the store's cart is still true.
-                $rescued = \App\Services\CartSync::rescueOrphanedCart($payload['result']['cart'] ?? null);
-                if ($rescued > 0) {
-                    Log::warning('live-shopping orphaned cart result: lines settled in_store_cart', ['delivery_id' => $receipt->delivery_id, 'items' => $rescued]);
-                }
 
                 $this->close($receipt, LiveShoppingWebhookReceipt::STATUS_FAILED, 'orphaned');
 

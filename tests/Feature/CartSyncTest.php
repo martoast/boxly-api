@@ -273,17 +273,21 @@ class CartSyncTest extends LiveShoppingTestCase
 
         $this->deliver($this->cartDelivery([$this->line($item)], ['session_id' => 'eng_abandoned']))->assertStatus(202);
         $receipt = LiveShoppingWebhookReceipt::latest('id')->first();
-        $receipt->forceFill(['received_at' => now()->subHour()])->save();   // past the orphan horizon
         (new ProcessLiveShoppingResultJob($receipt->id))->handle();
 
+        // Settled at once — inside the horizon, before any retry could add it again; the receipt itself still waits.
         $this->assertSame('in_store_cart', $item->fresh()->sync_status);
-        $this->assertSame('orphaned', $receipt->fresh()->error_code);
+        $this->assertSame('received', $receipt->fresh()->status);
 
         // Only an in-cart line, only its own cart: a failed line or another cart's ref never touches it.
         $item->refresh()->forceFill(['sync_status' => 'pending'])->save();
         $this->assertSame(0, CartSync::rescueOrphanedCart(['cart_ref' => 'cart-' . ($item->cart_id + 99), 'lines' => [['selection_id' => 'ci-' . $item->id, 'state' => 'in_store_cart']]]));
         $this->assertSame(0, CartSync::rescueOrphanedCart(['cart_ref' => 'cart-' . $item->cart_id, 'lines' => [['selection_id' => 'ci-' . $item->id, 'state' => 'failed']]]));
         $this->assertSame('pending', $item->fresh()->sync_status);
+        // A line some session is adding right now (the early-delivery race) is never touched.
+        $item->refresh()->forceFill(['sync_status' => 'syncing'])->save();
+        $this->assertSame(0, CartSync::rescueOrphanedCart(['cart_ref' => 'cart-' . $item->cart_id, 'lines' => [['selection_id' => 'ci-' . $item->id, 'state' => 'in_store_cart']]]));
+        $this->assertSame('syncing', $item->fresh()->sync_status);
     }
 
     public function test_an_add_creates_a_cart_session_with_the_exact_contract_body(): void
