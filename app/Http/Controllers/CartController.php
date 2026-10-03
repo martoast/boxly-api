@@ -482,6 +482,8 @@ class CartController extends Controller
                 'has_unpriced' => false,
                 'updated_at' => null,
                 'sync_enabled' => \App\Services\CartSync::enabled(),
+                // false: an add waits in the Boxly cart (no live add); the store carts are built at Finalizar
+                'sync_on_add' => \App\Services\CartSync::syncOnAdd(),
                 'live_sessions' => [],
             ];
         }
@@ -523,6 +525,8 @@ class CartController extends Controller
             // C3: whether adds are being mirrored into the real store carts. With it
             // off the app never waits on (or polls for) a store sync that won't run.
             'sync_enabled' => \App\Services\CartSync::enabled(),
+            // false: an add waits in the Boxly cart (no live add); the store carts are built at Finalizar
+            'sync_on_add' => \App\Services\CartSync::syncOnAdd(),
             // C4 (watch in chat): the store browsers the agent is running for this cart right
             // now, so the chat can show them live (view-only ticket via /live-shopping/sessions/{id}/ticket).
             'live_sessions' => $this->liveSessions($cart),

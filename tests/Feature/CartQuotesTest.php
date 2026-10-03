@@ -88,7 +88,7 @@ class CartQuotesTest extends LiveShoppingTestCase
         }
         config(['app.key' => 'base64:' . base64_encode(str_repeat('k', 32))]);
         $this->configureEngine([
-            'cart_sync' => true, 'cart_quotes' => true, 'cart_sync_connection' => 'sync',
+            'cart_sync' => true, 'cart_sync_on_add' => true, 'cart_quotes' => true, 'cart_sync_connection' => 'sync', 'quote_parallel' => 1,
             'quote_max_store_usd' => 1500, 'quote_max_order_usd' => 3000,
         ]);
         Mail::fake();
@@ -673,6 +673,39 @@ class CartQuotesTest extends LiveShoppingTestCase
         $this->deliverQuote(StoreQuote::where('store_id', 'nike')->first(), $this->quoteBlock('partial', 5000), 2, [$b->id => 'unavailable']);
         $lines = CartQuotes::checkoutSummary($pr->fresh())['stores'][0]['lines'];
         $this->assertSame(['in_store_cart', 'unavailable'], array_column($lines, 'state'), 'state comes from the cart item sync_status');
+    }
+
+    // ── Alex 2026-10-03: adds wait in the Boxly cart; Finalizar builds the store carts, up to 2 at once ──
+
+    public function test_an_add_never_starts_a_store_sync_by_default(): void
+    {
+        config(['services.live_shopping_engine.cart_sync_on_add' => false]);
+        $u = $this->tester();
+        Queue::fake();
+        $r = $this->add($u, 'nike', 'https://www.nike.com/t/a');
+        Queue::assertNotPushed(\App\Jobs\SyncStoreCartJob::class);
+        $this->assertSame('pending', CartItem::first()->sync_status);
+        $this->actingAs($u)->getJson('/cart')->assertJsonPath('data.sync_on_add', false);
+        // and the stalled-line sweep never sends it either
+        CartItem::query()->update(['updated_at' => now()->subMinutes(5)]);
+        \App\Services\CartSync::redispatchStalled();
+        Queue::assertNotPushed(\App\Jobs\SyncStoreCartJob::class);
+    }
+
+    public function test_finalizar_builds_two_stores_at_once_then_the_next(): void
+    {
+        config(['services.live_shopping_engine.quote_parallel' => 2, 'services.live_shopping_engine.cart_sync_on_add' => false]);
+        $this->finalizedAddOrder();
+        [$nike, $gap, $adidas] = StoreQuote::orderBy('id')->get()->all();
+        Queue::assertPushed(QuoteStoreCartJob::class, 2);
+        Queue::assertPushed(QuoteStoreCartJob::class, fn ($j) => $j->storeQuoteId === $nike->id);
+        Queue::assertPushed(QuoteStoreCartJob::class, fn ($j) => $j->storeQuoteId === $gap->id);
+        $this->assertNull($adidas->fresh()->dispatched_at);
+
+        // the first to finish frees a slot: the third starts, and only it
+        $this->settle($gap->fresh(), 'verified');
+        Queue::assertPushed(QuoteStoreCartJob::class, 1);
+        Queue::assertPushed(QuoteStoreCartJob::class, fn ($j) => $j->storeQuoteId === $adidas->id);
     }
 }
 

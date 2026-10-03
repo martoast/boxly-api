@@ -52,9 +52,19 @@ class CartSync
      * Pinned to a real queue (`database`, like the webhook's result job): on the `sync` driver the
      * job's busy-engine `release()` is a silent no-op and the items would sit `pending` forever.
      */
+    /**
+     * Whether an add fills the store's cart at once (Alex 2026-10-03: no — the line waits in the Boxly cart and every
+     * store's cart is built at Finalizar, so shopping is never interrupted by a live add).
+     */
+    public static function syncOnAdd(): bool
+    {
+        return self::enabled() && (bool) config('services.live_shopping_engine.cart_sync_on_add', false);
+    }
+
+    /** The add-time sync of one store's lines — only when syncOnAdd (Finalizar's quotes build the carts otherwise). */
     public static function dispatch(int $cartId, string $storeId): void
     {
-        if (self::enabled()) {
+        if (self::syncOnAdd()) {
             SyncStoreCartJob::dispatch($cartId, $storeId)->onConnection(config('services.live_shopping_engine.cart_sync_connection'))->afterCommit();
         }
     }

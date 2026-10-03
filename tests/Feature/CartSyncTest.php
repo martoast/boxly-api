@@ -60,7 +60,8 @@ class CartSyncTest extends LiveShoppingTestCase
         }
 
         config(['app.key' => 'base64:' . base64_encode(str_repeat('k', 32))]);
-        $this->configureEngine(['cart_sync' => true]);
+        // these tests cover the add-time sync (the old flow, still behind LIVE_SHOPPING_CART_SYNC_ON_ADD)
+        $this->configureEngine(['cart_sync' => true, 'cart_sync_on_add' => true]);
     }
 
     // ── helpers ──────────────────────────────────────────────────────────

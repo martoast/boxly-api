@@ -189,6 +189,11 @@ return [
         // behaves exactly as before and no sync job is ever dispatched.
         // On by default: every customer's box is mirrored into the real store carts (the product since 2026-09-28).
         'cart_sync'       => (bool) env('LIVE_SHOPPING_CART_SYNC', true),
+        // Alex 2026-10-03: an add is instant (the line waits in the Boxly cart); every store cart is built at Finalizar.
+        // true = the old flow (each add filled the store's cart at once, with its live video).
+        'cart_sync_on_add' => (bool) env('LIVE_SHOPPING_CART_SYNC_ON_ADD', false),
+        // Finalizar builds and checks out up to this many stores at once (one machine serves the live site too).
+        'quote_parallel'   => (int) env('LIVE_SHOPPING_QUOTE_PARALLEL', 2),
         // A real queue: SyncStoreCartJob's busy-engine release() is a silent no-op on `sync`.
         'cart_sync_connection' => env('LIVE_SHOPPING_CART_SYNC_CONNECTION', 'database'),
         // C5: at Finalizar, the engine takes a checkout quote per store and the

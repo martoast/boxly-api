@@ -49,32 +49,41 @@ class CartQuotes
         self::dispatchNext($pr->id);
     }
 
+    /** How many stores of one request are built and checked out at once (Alex 2026-10-03: in parallel, up to 2). */
+    public static function parallel(): int
+    {
+        return max(1, (int) config('services.live_shopping_engine.quote_parallel', 2));
+    }
+
     /**
-     * One store at a time: start the request's first pending quote (by id) unless one is running or already in flight
-     * (pending with dispatched_at set; the reconcile re-sends a stale one). The claim is a conditional UPDATE, so of
-     * two racing callers only the winner dispatches.
+     * Up to parallel() stores at a time: start the request's next pending quotes (by id) while fewer than that are
+     * running or already in flight (pending with dispatched_at set; the reconcile re-sends a stale one). Each claim is a
+     * conditional UPDATE, so of two racing callers only the winner dispatches a given quote.
      */
     public static function dispatchNext(int $purchaseRequestId): void
     {
-        // Under the request's row lock, so a webhook settle and the reconcile cannot both pass the in-flight check.
+        // Under the request's row lock, so a webhook settle and the reconcile cannot both pass the in-flight count.
         DB::transaction(function () use ($purchaseRequestId) {
             PurchaseRequest::where('id', $purchaseRequestId)->lockForUpdate()->first();
-            $quotes = StoreQuote::where('purchase_request_id', $purchaseRequestId);
+            $quotes = fn () => StoreQuote::where('purchase_request_id', $purchaseRequestId);
             $guarded = Schema::hasColumn('store_quotes', 'dispatched_at');
-            if ((clone $quotes)->where(fn ($q) => $guarded
+            $inFlight = $quotes()->where(fn ($q) => $guarded
                 ? $q->where('status', StoreQuote::STATUS_RUNNING)->orWhere(fn ($p) => $p->where('status', StoreQuote::STATUS_PENDING)->whereNotNull('dispatched_at'))
-                : $q->where('status', StoreQuote::STATUS_RUNNING))->exists()) {
+                : $q->where('status', StoreQuote::STATUS_RUNNING))->count();
+            $free = self::parallel() - $inFlight;
+            if ($free <= 0) {
                 return;
             }
-            $next = $quotes->where('status', StoreQuote::STATUS_PENDING)->orderBy('id')->first();
-            if (! $next) {
-                return;
+            $next = $quotes()->where('status', StoreQuote::STATUS_PENDING)
+                ->when($guarded, fn ($q) => $q->whereNull('dispatched_at'))
+                ->orderBy('id')->limit($free)->get();
+            foreach ($next as $quote) {
+                if ($guarded && StoreQuote::where('id', $quote->id)->where('status', StoreQuote::STATUS_PENDING)->whereNull('dispatched_at')
+                    ->update(['dispatched_at' => now()]) === 0) {
+                    continue;
+                }
+                self::dispatch($quote);   // afterCommit: the job starts once the claim is committed
             }
-            if ($guarded && StoreQuote::where('id', $next->id)->where('status', StoreQuote::STATUS_PENDING)->whereNull('dispatched_at')
-                ->update(['dispatched_at' => now()]) === 0) {
-                return;
-            }
-            self::dispatch($next);   // afterCommit: the job starts once the claim is committed
         });
     }
 
@@ -91,13 +100,10 @@ class CartQuotes
             ->whereIn('purchase_request_id', PurchaseRequest::where('status', PurchaseRequest::STATUS_PENDING_REVIEW)->whereNull('stripe_invoice_id')->select('id'))
             ->distinct()->pluck('purchase_request_id');
         foreach ($ids as $id) {
-            if (StoreQuote::where('purchase_request_id', $id)->where('status', StoreQuote::STATUS_RUNNING)->exists()) {
-                continue;
-            }
-            $first = StoreQuote::where('purchase_request_id', $id)->where('status', StoreQuote::STATUS_PENDING)->orderBy('id')->first();
-            if ($first && $first->dispatched_at !== null && $first->dispatched_at->lt(now()->subMinutes(10))) {
-                StoreQuote::where('id', $first->id)->where('status', StoreQuote::STATUS_PENDING)->update(['dispatched_at' => null]);
-            }
+            // a dispatched quote whose job never started (lost queue job) is released after 10 min; then the free slots fill
+            StoreQuote::where('purchase_request_id', $id)->where('status', StoreQuote::STATUS_PENDING)
+                ->whereNotNull('dispatched_at')->where('dispatched_at', '<', now()->subMinutes(10))
+                ->update(['dispatched_at' => null]);
             self::dispatchNext($id);
         }
     }
