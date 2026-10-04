@@ -97,9 +97,12 @@ class StoreQuoteInvoice
         }
 
         $pr->update([
+            // items_total is our cost basis: each store's checkout TOTAL, which already
+            // includes its shipping and tax. Those stay 0 here (the split lives in
+            // store_costs), as the manual quote does, or the dashboard counts them twice.
             'items_total'       => $usd($storesCents),
-            'shipping_cost'     => $usd((int) $billable->sum('shipping_cents')),
-            'sales_tax'         => $usd((int) $billable->sum('tax_cents')),
+            'shipping_cost'     => 0,
+            'sales_tax'         => 0,
             'store_costs'       => $storeCosts,
             'processing_fee'    => $usd($feeCents),
             'total_amount'      => $usd($totalCents),
