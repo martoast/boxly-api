@@ -124,7 +124,7 @@
                 @foreach([['merchandise', 'Productos', 'Products'], ['discounts', 'Descuentos', 'Discounts'], ['shipping', 'Envío a nuestra bodega', 'Shipping to our warehouse'], ['tax', 'Impuestos', 'Sales tax'], ['fees', 'Cargos de la tienda', 'Store fees']] as [$key, $es, $en])
                     @if(isset($sc[$key]) && ! (in_array($key, ['discounts', 'fees'], true) && (float) $sc[$key] == 0))
                         <tr>
-                            <td style="padding: 2px 0 2px 12px; color: #666;">{{ $locale === 'es' ? $es : $en }}@if($key === 'tax' && ! empty($sc['estimated'])) ({{ $locale === 'es' ? 'estimado por la tienda' : 'estimated by the store' }})@endif</td>
+                            <td style="padding: 2px 0 2px 12px; color: #666;">{{ $locale === 'es' ? $es : $en }}@if($key === 'tax' && ! empty($sc['estimated'])) ({{ $locale === 'es' ? 'estimado' : 'estimated' }})@endif</td>
                             <td style="padding: 2px 0; text-align: right; color: #666;">{{ $key === 'discounts' ? '-' : '' }}${{ number_format(abs((float) $sc[$key]), 2) }}</td>
                         </tr>
                     @endif
