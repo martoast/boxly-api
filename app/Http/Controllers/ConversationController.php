@@ -37,6 +37,7 @@ class ConversationController extends Controller
             'title' => $validated['title'] ?? null,
             'last_message_at' => now(),
         ]);
+        Conversation::trimForUser($request->user()->id);
 
         return response()->json(['success' => true, 'data' => $conversation], 201);
     }
@@ -252,6 +253,8 @@ class ConversationController extends Controller
         foreach ($validated['messages'] as $m) {
             $conversation->messages()->create(['role' => $m['role'], 'content' => $m['content']]);
         }
+
+        Conversation::trimForUser($request->user()->id);
 
         return response()->json(['success' => true, 'data' => $conversation->load('messages')], 201);
     }
