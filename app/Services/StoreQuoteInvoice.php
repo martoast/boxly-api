@@ -70,7 +70,7 @@ class StoreQuoteInvoice
             $name = $q->store_name ?: $q->store_id;
             $line(
                 "{$name}: productos, envío e impuestos a nuestra bodega en San Diego (total de la tienda"
-                . ($q->estimated ? ', impuestos estimados por la tienda' : '') . ')',
+                . ($q->estimated ? ', impuestos estimados' : '') . ')',
                 (int) $q->total_cents,
             );
         }
