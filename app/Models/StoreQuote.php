@@ -61,7 +61,17 @@ class StoreQuote extends Model
             return [];
         }
 
-        return $pr->storeQuotes()->reorder('id')->get()->map(function (self $q) use ($forTeam) {
+        // What goes into each store's cart (the order card shows it per store, with photos — Alex 2026-10-05).
+        $lines = [];
+        $cart = \App\Models\Cart::where('purchase_request_id', $pr->id)->latest('id')->with('items')->first();
+        foreach ($cart?->items ?? [] as $it) {
+            $lines[$it->store_id][] = [
+                'title' => $it->title, 'image_url' => $it->image_url,
+                'quantity' => max(1, (int) $it->quantity), 'variants' => is_array($it->variants) ? $it->variants : [],
+            ];
+        }
+
+        return $pr->storeQuotes()->reorder('id')->get()->map(function (self $q) use ($forTeam, $lines) {
             $row = [
                 'store_id'    => $q->store_id,
                 'store_name'  => $q->store_name,
@@ -72,6 +82,9 @@ class StoreQuote extends Model
                 // The store browser taking this quote right now (watchable in the chat).
                 'live_session_id' => $q->status === self::STATUS_RUNNING ? $q->live_shopping_session_id : null,
                 'reason'      => $q->dropReason(),
+                'lines'       => $lines[$q->store_id] ?? [],
+                // When this store's run began, for the card's step-by-step status.
+                'running_since' => $q->status === self::STATUS_RUNNING ? optional($q->updated_at)->toIso8601String() : null,
             ];
             foreach (self::MONEY as $part) {
                 $row["{$part}_cents"] = $q->{"{$part}_cents"};

@@ -352,6 +352,18 @@ class CartQuotesTest extends LiveShoppingTestCase
         $this->assertSame($rows['nike']['reason'], $summary['stores'][0]['reason']);
     }
 
+    public function test_each_store_row_lists_its_own_products_for_the_order_card(): void
+    {
+        [, $pr] = $this->finalizedTwoStores();
+        $rows = collect(StoreQuote::payloadFor($pr, false))->keyBy('store_id');
+        foreach (['nike', 'gap'] as $store) {
+            $this->assertNotEmpty($rows[$store]['lines'], "{$store} lists its products");
+            $this->assertSame($rows[$store]['lines'], collect($rows[$store]['lines'])->map(fn ($l) => array_intersect_key($l, array_flip(['title', 'image_url', 'quantity', 'variants'])))->all(), 'only title, photo, quantity and options');
+        }
+        $titles = fn ($s) => collect($rows[$s]['lines'])->pluck('title')->all();
+        $this->assertEmpty(array_intersect($titles('nike'), $titles('gap')), 'a store lists only its own products');
+    }
+
     public function test_a_dropped_store_is_in_the_summary_but_not_in_the_totals(): void
     {
         [$u, $pr] = $this->finalizedTwoStores();
