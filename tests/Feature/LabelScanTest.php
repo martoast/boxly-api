@@ -20,6 +20,7 @@ class LabelScanTest extends LiveShoppingTestCase
         parent::setUp();
         $this->artisan('migrate', ['--path' => 'database/migrations/2026_04_29_000007_add_team_to_users.php', '--force' => true]);
         $this->artisan('migrate', ['--path' => 'database/migrations/2026_10_07_000000_create_label_scans_table.php', '--force' => true]);
+        $this->artisan('migrate', ['--path' => 'database/migrations/2026_04_30_000000_create_personal_access_tokens_table.php', '--force' => true]);
         Storage::fake('spaces');
     }
 
@@ -103,5 +104,36 @@ class LabelScanTest extends LiveShoppingTestCase
         $admin = $this->user('admin');
         $this->actingAs($admin)->postJson('/admin/label-scans', ['packages' => json_encode([['recipient_name' => 'x']])])->assertStatus(422);
         $this->upload($admin, 'admin', [])->assertStatus(422);
+    }
+
+    public function test_an_admin_api_key_reads_and_corrects_label_scans(): void
+    {
+        // Alex 2026-10-07: an admin's agent works from these with its API key (Sanctum bearer token).
+        $admin = $this->user('admin');
+        $this->upload($admin, 'admin', [['tracking_number' => '1Z07F8A70396079847', 'recipient_name' => 'BOXLY VASCO BAUTISTA']]);
+        $this->app['auth']->forgetGuards(); // drop the session login: the key alone must work
+        $key = $admin->createToken('agent', ['*'])->plainTextToken;
+
+        $this->withToken($key)->getJson('/admin/label-scans?search=1Z07F8A7')->assertOk()
+            ->assertJsonPath('data.total', 1)
+            ->assertJsonPath('data.data.0.recipient_name', 'BOXLY VASCO BAUTISTA')
+            ->assertJsonPath('data.data.0.tracking_number', '1Z07F8A70396079847');
+        $id = LabelScan::first()->id;
+        $this->withToken($key)->putJson("/admin/label-scans/{$id}", ['needs_check' => true])->assertOk()->assertJsonPath('data.needs_check', true);
+
+        $this->app['auth']->forgetGuards();
+        $customerKey = $this->user('customer')->createToken('agent', ['*'])->plainTextToken;
+        $this->withToken($customerKey)->getJson('/admin/label-scans')->assertStatus(403);
+    }
+
+    public function test_since_returns_only_newer_rows(): void
+    {
+        $admin = $this->user('admin');
+        $this->upload($admin, 'admin', [['recipient_name' => 'Old']]);
+        LabelScan::query()->update(['created_at' => now()->subHour()]);
+        $this->upload($admin, 'admin', [['recipient_name' => 'New']]);
+
+        $this->actingAs($admin)->getJson('/admin/label-scans?since=' . urlencode(now()->subMinutes(5)->toIso8601String()))
+            ->assertOk()->assertJsonPath('data.total', 1)->assertJsonPath('data.data.0.recipient_name', 'New');
     }
 }

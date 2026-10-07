@@ -17,9 +17,20 @@ use Illuminate\Support\Str;
  */
 class AdminLabelScanController extends Controller
 {
+    /**
+     * Packages that arrived at the warehouse, newest first — one row per package read off a label photo:
+     * recipient_name, tracking_number (exact, from the barcode), carrier, other_tracking, image_url, needs_check
+     * (true = a person should look: no barcode, no name, or an unsure read), created_at. Query: search (name /
+     * tracking number), needs_check=1, since (ISO date-time: only rows uploaded after it — poll for new arrivals),
+     * per_page (default 100), page. Paginated: data.data[], data.total, data.last_page.
+     */
     public function index(Request $request)
     {
         $query = LabelScan::with('creator:id,name');
+
+        if ($since = $request->input('since')) {
+            $query->where('created_at', '>', \Illuminate\Support\Carbon::parse($since));
+        }
 
         if ($search = $request->input('search')) {
             $query->where(function ($q) use ($search) {
@@ -39,8 +50,9 @@ class AdminLabelScanController extends Controller
     }
 
     /**
-     * One photo + the package(s) read from it. Usually one package; a photo that
-     * shows two labels yields two rows sharing the image.
+     * Save one label photo and the package(s) read from it (multipart: image file, packages = JSON array of
+     * {tracking_number, carrier, recipient_name, needs_check, …}, optional batch). Normally called by the
+     * label-scans page, which does the reading; a photo showing two labels yields two rows sharing the image.
      */
     public function store(Request $request)
     {
@@ -95,7 +107,7 @@ class AdminLabelScanController extends Controller
         return response()->json(['success' => true, 'data' => $rows], 201);
     }
 
-    /** Hand corrections: fix a name, fill in a hidden tracking number, clear the check flag. */
+    /** Correct one package: recipient_name, tracking_number, carrier, needs_check (false = checked by a person). */
     public function update(Request $request, LabelScan $labelScan)
     {
         $validated = $request->validate([
@@ -112,6 +124,7 @@ class AdminLabelScanController extends Controller
         return response()->json(['success' => true, 'data' => $labelScan->fresh()->load('creator:id,name')]);
     }
 
+    /** Delete one package row (its photo stays in storage: another row from the same photo may use it). */
     public function destroy(LabelScan $labelScan)
     {
         $labelScan->delete();

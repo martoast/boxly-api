@@ -75,7 +75,7 @@ All **160** admin endpoints are available. `php artisan route:list --path=admin`
 is the authoritative list. The main groups:
 
 `affiliates` · `ai-search` · `boxes` · `campaigns` · `categories` ·
-`customers` · `dashboard` · `drop-off-receipts` · `expenses` · `knowledge` ·
+`customers` · `dashboard` · `drop-off-receipts` · `expenses` · `knowledge` · `label-scans` ·
 `management` · `operations-board` · `order-events` · `orders` · `packages` ·
 `purchase-requests` · `shopper-extension` · `shopping-trips` ·
 `starter-prompts` · `stores` · `stripe` · `users` · `war-chest`

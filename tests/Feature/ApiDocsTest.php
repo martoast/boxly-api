@@ -87,4 +87,13 @@ class ApiDocsTest extends LiveShoppingTestCase
         $this->assertStringContainsString('text/markdown', $res->headers->get('Content-Type'));
         $this->assertStringContainsString('`GET /admin/orders`', $res->getContent());
     }
+
+    public function test_an_admin_agent_finds_label_scans(): void
+    {
+        // Alex 2026-10-07: the admin's agent reads arrived packages with its API key.
+        $md = $this->actingAs($this->user(User::ROLE_ADMIN), 'sanctum')->get('/me/api-docs?format=md')->assertOk()->getContent();
+
+        $this->assertStringContainsString('`GET /admin/label-scans` — Packages that arrived at the warehouse', $md);
+        $this->assertStringContainsString('since (ISO date-time', $md);
+    }
 }
