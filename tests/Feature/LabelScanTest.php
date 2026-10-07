@@ -1,0 +1,107 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Models\LabelScan;
+use App\Models\User;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
+use Tests\LiveShoppingTestCase;
+
+/**
+ * Label scans: /admin/label-scans and /employee/label-scans (warehouse upload of label photos).
+ *
+ *   vendor/bin/phpunit tests/Feature/LabelScanTest.php
+ */
+class LabelScanTest extends LiveShoppingTestCase
+{
+    protected function setUp(): void
+    {
+        parent::setUp();
+        $this->artisan('migrate', ['--path' => 'database/migrations/2026_04_29_000007_add_team_to_users.php', '--force' => true]);
+        $this->artisan('migrate', ['--path' => 'database/migrations/2026_10_07_000000_create_label_scans_table.php', '--force' => true]);
+        Storage::fake('spaces');
+    }
+
+    private function user(string $role): User
+    {
+        return User::factory()->createQuietly(['role' => $role]);
+    }
+
+    /** A real 8x8 JPEG: the test PHP has no GD, so UploadedFile::fake()->image() cannot draw one. */
+    private const JPEG = '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/wAALCAAIAAgBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AVN//2Q==';
+
+    private function upload(User $u, string $prefix, array $packages)
+    {
+        return $this->actingAs($u)->post("/{$prefix}/label-scans", [
+            'image'    => UploadedFile::fake()->createWithContent('label.jpg', base64_decode(self::JPEG)),
+            'batch'    => 'b1',
+            'packages' => json_encode($packages),
+        ], ['Accept' => 'application/json']);
+    }
+
+    public function test_admin_uploads_one_photo_and_gets_a_row_per_package(): void
+    {
+        $admin = $this->user('admin');
+        $r = $this->upload($admin, 'admin', [
+            ['tracking_number' => '1Z07F8A70396079847', 'carrier' => 'ups', 'recipient_name' => 'BOXLY VASCO BAUTISTA', 'barcodes' => ['1Z07F8A70396079847'], 'confidence' => 'high'],
+            ['tracking_number' => null, 'recipient_name' => 'BOXLY Vasco Bautista', 'needs_check' => true],
+        ])->assertStatus(201);
+
+        $this->assertCount(2, $r->json('data'));
+        $this->assertSame(2, LabelScan::count());
+        $first = LabelScan::orderBy('id')->first();
+        $this->assertSame('1Z07F8A70396079847', $first->tracking_number);
+        $this->assertSame(['1Z07F8A70396079847'], $first->barcodes);
+        $this->assertFalse($first->needs_check);
+        $this->assertTrue(LabelScan::orderByDesc('id')->first()->needs_check);
+        $this->assertSame($first->image_path, LabelScan::orderByDesc('id')->first()->image_path); // one photo, two rows
+        Storage::disk('spaces')->assertExists($first->image_path);
+        $this->assertSame($admin->id, $first->created_by);
+    }
+
+    public function test_index_searches_by_name_or_tracking_and_filters_needs_check(): void
+    {
+        $admin = $this->user('admin');
+        $this->upload($admin, 'admin', [['tracking_number' => '9400150106151227876306', 'recipient_name' => 'MARCELA TALAVERA MENDOZA']]);
+        $this->upload($admin, 'admin', [['tracking_number' => null, 'recipient_name' => 'Sandra Casas', 'needs_check' => true]]);
+
+        $this->actingAs($admin)->getJson('/admin/label-scans?search=marcela')->assertOk()->assertJsonPath('data.total', 1);
+        $this->actingAs($admin)->getJson('/admin/label-scans?search=94001501')->assertOk()->assertJsonPath('data.total', 1);
+        $this->actingAs($admin)->getJson('/admin/label-scans?needs_check=1')->assertOk()
+            ->assertJsonPath('data.total', 1)->assertJsonPath('data.data.0.recipient_name', 'Sandra Casas');
+        // newest first
+        $this->actingAs($admin)->getJson('/admin/label-scans')->assertJsonPath('data.data.0.recipient_name', 'Sandra Casas');
+    }
+
+    public function test_update_fixes_a_row_and_destroy_removes_it(): void
+    {
+        $admin = $this->user('admin');
+        $this->upload($admin, 'admin', [['tracking_number' => null, 'recipient_name' => 'BOXLY MONSERAT MARTINEZ', 'needs_check' => true]]);
+        $scan = LabelScan::first();
+
+        $this->actingAs($admin)->putJson("/admin/label-scans/{$scan->id}", [
+            'recipient_name' => 'BOXLY MONSERRAT MARTINEZ', 'tracking_number' => '1Z22FW26YN93529953', 'needs_check' => false,
+        ])->assertOk()->assertJsonPath('data.recipient_name', 'BOXLY MONSERRAT MARTINEZ')->assertJsonPath('data.needs_check', false);
+
+        $this->actingAs($admin)->deleteJson("/admin/label-scans/{$scan->id}")->assertOk();
+        $this->assertSame(0, LabelScan::count());
+    }
+
+    public function test_employee_route_works_customers_cannot(): void
+    {
+        $this->getJson('/admin/label-scans')->assertStatus(401); // before any actingAs: it sticks for the rest of the test
+        // The users-table CHECK the test migrations build predates the 'employee' role (prod widens it with a
+        // MySQL-only ENUM rewrite), so /employee is exercised with an admin, whom canManageWarehouse() also lets in.
+        $this->upload($this->user('admin'), 'employee', [['tracking_number' => 'BTS_054002QMMA7', 'recipient_name' => 'Velonie Villalobos']])->assertStatus(201);
+        $this->upload($this->user('customer'), 'admin', [['recipient_name' => 'x']])->assertStatus(403);
+        $this->upload($this->user('customer'), 'employee', [['recipient_name' => 'x']])->assertStatus(403);
+    }
+
+    public function test_store_requires_an_image_and_at_least_one_package(): void
+    {
+        $admin = $this->user('admin');
+        $this->actingAs($admin)->postJson('/admin/label-scans', ['packages' => json_encode([['recipient_name' => 'x']])])->assertStatus(422);
+        $this->upload($admin, 'admin', [])->assertStatus(422);
+    }
+}

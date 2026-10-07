@@ -1,0 +1,12 @@
+# Label scans API (Alex 2026-10-07) — app side: boxly app tasks/label-scans.md
+
+- [x] Migration label_scans (standalone: tracking, carrier, other_tracking, name, suite, ship_from, store order #s,
+      raw barcodes, model read, confidence, needs_check, image path/url, created_by). One photo can give 2 rows.
+- [x] Model LabelScan; Admin\AdminLabelScanController index (search name/tracking/sender, needs_check filter,
+      newest first) / store (multipart: image + packages JSON + batch; image to Spaces label-scans/<date>/) /
+      update / destroy
+- [x] Routes under /admin/label-scans and /employee/label-scans (CORS already covers admin/*, employee/*)
+- [x] tests/Feature/LabelScanTest.php — 5 tests, 29 assertions (php:8.3-cli docker)
+
+## Review
+Small, standalone, mirrors drop-off receipts. Deleting a row leaves the photo in Spaces (another row may share it).

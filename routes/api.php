@@ -39,6 +39,7 @@ use App\Http\Controllers\Admin\AdminKnowledgeController;
 use App\Http\Controllers\Admin\AdminPurchasedProductController;
 use App\Http\Controllers\Admin\AdminTokenController;
 use App\Http\Controllers\Admin\AdminDropOffReceiptController;
+use App\Http\Controllers\Admin\AdminLabelScanController;
 
 /*
 |--------------------------------------------------------------------------
@@ -584,6 +585,15 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/{store}/logo', [AdminStoreController::class, 'uploadLogo']);
         });
 
+        // Label scans — packages arrived at the warehouse, read off label photos.
+        // Mirrored under /employee so the warehouse can upload them.
+        Route::prefix('label-scans')->group(function () {
+            Route::get('/', [AdminLabelScanController::class, 'index']);
+            Route::post('/', [AdminLabelScanController::class, 'store']);
+            Route::put('/{labelScan}', [AdminLabelScanController::class, 'update']);
+            Route::delete('/{labelScan}', [AdminLabelScanController::class, 'destroy']);
+        });
+
         // Drop-off receipts — proof we received something handed over in person.
         // Mirrored under /employee below so Mau can create them at the warehouse.
         Route::prefix('drop-off-receipts')->group(function () {
@@ -651,6 +661,14 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/orders', [EmployeeOrderController::class, 'index']);
         Route::get('/orders/{order}', [EmployeeOrderController::class, 'show']);
         Route::post('/orders/{order}/arrival-images', [EmployeeOrderController::class, 'uploadArrivalImages']);
+
+        // Label scans — packages arrived at the warehouse, read off label photos. Same controller as /admin/label-scans.
+        Route::prefix('label-scans')->group(function () {
+            Route::get('/', [AdminLabelScanController::class, 'index']);
+            Route::post('/', [AdminLabelScanController::class, 'store']);
+            Route::put('/{labelScan}', [AdminLabelScanController::class, 'update']);
+            Route::delete('/{labelScan}', [AdminLabelScanController::class, 'destroy']);
+        });
 
         // Drop-off receipts — same controller as /admin/drop-off-receipts.
         Route::prefix('drop-off-receipts')->group(function () {
