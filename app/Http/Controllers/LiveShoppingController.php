@@ -96,17 +96,18 @@ class LiveShoppingController extends Controller
         // Claim the one active slot at INSERT. No precheck: two concurrent
         // creates would both read "none" and both insert. The unique index on
         // (user_id, active_slot) is the arbiter.
+        $claim = fn () => LiveShoppingSession::create([
+            'user_id'         => $request->user()->id,
+            'conversation_id' => $conversation?->id,
+            'status'          => LiveShoppingSession::STATUS_PENDING,
+            'store_id'        => $storeIds[0],
+            'kind'            => $kind,
+            'stores'          => array_map(fn ($id) => ['id' => $id], $storeIds),
+            'objective'       => $objective,
+            'active_slot'     => 1,
+        ]);
         try {
-            $session = LiveShoppingSession::create([
-                'user_id'         => $request->user()->id,
-                'conversation_id' => $conversation?->id,
-                'status'          => LiveShoppingSession::STATUS_PENDING,
-                'store_id'        => $storeIds[0],
-                'kind'            => $kind,
-                'stores'          => array_map(fn ($id) => ['id' => $id], $storeIds),
-                'objective'       => $objective,
-                'active_slot'     => 1,
-            ]);
+            $session = $claim();
         } catch (QueryException $e) {
             // ONLY the active-slot collision is a 409. Any other database
             // failure is a real fault and must not be disguised as "you already
@@ -114,11 +115,32 @@ class LiveShoppingController extends Controller
             if (! $this->isActiveSlotCollision($e)) {
                 throw $e;
             }
-
-            return response()->json([
-                'success' => false,
-                'message' => 'You already have a live shopping session running.',
-            ], 409);
+            // THE NEWEST SEARCH WINS (prod 2026-10-08: a shopper's Owala search ran 2.5 min in one chat while his Bath & Body Works
+            // search in another was refused twice — "still loading"). A search holding the slot is cancelled and its slot freed;
+            // a cart (checkout) or a customer-driven session is never replaced.
+            $session = null;
+            $held = LiveShoppingSession::where('user_id', $request->user()->id)->where('active_slot', 1)->first();
+            if ($kind === LiveShoppingSession::KIND_AGENT && $held && $held->kind === LiveShoppingSession::KIND_AGENT) {
+                if ($held->engine_session_id) {
+                    $this->engine->cancelSessionQuietly($held->engine_session_id, 'superseded');
+                }
+                LiveShoppingSession::where('id', $held->id)
+                    ->whereIn('status', LiveShoppingSession::ACTIVE_STATUSES)
+                    ->update(['status' => LiveShoppingSession::STATUS_CANCELLED, 'error_code' => 'superseded', 'active_slot' => null, 'updated_at' => now()]);
+                try {
+                    $session = $claim();
+                } catch (QueryException $e2) {
+                    if (! $this->isActiveSlotCollision($e2)) {
+                        throw $e2;
+                    }
+                }
+            }
+            if (! $session) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'You already have a live shopping session running.',
+                ], 409);
+            }
         }
 
         try {

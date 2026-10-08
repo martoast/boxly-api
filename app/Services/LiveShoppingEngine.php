@@ -531,12 +531,12 @@ class LiveShoppingEngine
      * matters is that we do not resurrect a local row outside the one-active
      * constraint.
      */
-    public function cancelSessionQuietly(string $engineSessionId): void
+    public function cancelSessionQuietly(string $engineSessionId, string $reason = 'local_state_lost'): void
     {
         try {
             $this->post('/v1/sessions/' . rawurlencode($engineSessionId) . '/cancel', [
                 'schema_version' => self::SCHEMA_VERSION,
-                'reason'         => 'local_state_lost',
+                'reason'         => $reason,
             ]);
         } catch (Throwable $e) {
             Log::warning('live-shopping best-effort cancel failed', [

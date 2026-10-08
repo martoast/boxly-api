@@ -353,10 +353,16 @@ class CreateSessionTest extends LiveShoppingTestCase
         ])->assertStatus(503);
     }
 
-    public function test_second_concurrent_session_is_a_409(): void
+    /** The newest search wins (prod 2026-10-08: a running search refused the shopper's next one twice). */
+    public function test_a_second_search_replaces_the_running_search(): void
     {
         [$user, $conversation] = $this->actor();
-        $this->engineOk(['conversation_id' => (string) $conversation->id]);
+        $made = fn (string $id) => Http::response(['ok' => true, 'data' => ['schema_version' => 1, 'session' => [
+            'id' => $id, 'conversation_id' => (string) $conversation->id, 'store_id' => 'on', 'status' => 'running', 'latest_seq' => 5,
+            'created_at' => now()->toIso8601String(), 'expires_at' => now()->addMinutes(10)->toIso8601String(),
+        ]]], 201);
+        // the first search, its cancel, the second search
+        Http::fake(['engine.test/*' => Http::sequence()->pushResponse($made('eng_1'))->push(['ok' => true, 'data' => ['schema_version' => 1]], 200)->pushResponse($made('eng_2'))]);
 
         $this->actingAs($user)->postJson('/live-shopping/sessions', [
             'conversation_id' => $conversation->id, 'objective' => 'x', 'store_id' => 'on',
@@ -364,7 +370,30 @@ class CreateSessionTest extends LiveShoppingTestCase
 
         $this->actingAs($user)->postJson('/live-shopping/sessions', [
             'conversation_id' => $conversation->id, 'objective' => 'y', 'store_id' => 'on',
+        ])->assertStatus(201);
+
+        $old = \App\Models\LiveShoppingSession::where('user_id', $user->id)->orderBy('id')->first();
+        $this->assertSame('cancelled', $old->status);
+        $this->assertSame('superseded', $old->error_code);
+        $this->assertNull($old->active_slot);
+        $this->assertSame(1, \App\Models\LiveShoppingSession::where('user_id', $user->id)->where('active_slot', 1)->count());
+        Http::assertSent(fn ($r) => str_contains($r->url(), '/cancel') && ($r->data()['reason'] ?? null) === 'superseded');
+    }
+
+    /** A cart (checkout) session holding the slot is never replaced by a search. */
+    public function test_a_search_never_replaces_a_running_cart_session(): void
+    {
+        [$user, $conversation] = $this->actor();
+        $this->engineOk(['conversation_id' => (string) $conversation->id]);
+        \App\Models\LiveShoppingSession::create([
+            'user_id' => $user->id, 'conversation_id' => $conversation->id, 'status' => 'running', 'store_id' => 'on',
+            'kind' => \App\Models\LiveShoppingSession::KIND_CART, 'stores' => [['id' => 'on']], 'objective' => 'cart', 'active_slot' => 1,
+        ]);
+
+        $this->actingAs($user)->postJson('/live-shopping/sessions', [
+            'conversation_id' => $conversation->id, 'objective' => 'y', 'store_id' => 'on',
         ])->assertStatus(409);
+        $this->assertSame('running', \App\Models\LiveShoppingSession::where('user_id', $user->id)->first()->status);
     }
 
     /**
