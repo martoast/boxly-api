@@ -22,7 +22,8 @@ class AdminLabelScanController extends Controller
      * recipient_name, tracking_number (exact, from the barcode), carrier, other_tracking, image_url, needs_check
      * (true = a person should look: no barcode, no name, or an unsure read), created_at. Query: search (name /
      * tracking number), needs_check=1, since (ISO date-time: only rows uploaded after it — poll for new arrivals),
-     * per_page (default 100), page. Paginated: data.data[], data.total, data.last_page.
+     * until (ISO date-time: only rows uploaded before it — with since, one day / week / month), per_page
+     * (default 100), page. Paginated: data.data[], data.total, data.last_page.
      */
     public function index(Request $request)
     {
@@ -30,6 +31,10 @@ class AdminLabelScanController extends Controller
 
         if ($since = $request->input('since')) {
             $query->where('created_at', '>', \Illuminate\Support\Carbon::parse($since));
+        }
+
+        if ($until = $request->input('until')) {
+            $query->where('created_at', '<', \Illuminate\Support\Carbon::parse($until));
         }
 
         if ($search = $request->input('search')) {
@@ -47,6 +52,40 @@ class AdminLabelScanController extends Controller
         $scans = $query->orderByDesc('id')->paginate((int) $request->input('per_page', 100));
 
         return response()->json(['success' => true, 'data' => $scans]);
+    }
+
+    /**
+     * How many packages were scanned in a window, in total and per warehouse day — the employee page's
+     * week / month dashboard. Query: since, until (ISO date-times, required), tz (IANA zone the days are
+     * counted in; default America/Los_Angeles — the San Diego warehouse). Returns data.total,
+     * data.needs_check, data.per_day [{day: "YYYY-MM-DD", count}] (only days with scans, oldest first).
+     */
+    public function stats(Request $request)
+    {
+        $validated = $request->validate([
+            'since' => 'required|date',
+            'until' => 'required|date',
+            'tz'    => 'nullable|timezone',
+        ]);
+        $tz = $validated['tz'] ?? 'America/Los_Angeles';
+
+        $rows = LabelScan::query()
+            ->where('created_at', '>', \Illuminate\Support\Carbon::parse($validated['since']))
+            ->where('created_at', '<', \Illuminate\Support\Carbon::parse($validated['until']))
+            ->get(['created_at', 'needs_check']);
+
+        $perDay = [];
+        foreach ($rows as $row) {
+            $day = $row->created_at->copy()->setTimezone($tz)->toDateString();
+            $perDay[$day] = ($perDay[$day] ?? 0) + 1;
+        }
+        ksort($perDay);
+
+        return response()->json(['success' => true, 'data' => [
+            'total'       => $rows->count(),
+            'needs_check' => $rows->where('needs_check', true)->count(),
+            'per_day'     => array_map(fn ($d, $c) => ['day' => $d, 'count' => $c], array_keys($perDay), $perDay),
+        ]]);
     }
 
     /**

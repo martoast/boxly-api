@@ -75,6 +75,29 @@ class LabelScanTest extends LiveShoppingTestCase
         $this->actingAs($admin)->getJson('/admin/label-scans')->assertJsonPath('data.data.0.recipient_name', 'Sandra Casas');
     }
 
+    public function test_until_bounds_the_list_and_stats_count_per_warehouse_day(): void
+    {
+        $emp = $this->user('admin'); // /employee mounts the same controller; the test DB's role column predates 'employee'
+        $this->upload($emp, 'admin', [['tracking_number' => 'A1', 'recipient_name' => 'Uno']]);
+        $this->upload($emp, 'admin', [['tracking_number' => 'A2', 'recipient_name' => 'Dos', 'needs_check' => true]]);
+        $this->upload($emp, 'admin', [['tracking_number' => 'A3', 'recipient_name' => 'Tres']]);
+        // 10/07 23:30 and 10/08 06:00 UTC: both 10/07 in San Diego; 10/08 20:00 UTC is 10/08 there
+        LabelScan::where('tracking_number', 'A1')->update(['created_at' => '2026-10-07 23:30:00']);
+        LabelScan::where('tracking_number', 'A2')->update(['created_at' => '2026-10-08 06:00:00']);
+        LabelScan::where('tracking_number', 'A3')->update(['created_at' => '2026-10-08 20:00:00']);
+
+        $this->actingAs($emp)->getJson('/admin/label-scans?since=2026-10-07T07:00:00Z&until=2026-10-08T07:00:00Z')
+            ->assertOk()->assertJsonPath('data.total', 2);
+
+        $this->actingAs($emp)->getJson('/admin/label-scans/stats?since=2026-10-01T07:00:00Z&until=2026-10-15T07:00:00Z')
+            ->assertOk()
+            ->assertJsonPath('data.total', 3)
+            ->assertJsonPath('data.needs_check', 1)
+            ->assertJsonPath('data.per_day', [['day' => '2026-10-07', 'count' => 2], ['day' => '2026-10-08', 'count' => 1]]);
+
+        $this->actingAs($emp)->getJson('/admin/label-scans/stats')->assertStatus(422); // since/until required
+    }
+
     public function test_update_fixes_a_row_and_destroy_removes_it(): void
     {
         $admin = $this->user('admin');

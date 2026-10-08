@@ -589,6 +589,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // Mirrored under /employee so the warehouse can upload them.
         Route::prefix('label-scans')->group(function () {
             Route::get('/', [AdminLabelScanController::class, 'index']);
+            Route::get('/stats', [AdminLabelScanController::class, 'stats']);
             Route::post('/', [AdminLabelScanController::class, 'store']);
             Route::put('/{labelScan}', [AdminLabelScanController::class, 'update']);
             Route::delete('/{labelScan}', [AdminLabelScanController::class, 'destroy']);
@@ -665,6 +666,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // Label scans — packages arrived at the warehouse, read off label photos. Same controller as /admin/label-scans.
         Route::prefix('label-scans')->group(function () {
             Route::get('/', [AdminLabelScanController::class, 'index']);
+            Route::get('/stats', [AdminLabelScanController::class, 'stats']);
             Route::post('/', [AdminLabelScanController::class, 'store']);
             Route::put('/{labelScan}', [AdminLabelScanController::class, 'update']);
             Route::delete('/{labelScan}', [AdminLabelScanController::class, 'destroy']);
