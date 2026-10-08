@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Auth;
 
 use App\Enums\SocialProviderEnum;
+use App\Http\Controllers\AffiliateController;
 use App\Http\Controllers\Controller;
 use App\Jobs\SendFunnelCaptureWebhookJob;
 use App\Models\User;
@@ -23,12 +24,14 @@ final class AuthSocialCallbackController extends Controller
             
             $trackingData = null;
             $redirectPath = '/app';
+            $affiliateCode = null;
             
             if ($request->has('state')) {
                 try {
                     $stateData = json_decode(base64_decode($request->get('state')), true);
                     $trackingData = $stateData['tracking'] ?? null;
                     $redirectPath = $stateData['redirect'] ?? '/app';
+                    $affiliateCode = is_string($stateData['ref'] ?? null) ? substr($stateData['ref'], 0, 20) : null;
                 } catch (\Exception $e) {
                     Log::warning('Could not decode OAuth state parameter', [
                         'state' => $request->get('state'),
@@ -77,6 +80,12 @@ final class AuthSocialCallbackController extends Controller
                 'registration_source' => $trackingData,
                 'user_type' => null, // No longer required
             ]);
+
+            // Came through an affiliate link: credit the affiliate, same as an email signup
+            // (Google/Facebook signups were never credited before 2026-10-08).
+            if ($affiliateCode) {
+                AffiliateController::trackReferral($newUser->id, $affiliateCode, $request->ip());
+            }
 
             if (method_exists($newUser, 'createAsStripeCustomer')) {
                 try {
