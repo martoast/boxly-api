@@ -118,6 +118,21 @@ class ShoppingDashboardTest extends LiveShoppingTestCase
         $this->assertSame(0, $schedule['2026-10-08']['open'] + $schedule['2026-10-08']['booked']);
     }
 
+    public function test_works_without_a_window_on_immutable_dates(): void
+    {
+        // Production runs Date::use(CarbonImmutable) — now() is immutable there; the default window
+        // (no since/until) crashed on a mutable-only type hint until this test.
+        \Illuminate\Support\Facades\Date::use(\Carbon\CarbonImmutable::class);
+        try {
+            $this->pr('pending_review', ['created_at' => '2026-10-08 16:00:00']);
+            $this->actingAs($this->velonie)->getJson('/shopping/dashboard')->assertOk()
+                ->assertJsonPath('data.needs_now.to_quote', 1)
+                ->assertJsonCount(14, 'data.schedule');
+        } finally {
+            \Illuminate\Support\Facades\Date::useDefault();
+        }
+    }
+
     public function test_customers_cannot_see_it(): void
     {
         $this->actingAs(User::factory()->createQuietly(['role' => 'customer']))->getJson('/shopping/dashboard')->assertStatus(403);

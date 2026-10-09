@@ -9,6 +9,7 @@ use App\Models\ShoppingReservation;
 use App\Models\ShoppingReservationSlot;
 use App\Models\ShoppingSlot;
 use Illuminate\Http\Request;
+use Carbon\CarbonInterface;
 use Illuminate\Support\Carbon;
 
 /**
@@ -79,7 +80,7 @@ class ShoppingDashboardController extends Controller
     }
 
     /** Counts per warehouse day: requests received / quoted / paid / purchased, in-person visits booked. */
-    private function perDay(Carbon $since, Carbon $until, string $tz): array
+    private function perDay(CarbonInterface $since, CarbonInterface $until, string $tz): array
     {
         $days = [];
         $bump = function ($rows, string $column, string $key) use (&$days, $tz) {
