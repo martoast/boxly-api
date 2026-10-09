@@ -626,6 +626,36 @@ class UnifiedAdminDashboardController extends Controller
         ]);
     }
 
+    /**
+     * The customer map for the warehouse operator: where Boxly's customers are (states, cities, one dot
+     * per customer) with customer and order counts — the same data as the admin live map, but with every
+     * money figure removed (revenue is never sent). Query: range (30d | 90d | 1y | all; default all).
+     * Warehouse employee and admin.
+     */
+    public function operatorGeographic(Request $request)
+    {
+        if (! $request->has('range')) {
+            $request->merge(['range' => 'all']);
+        }
+        $data = $this->v3Geographic($request)->getData(true);
+
+        return response()->json(self::withoutMoney($data));
+    }
+
+    /** The same structure with every revenue / amount key removed, at any depth. */
+    public static function withoutMoney(array $data): array
+    {
+        $out = [];
+        foreach ($data as $k => $v) {
+            if (is_string($k) && preg_match('/revenue|amount|profit|margin|spent|price/i', $k)) {
+                continue;
+            }
+            $out[$k] = is_array($v) ? self::withoutMoney($v) : $v;
+        }
+
+        return $out;
+    }
+
     /** Common Mexican state abbreviations (as they appear in Google Maps place labels). */
     private const ESTADO_ABBREV = [
         'b.c.' => 'Baja California', 'bc' => 'Baja California', 'b c' => 'Baja California',

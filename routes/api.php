@@ -663,6 +663,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/orders/{order}', [EmployeeOrderController::class, 'show']);
         Route::post('/orders/{order}/arrival-images', [EmployeeOrderController::class, 'uploadArrivalImages']);
 
+        // The customer map (counts only, no money) — the operator's full-screen map page.
+        Route::get('/map', [UnifiedAdminDashboardController::class, 'operatorGeographic']);
+
         // Label scans — packages arrived at the warehouse, read off label photos. Same controller as /admin/label-scans.
         Route::prefix('label-scans')->group(function () {
             Route::get('/', [AdminLabelScanController::class, 'index']);

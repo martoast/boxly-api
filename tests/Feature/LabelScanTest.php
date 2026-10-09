@@ -98,6 +98,55 @@ class LabelScanTest extends LiveShoppingTestCase
         $this->actingAs($emp)->getJson('/admin/label-scans/stats')->assertStatus(422); // since/until required
     }
 
+    public function test_stats_count_per_operator_and_for_one_day(): void
+    {
+        $mau = $this->user('admin');
+        $other = $this->user('admin');
+        $this->upload($mau, 'admin', [['tracking_number' => 'M1', 'recipient_name' => 'Uno']]);
+        $this->upload($mau, 'admin', [['tracking_number' => 'M2', 'recipient_name' => 'Dos']]);
+        $this->upload($other, 'admin', [['tracking_number' => 'O1', 'recipient_name' => 'Tres']]);
+        // M1 and O1 on 10/08 in San Diego; M2 late 10/07 there (10/08 06:30 UTC)
+        LabelScan::where('tracking_number', 'M1')->update(['created_at' => '2026-10-08 18:00:00']);
+        LabelScan::where('tracking_number', 'O1')->update(['created_at' => '2026-10-08 19:00:00']);
+        LabelScan::where('tracking_number', 'M2')->update(['created_at' => '2026-10-08 06:30:00']);
+
+        // "how many did Mau scan on 10/08?" — the 06:30 UTC one belongs to 10/07 in San Diego
+        $this->actingAs($mau)->getJson("/admin/label-scans/stats?day=2026-10-08&operator={$mau->id}")->assertOk()
+            ->assertJsonPath('data.total', 1)
+            ->assertJsonPath('data.operator', $mau->id)
+            ->assertJsonPath('data.window.since', '2026-10-08T07:00:00+00:00');
+
+        // the whole day, everyone: per-operator breakdown, most first
+        $r = $this->actingAs($mau)->getJson('/admin/label-scans/stats?day=2026-10-08')->assertOk();
+        $this->assertSame(2, $r->json('data.total'));
+        $this->assertEqualsCanonicalizing([$mau->id, $other->id], array_column($r->json('data.per_operator'), 'user_id'));
+
+        // a range, one operator: both of Mau's
+        $this->actingAs($mau)->getJson("/admin/label-scans/stats?since=2026-10-07T07:00:00Z&until=2026-10-09T07:00:00Z&operator={$mau->id}")
+            ->assertJsonPath('data.total', 2)
+            ->assertJsonPath('data.per_operator.0.count', 2);
+
+        // the list filters by operator too
+        $this->actingAs($mau)->getJson("/admin/label-scans?operator={$other->id}")->assertJsonPath('data.total', 1);
+    }
+
+    public function test_operator_map_data_never_carries_money(): void
+    {
+        $clean = \App\Http\Controllers\UnifiedAdminDashboardController::withoutMoney([
+            'success' => true,
+            'data' => [
+                'states' => [['code' => 'BC', 'customers' => 3, 'orders' => 5, 'revenue' => 1200.5]],
+                'cities' => [['city' => 'Tijuana', 'orders' => 5, 'revenue' => 1200.5, 'lat' => 32.5]],
+                'clients' => [['id' => 1, 'name' => 'Cliente', 'orders' => 2, 'revenue' => 800]],
+                'totals' => ['customers' => 3, 'orders' => 5, 'revenue' => 1200.5, 'amount_paid' => 9],
+            ],
+        ]);
+        $this->assertStringNotContainsString('revenue', json_encode($clean));
+        $this->assertStringNotContainsString('amount', json_encode($clean));
+        $this->assertSame(5, $clean['data']['totals']['orders']);
+        $this->assertSame(32.5, $clean['data']['cities'][0]['lat']);
+    }
+
     public function test_update_fixes_a_row_and_destroy_removes_it(): void
     {
         $admin = $this->user('admin');

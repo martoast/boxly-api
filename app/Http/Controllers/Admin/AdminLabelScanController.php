@@ -22,8 +22,9 @@ class AdminLabelScanController extends Controller
      * recipient_name, tracking_number (exact, from the barcode), carrier, other_tracking, image_url, needs_check
      * (true = a person should look: no barcode, no name, or an unsure read), created_at. Query: search (name /
      * tracking number), needs_check=1, since (ISO date-time: only rows uploaded after it — poll for new arrivals),
-     * until (ISO date-time: only rows uploaded before it — with since, one day / week / month), per_page
-     * (default 100), page. Paginated: data.data[], data.total, data.last_page.
+     * until (ISO date-time: only rows uploaded before it — with since, one day / week / month), operator
+     * (user id of who scanned them), per_page (default 100), page. Paginated: data.data[], data.total,
+     * data.last_page.
      */
     public function index(Request $request)
     {
@@ -49,42 +50,69 @@ class AdminLabelScanController extends Controller
             $query->where('needs_check', true);
         }
 
+        if ($operator = $request->input('operator')) {
+            $query->where('created_by', (int) $operator);
+        }
+
         $scans = $query->orderByDesc('id')->paginate((int) $request->input('per_page', 100));
 
         return response()->json(['success' => true, 'data' => $scans]);
     }
 
     /**
-     * How many packages were scanned in a window, in total and per warehouse day — the employee page's
-     * week / month dashboard. Query: since, until (ISO date-times, required), tz (IANA zone the days are
-     * counted in; default America/Los_Angeles — the San Diego warehouse). Returns data.total,
-     * data.needs_check, data.per_day [{day: "YYYY-MM-DD", count}] (only days with scans, oldest first).
+     * How many packages were scanned — in total, per warehouse day and per operator (who scanned them).
+     * Answers "how many did Mauricio scan today?" and feeds the operator's day / week / month / year view.
+     * Query: either day (YYYY-MM-DD, one warehouse day) or since + until (ISO date-times); operator (user id:
+     * only that person's scans); tz (IANA zone the days are counted in; default America/Los_Angeles — the
+     * San Diego warehouse, same clock as America/Tijuana). Returns data.total, data.needs_check,
+     * data.per_day [{day, count}] (days with scans, oldest first), data.per_operator [{user_id, name,
+     * count}] (most first), data.window {since, until, tz}, data.operator. Admin and warehouse employee.
      */
     public function stats(Request $request)
     {
         $validated = $request->validate([
-            'since' => 'required|date',
-            'until' => 'required|date',
-            'tz'    => 'nullable|timezone',
+            'day'      => 'nullable|date_format:Y-m-d|required_without_all:since,until',
+            'since'    => 'nullable|date|required_without:day',
+            'until'    => 'nullable|date|required_without:day',
+            'operator' => 'nullable|integer',
+            'tz'       => 'nullable|timezone',
         ]);
         $tz = $validated['tz'] ?? 'America/Los_Angeles';
 
+        if (! empty($validated['day'])) {
+            $since = \Illuminate\Support\Carbon::parse($validated['day'], $tz)->startOfDay()->utc();
+            $until = $since->copy()->setTimezone($tz)->addDay()->startOfDay()->utc();
+        } else {
+            $since = \Illuminate\Support\Carbon::parse($validated['since'])->utc();
+            $until = \Illuminate\Support\Carbon::parse($validated['until'])->utc();
+        }
+
         $rows = LabelScan::query()
-            ->where('created_at', '>', \Illuminate\Support\Carbon::parse($validated['since']))
-            ->where('created_at', '<', \Illuminate\Support\Carbon::parse($validated['until']))
-            ->get(['created_at', 'needs_check']);
+            ->with('creator:id,name')
+            ->where('created_at', '>=', $since)
+            ->where('created_at', '<', $until)
+            ->when($validated['operator'] ?? null, fn ($q, $op) => $q->where('created_by', (int) $op))
+            ->get(['created_at', 'needs_check', 'created_by']);
 
         $perDay = [];
+        $perOperator = [];
         foreach ($rows as $row) {
             $day = $row->created_at->copy()->setTimezone($tz)->toDateString();
             $perDay[$day] = ($perDay[$day] ?? 0) + 1;
+            $uid = (int) $row->created_by;
+            $perOperator[$uid] ??= ['user_id' => $uid, 'name' => $row->creator?->name, 'count' => 0];
+            $perOperator[$uid]['count']++;
         }
         ksort($perDay);
+        usort($perOperator, fn ($a, $b) => $b['count'] <=> $a['count']);
 
         return response()->json(['success' => true, 'data' => [
-            'total'       => $rows->count(),
-            'needs_check' => $rows->where('needs_check', true)->count(),
-            'per_day'     => array_map(fn ($d, $c) => ['day' => $d, 'count' => $c], array_keys($perDay), $perDay),
+            'total'        => $rows->count(),
+            'needs_check'  => $rows->where('needs_check', true)->count(),
+            'per_day'      => array_map(fn ($d, $c) => ['day' => $d, 'count' => $c], array_keys($perDay), $perDay),
+            'per_operator' => array_values($perOperator),
+            'window'       => ['since' => $since->toIso8601String(), 'until' => $until->toIso8601String(), 'tz' => $tz],
+            'operator'     => isset($validated['operator']) ? (int) $validated['operator'] : null,
         ]]);
     }
 
