@@ -27,6 +27,12 @@ class User extends Authenticatable
     const TEAM_WAREHOUSE = 'warehouse';
     const TEAM_SHOPPING  = 'shopping';
 
+    // Where a warehouse employee scans: San Diego (packages arriving from US carriers) or Tijuana
+    // (the same packages arriving across the border). Null = San Diego.
+    const LOCATION_SAN_DIEGO = 'san_diego';
+    const LOCATION_TIJUANA   = 'tijuana';
+    const LOCATIONS = [self::LOCATION_SAN_DIEGO, self::LOCATION_TIJUANA];
+
     /**
      * The attributes that are mass assignable.
      *
@@ -51,6 +57,7 @@ class User extends Authenticatable
         'provider',
         'role',
         'team',
+        'warehouse_location',
         'user_type',
         'registration_source',
         'form_1583_completed_at',
@@ -267,6 +274,12 @@ class User extends Authenticatable
      * Without this the /employee/* routes 403 for the very account that owns
      * the business.
      */
+    /** The warehouse this employee scans at (San Diego unless set to Tijuana). */
+    public function warehouseLocation(): string
+    {
+        return $this->warehouse_location ?: self::LOCATION_SAN_DIEGO;
+    }
+
     public function canManageWarehouse(): bool
     {
         return $this->isAdmin() || $this->isWarehouseEmployee();

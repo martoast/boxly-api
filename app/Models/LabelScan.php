@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class LabelScan extends Model
 {
     protected $fillable = [
+        'location',
         'batch',
         'tracking_number',
         'carrier',

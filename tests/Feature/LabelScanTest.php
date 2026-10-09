@@ -21,6 +21,7 @@ class LabelScanTest extends LiveShoppingTestCase
         $this->artisan('migrate', ['--path' => 'database/migrations/2026_04_29_000007_add_team_to_users.php', '--force' => true]);
         $this->artisan('migrate', ['--path' => 'database/migrations/2026_10_07_000000_create_label_scans_table.php', '--force' => true]);
         $this->artisan('migrate', ['--path' => 'database/migrations/2026_04_30_000000_create_personal_access_tokens_table.php', '--force' => true]);
+        $this->artisan('migrate', ['--path' => 'database/migrations/2026_10_09_000000_add_warehouse_locations.php', '--force' => true]);
         Storage::fake('spaces');
     }
 
@@ -145,6 +146,47 @@ class LabelScanTest extends LiveShoppingTestCase
         $this->assertStringNotContainsString('amount', json_encode($clean));
         $this->assertSame(5, $clean['data']['totals']['orders']);
         $this->assertSame(32.5, $clean['data']['cities'][0]['lat']);
+    }
+
+    private function warehouseEmployee(?string $location): User
+    {
+        // The test DB's users.role CHECK predates 'employee' (prod MySQL allows it).
+        \Illuminate\Support\Facades\DB::statement('PRAGMA ignore_check_constraints = ON');
+
+        return User::factory()->createQuietly(['role' => 'employee', 'team' => 'warehouse', 'warehouse_location' => $location]);
+    }
+
+    public function test_each_warehouse_sees_only_its_own_scans_and_admin_sees_both(): void
+    {
+        $sd = $this->warehouseEmployee(null);        // null = San Diego
+        $tj = $this->warehouseEmployee('tijuana');
+        $admin = $this->user('admin');
+        $this->upload($sd, 'employee', [['tracking_number' => 'SD1', 'recipient_name' => 'Uno']]);
+        $this->upload($sd, 'employee', [['tracking_number' => 'SD2', 'recipient_name' => 'Dos']]);
+        $this->upload($tj, 'employee', [['tracking_number' => 'SD1', 'recipient_name' => 'Uno']]); // same package, now in Tijuana
+
+        $this->assertSame(['san_diego', 'san_diego', 'tijuana'], LabelScan::orderBy('id')->pluck('location')->all());
+
+        // each employee: their own warehouse only — list and counts
+        $this->actingAs($sd)->getJson('/employee/label-scans')->assertOk()->assertJsonPath('data.total', 2);
+        $this->actingAs($tj)->getJson('/employee/label-scans')->assertOk()->assertJsonPath('data.total', 1)
+            ->assertJsonPath('data.data.0.location', 'tijuana');
+        // an employee can't widen it with ?location=
+        $this->actingAs($tj)->getJson('/employee/label-scans?location=san_diego')->assertJsonPath('data.total', 1);
+        $day = now('America/Los_Angeles')->toDateString();
+        $this->actingAs($tj)->getJson("/employee/label-scans/stats?day={$day}")->assertOk()
+            ->assertJsonPath('data.total', 1)->assertJsonPath('data.location', 'tijuana');
+
+        // admin: the whole operation, or one warehouse
+        $this->actingAs($admin)->getJson('/admin/label-scans')->assertJsonPath('data.total', 3);
+        $this->actingAs($admin)->getJson('/admin/label-scans?location=tijuana')->assertJsonPath('data.total', 1);
+        $this->actingAs($admin)->getJson("/admin/label-scans/stats?day={$day}&location=san_diego")->assertJsonPath('data.total', 2);
+
+        // nobody edits the other warehouse's scans
+        $sdRow = LabelScan::where('location', 'san_diego')->first();
+        $this->actingAs($tj)->putJson("/employee/label-scans/{$sdRow->id}", ['needs_check' => true])->assertNotFound();
+        $this->actingAs($tj)->deleteJson("/employee/label-scans/{$sdRow->id}")->assertNotFound();
+        $this->actingAs($sd)->putJson("/employee/label-scans/{$sdRow->id}", ['needs_check' => true])->assertOk();
     }
 
     public function test_update_fixes_a_row_and_destroy_removes_it(): void

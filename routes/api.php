@@ -244,6 +244,7 @@ Route::middleware('auth:sanctum')->group(function () {
             'preferred_language' => $user->preferred_language,
             'role' => $user->role,
             'team' => $user->team,
+            'warehouse_location' => $user->isWarehouseEmployee() ? $user->warehouseLocation() : null,
             'email_verified_at' => $user->email_verified_at,
             'created_at' => $user->created_at,
             'is_affiliate' => $user->isAffiliate(),

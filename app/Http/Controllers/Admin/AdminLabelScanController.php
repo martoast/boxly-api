@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\LabelScan;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -14,6 +15,10 @@ use Illuminate\Support\Str;
  * The reading happens before this (barcodes on the phone, name via the app's
  * /api/label-read); store() only saves one photo and the package(s) read from it.
  * Mounted under both /admin and /employee.
+ *
+ * Two warehouses (2026-10-09): every scan records its `location` — san_diego (packages arriving from US
+ * carriers) or tijuana (the same packages arriving across the border). A warehouse employee sees, counts,
+ * edits and scans ONLY their own warehouse; admins see both (optionally one: location=san_diego|tijuana).
  */
 class AdminLabelScanController extends Controller
 {
@@ -23,12 +28,13 @@ class AdminLabelScanController extends Controller
      * (true = a person should look: no barcode, no name, or an unsure read), created_at. Query: search (name /
      * tracking number), needs_check=1, since (ISO date-time: only rows uploaded after it — poll for new arrivals),
      * until (ISO date-time: only rows uploaded before it — with since, one day / week / month), operator
-     * (user id of who scanned them), per_page (default 100), page. Paginated: data.data[], data.total,
+     * (user id of who scanned them), location (san_diego | tijuana — admins; an employee always gets their
+     * own warehouse), per_page (default 100), page. Paginated: data.data[], data.total,
      * data.last_page.
      */
     public function index(Request $request)
     {
-        $query = LabelScan::with('creator:id,name');
+        $query = $this->forWarehouse($request, LabelScan::with('creator:id,name'));
 
         if ($since = $request->input('since')) {
             $query->where('created_at', '>', \Illuminate\Support\Carbon::parse($since));
@@ -66,7 +72,9 @@ class AdminLabelScanController extends Controller
      * only that person's scans); tz (IANA zone the days are counted in; default America/Los_Angeles — the
      * San Diego warehouse, same clock as America/Tijuana). Returns data.total, data.needs_check,
      * data.per_day [{day, count}] (days with scans, oldest first), data.per_operator [{user_id, name,
-     * count}] (most first), data.window {since, until, tz}, data.operator. Admin and warehouse employee.
+     * count}] (most first), data.window {since, until, tz}, data.operator, data.location. Query location
+     * (san_diego | tijuana) for admins; a warehouse employee always counts their own warehouse.
+     * Admin and warehouse employee.
      */
     public function stats(Request $request)
     {
@@ -76,6 +84,7 @@ class AdminLabelScanController extends Controller
             'until'    => 'nullable|date|required_without:day',
             'operator' => 'nullable|integer',
             'tz'       => 'nullable|timezone',
+            'location' => 'nullable|in:san_diego,tijuana',
         ]);
         $tz = $validated['tz'] ?? 'America/Los_Angeles';
 
@@ -87,7 +96,7 @@ class AdminLabelScanController extends Controller
             $until = \Illuminate\Support\Carbon::parse($validated['until'])->utc();
         }
 
-        $rows = LabelScan::query()
+        $rows = $this->forWarehouse($request, LabelScan::query())
             ->with('creator:id,name')
             ->where('created_at', '>=', $since)
             ->where('created_at', '<', $until)
@@ -113,6 +122,7 @@ class AdminLabelScanController extends Controller
             'per_operator' => array_values($perOperator),
             'window'       => ['since' => $since->toIso8601String(), 'until' => $until->toIso8601String(), 'tz' => $tz],
             'operator'     => isset($validated['operator']) ? (int) $validated['operator'] : null,
+            'location'     => $this->warehouseOf($request),
         ]]);
     }
 
@@ -160,6 +170,11 @@ class AdminLabelScanController extends Controller
         }
 
         $rows = [];
+        // Where it was scanned: an employee's own warehouse; an admin may say which (default San Diego).
+        $location = $request->user()->isWarehouseEmployee()
+            ? $request->user()->warehouseLocation()
+            : (in_array($request->input('location'), User::LOCATIONS, true) ? $request->input('location') : User::LOCATION_SAN_DIEGO);
+
         foreach ($validated['packages'] as $package) {
             $rows[] = LabelScan::create([
                 ...$package,
@@ -168,6 +183,7 @@ class AdminLabelScanController extends Controller
                 'image_path'  => $path,
                 'image_url'   => $url,
                 'created_by'  => $request->user()->id,
+                'location'    => $location,
             ])->load('creator:id,name');
         }
 
@@ -177,6 +193,7 @@ class AdminLabelScanController extends Controller
     /** Correct one package: recipient_name, tracking_number, carrier, needs_check (false = checked by a person). */
     public function update(Request $request, LabelScan $labelScan)
     {
+        $this->ensureSameWarehouse($request, $labelScan);
         $validated = $request->validate([
             'tracking_number' => 'sometimes|nullable|string|max:255',
             'carrier'         => 'sometimes|nullable|string|max:40',
@@ -192,10 +209,39 @@ class AdminLabelScanController extends Controller
     }
 
     /** Delete one package row (its photo stays in storage: another row from the same photo may use it). */
-    public function destroy(LabelScan $labelScan)
+    public function destroy(Request $request, LabelScan $labelScan)
     {
+        $this->ensureSameWarehouse($request, $labelScan);
         $labelScan->delete();
 
         return response()->json(['success' => true, 'message' => 'Label scan deleted']);
+    }
+
+    /** The warehouse a request is about: the employee's own, or the admin's location filter (null = both). */
+    private function warehouseOf(Request $request): ?string
+    {
+        $user = $request->user();
+        if ($user->isWarehouseEmployee()) {
+            return $user->warehouseLocation();
+        }
+        $loc = $request->input('location');
+
+        return in_array($loc, User::LOCATIONS, true) ? $loc : null;
+    }
+
+    private function forWarehouse(Request $request, $query)
+    {
+        $loc = $this->warehouseOf($request);
+
+        return $loc ? $query->where('location', $loc) : $query;
+    }
+
+    /** An employee never edits or deletes the other warehouse's scans (404, as if it weren't there). */
+    private function ensureSameWarehouse(Request $request, LabelScan $labelScan): void
+    {
+        $user = $request->user();
+        if ($user->isWarehouseEmployee() && $labelScan->location !== $user->warehouseLocation()) {
+            abort(404);
+        }
     }
 }
