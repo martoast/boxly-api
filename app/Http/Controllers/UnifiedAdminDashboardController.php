@@ -442,7 +442,7 @@ class UnifiedAdminDashboardController extends Controller
         $paidSum = (float) ((clone $paidQ)->selectRaw('SUM(COALESCE(amount_paid, deposit_amount, 0)) as t')->value('t') ?? 0);
 
         $perDay = [];
-        for ($d = $monday->copy(); $d->lte($sunday); $d->addDay()) {
+        for ($d = $monday->copy(); $d->lte($sunday); $d = $d->addDay()) { // safe for mutable and immutable dates
             $ds = $d->copy()->utc();
             $de = $d->copy()->addDay()->utc()->subSecond();
             $rev = $this->revenueInWindow($ds, $de) + $this->manualRevenueInWindow($ds, $de);
@@ -741,7 +741,7 @@ class UnifiedAdminDashboardController extends Controller
      * per customer) with customer and order counts — the same data as the admin live map, but with every
      * money figure removed (revenue is never sent). data.overview {customers, orders} are the exact
      * headline counts the admin map shows. Query: range (30d | 90d | 1y | all; default all).
-     * Warehouse employee and admin.
+     * Warehouse employee, shopping team and admin.
      */
     public function operatorGeographic(Request $request)
     {

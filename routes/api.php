@@ -702,6 +702,11 @@ Route::middleware('auth:sanctum')->group(function () {
     */
     Route::middleware('shopping')->prefix('shopping')->group(function () {
 
+        // The shopping manager's dashboard: what needs her now, her numbers, her schedule.
+        Route::get('/dashboard', [\App\Http\Controllers\Admin\ShoppingDashboardController::class, 'show']);
+        // The same money-free customer map the warehouse operator has.
+        Route::get('/map', [UnifiedAdminDashboardController::class, 'operatorGeographic']);
+
         Route::prefix('purchase-requests')->group(function () {
             Route::get('/', [AdminPurchaseRequestController::class, 'index']);
             Route::post('/', [AdminPurchaseRequestController::class, 'store']);
