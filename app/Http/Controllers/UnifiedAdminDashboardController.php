@@ -280,6 +280,12 @@ class UnifiedAdminDashboardController extends Controller
     /** Total revenue (MXN) within a window: paid orders + deposits + PR fees. */
     private function revenueInWindow($start, $end): float
     {
+        return array_sum($this->revenueParts($start, $end));
+    }
+
+    /** Calculated revenue in the window, by source: shipping (boxes paid), deposits, purchase-request fees. */
+    private function revenueParts($start, $end): array
+    {
         $shipping = (float) ($this->excludeManualMonths(
             Order::whereNotNull('paid_at')->whereBetween('paid_at', [$start, $end]), 'paid_at')
             ->selectRaw('SUM(COALESCE(amount_paid, deposit_amount, 0)) as t')->value('t') ?? 0);
@@ -291,7 +297,7 @@ class UnifiedAdminDashboardController extends Controller
             ->whereRaw("$feeDate BETWEEN ? AND ?", [$start, $end])->sum('processing_fee');
         $mxn = (float) PurchaseRequest::whereIn('status', ['paid', 'purchased'])->where('currency', 'mxn')
             ->whereRaw("$feeDate BETWEEN ? AND ?", [$start, $end])->sum('processing_fee');
-        return $shipping + $deposits + ($usd * self::FX) + $mxn;
+        return ['shipping' => $shipping, 'deposits' => $deposits, 'purchase_request_fees' => ($usd * self::FX) + $mxn];
     }
 
     /**
@@ -355,6 +361,110 @@ class UnifiedAdminDashboardController extends Controller
             ],
             'generated_at' => now()->toIso8601String(),
         ]);
+    }
+
+    /** Boxly's business clock for reporting (Tijuana — the same clock as the San Diego warehouse). */
+    private const BUSINESS_TZ = 'America/Tijuana';
+
+    /**
+     * Profit & loss for ONE calendar week — the question "how did we do last week?" that the 30d / 90d /
+     * 1y ranges can't answer. A week is an ISO week: Monday 00:00 through Sunday 23:59:59 in Boxly's
+     * business timezone (America/Tijuana); timestamps are compared in UTC from those local boundaries,
+     * expenses by their date (Monday–Sunday). Same math as the dashboard overview: revenue = boxes paid +
+     * deposits + purchase-request fees (USD at the dashboard's fixed rate) + manually entered revenue
+     * prorated by day; expenses = business expenses (not personal); profit = revenue − expenses; margin
+     * = profit / revenue %. Query: week (ISO, e.g. 2026-W41) or date (any day of the week, YYYY-MM-DD);
+     * default the current week (week to date). Returns data.week {iso, start, end, timezone, definition,
+     * complete}, revenue, revenue_breakdown, expenses, expenses_by_category, profit, margin, orders,
+     * paid_orders, new_customers, aov, per_day [{date, revenue, expenses, profit}], previous_week {…}.
+     * GET /admin/dashboard/v3/week
+     */
+    public function v3Week(Request $request)
+    {
+        $request->validate([
+            'week' => ['nullable', 'regex:/^\d{4}-W(0[1-9]|[1-4]\d|5[0-3])$/'],
+            'date' => 'nullable|date_format:Y-m-d',
+        ]);
+        $tz = self::BUSINESS_TZ;
+        if ($request->filled('week')) {
+            [$y, $w] = explode('-W', $request->get('week'));
+            $monday = Carbon::now($tz)->setISODate((int) $y, (int) $w)->startOfDay();
+        } else {
+            $anchor = $request->filled('date') ? Carbon::parse($request->get('date'), $tz) : Carbon::now($tz);
+            $monday = $anchor->copy()->startOfWeek(Carbon::MONDAY)->startOfDay();
+        }
+
+        $current = $this->weekPnl($monday, true);
+        $previous = $this->weekPnl($monday->copy()->subWeek(), false);
+
+        return response()->json([
+            'success' => true,
+            'data' => $current + ['previous_week' => $previous],
+            'generated_at' => now()->toIso8601String(),
+        ]);
+    }
+
+    /** P&L for the week starting at local Monday 00:00 ($monday, in BUSINESS_TZ). */
+    private function weekPnl(Carbon $monday, bool $detail): array
+    {
+        $tz = self::BUSINESS_TZ;
+        $sunday = $monday->copy()->addDays(6);
+        $s = $monday->copy()->utc();
+        $e = $monday->copy()->addWeek()->utc()->subSecond(); // Sunday 23:59:59 local
+
+        $parts = $this->revenueParts($s, $e);
+        $manual = $this->manualRevenueInWindow($s, $e);
+        $revenue = array_sum($parts) + $manual;
+        $expQ = BusinessExpense::business()->whereBetween('expense_date', [$monday->toDateString(), $sunday->toDateString()]);
+        $expenses = (float) (clone $expQ)->sum('amount');
+        $profit = $revenue - $expenses;
+
+        $out = [
+            'week' => [
+                'iso' => $monday->format('o-\WW'),
+                'start' => $monday->toDateString(),
+                'end' => $sunday->toDateString(),
+                'timezone' => $tz,
+                'definition' => 'ISO week: Monday 00:00 to Sunday 23:59:59, America/Tijuana',
+                'complete' => now()->greaterThan($e),
+            ],
+            'revenue' => round($revenue, 2),
+            'expenses' => round($expenses, 2),
+            'profit' => round($profit, 2),
+            'margin' => $revenue > 0 ? round(($profit / $revenue) * 100, 1) : 0,
+        ];
+        if (! $detail) {
+            return $out;
+        }
+
+        $paidQ = Order::whereNotNull('paid_at')->whereBetween('paid_at', [$s, $e]);
+        $paidCount = (clone $paidQ)->count();
+        $paidSum = (float) ((clone $paidQ)->selectRaw('SUM(COALESCE(amount_paid, deposit_amount, 0)) as t')->value('t') ?? 0);
+
+        $perDay = [];
+        for ($d = $monday->copy(); $d->lte($sunday); $d->addDay()) {
+            $ds = $d->copy()->utc();
+            $de = $d->copy()->addDay()->utc()->subSecond();
+            $rev = $this->revenueInWindow($ds, $de) + $this->manualRevenueInWindow($ds, $de);
+            $exp = (float) BusinessExpense::business()->whereDate('expense_date', $d->toDateString())->sum('amount');
+            $perDay[] = ['date' => $d->toDateString(), 'revenue' => round($rev, 2), 'expenses' => round($exp, 2), 'profit' => round($rev - $exp, 2)];
+        }
+
+        return $out + [
+            'revenue_breakdown' => [
+                'shipping' => round($parts['shipping'], 2),
+                'deposits' => round($parts['deposits'], 2),
+                'purchase_request_fees' => round($parts['purchase_request_fees'], 2),
+                'manual' => round($manual, 2),
+            ],
+            'expenses_by_category' => (clone $expQ)->selectRaw('category, SUM(amount) as total')->groupBy('category')
+                ->orderByDesc('total')->get()->map(fn ($r) => ['category' => $r->category, 'total' => round((float) $r->total, 2)])->all(),
+            'orders' => Order::whereNotIn('status', ['cancelled'])->whereBetween('created_at', [$s, $e])->count(),
+            'paid_orders' => $paidCount,
+            'new_customers' => User::where('role', 'customer')->whereBetween('created_at', [$s, $e])->count(),
+            'aov' => $paidCount > 0 ? round($paidSum / $paidCount, 2) : 0,
+            'per_day' => $perDay,
+        ];
     }
 
     /**
