@@ -739,7 +739,8 @@ class UnifiedAdminDashboardController extends Controller
     /**
      * The customer map for the warehouse operator: where Boxly's customers are (states, cities, one dot
      * per customer) with customer and order counts — the same data as the admin live map, but with every
-     * money figure removed (revenue is never sent). Query: range (30d | 90d | 1y | all; default all).
+     * money figure removed (revenue is never sent). data.overview {customers, orders} are the exact
+     * headline counts the admin map shows. Query: range (30d | 90d | 1y | all; default all).
      * Warehouse employee and admin.
      */
     public function operatorGeographic(Request $request)
@@ -747,9 +748,19 @@ class UnifiedAdminDashboardController extends Controller
         if (! $request->has('range')) {
             $request->merge(['range' => 'all']);
         }
-        $data = $this->v3Geographic($request)->getData(true);
+        $data = self::withoutMoney($this->v3Geographic($request)->getData(true));
 
-        return response()->json(self::withoutMoney($data));
+        // The headline counts come from the SAME source as the admin live map (the overview: every
+        // customer and every order in the range) — the map data only counts the ones with a location,
+        // so using its totals showed the operator smaller numbers (2026-10-08). Picked field by field:
+        // nothing money-shaped can ride along.
+        $overview = $this->v3Overview($request)->getData(true)['data'] ?? [];
+        $data['data']['overview'] = [
+            'customers' => (int) ($overview['customers'] ?? 0),
+            'orders' => (int) ($overview['orders'] ?? 0),
+        ];
+
+        return response()->json($data);
     }
 
     /** The same structure with every revenue / amount key removed, at any depth. */
