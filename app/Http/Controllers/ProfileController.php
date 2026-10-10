@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Http\Requests\UpdateProfileRequest;
 use App\Jobs\SendFunnelCaptureWebhookJob;
+use App\Models\User;
 use Illuminate\Http\Request;
 use App\Models\Order;
 use Illuminate\Validation\Rule;
@@ -85,6 +86,8 @@ class ProfileController extends Controller
                 Rule::in(['expat', 'business', 'shopper']),
             ],
             'registration_source' => 'nullable|json',
+            // Google / Facebook signups accept the Terms on the complete-profile step.
+            'agree_to_terms' => 'sometimes|accepted',
         ], [
             'email.unique' => 'This email is already in use.',
             'postal_code.regex' => 'Postal code must be 5 digits.',
@@ -125,6 +128,11 @@ class ProfileController extends Controller
             $validated['preferred_language'] = $validated['user_type'] === 'expat' ? 'en' : 'es';
         }
         
+        if (! empty($validated['agree_to_terms'])) {
+            $validated['terms_accepted_at'] = now();
+            $validated['terms_version'] = User::TERMS_VERSION;
+        }
+        unset($validated['agree_to_terms']);
         $user->update($validated);
         
         // If profile was incomplete and phone is now set, send to CRM

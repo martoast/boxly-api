@@ -33,6 +33,10 @@ class User extends Authenticatable
     const LOCATION_TIJUANA   = 'tijuana';
     const LOCATIONS = [self::LOCATION_SAN_DIEGO, self::LOCATION_TIJUANA];
 
+    // The published Terms of Service version (its publication date). A new account records the version it
+    // accepted; bump this when /terms-of-service changes materially.
+    const TERMS_VERSION = '2026-10-10';
+
     /**
      * The attributes that are mass assignable.
      *
@@ -58,6 +62,8 @@ class User extends Authenticatable
         'role',
         'team',
         'warehouse_location',
+        'terms_accepted_at',
+        'terms_version',
         'user_type',
         'registration_source',
         'form_1583_completed_at',
@@ -87,6 +93,7 @@ class User extends Authenticatable
             'password' => 'hashed',
             'registration_source' => 'array', // Automatically cast JSON to array
             'form_1583_completed_at' => 'datetime',
+            'terms_accepted_at' => 'datetime',
             'shopping_profile' => 'array',
             'shopper_extension_installed_at' => 'datetime',
             'shopper_extension_last_seen_at' => 'datetime',

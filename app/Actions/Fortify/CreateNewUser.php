@@ -38,6 +38,8 @@ class CreateNewUser implements CreatesNewUsers
             'password' => $this->passwordRules(),
             'registration_source' => ['nullable', 'json'],
             'referred_by' => ['nullable', 'string', 'max:20'],
+            // The unchecked "Acepto los Términos de Servicio" box (2026-10-10): required for a new account.
+            'agree_to_terms' => ['accepted'],
         ], [
             'phone.required' => 'Phone number is required.',
             'phone.regex' => 'Please enter a valid phone number.',
@@ -65,6 +67,8 @@ class CreateNewUser implements CreatesNewUsers
             'registration_source' => $registrationSource,
             'password' => Hash::make($input['password']),
             'preferred_language' => 'es', // Default to Spanish
+            'terms_accepted_at' => now(),
+            'terms_version' => User::TERMS_VERSION,
         ]);
 
         // Track affiliate referral if code provided

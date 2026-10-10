@@ -26,6 +26,7 @@ class AffiliateReferralTest extends LiveShoppingTestCase
     {
         parent::setUp();
         $this->artisan('migrate', ['--path' => 'database/migrations/2025_12_17_225918_create_affiliate_tables.php', '--force' => true]);
+        $this->artisan('migrate', ['--path' => 'database/migrations/2026_10_10_000000_add_terms_acceptance_to_users.php', '--force' => true]);
         $owner = User::factory()->createQuietly(['email' => 'alma@example.com']);
         $this->affiliate = Affiliate::create(['user_id' => $owner->id, 'affiliate_code' => 'ALMA69']);
     }
@@ -47,6 +48,7 @@ class AffiliateReferralTest extends LiveShoppingTestCase
             'name' => 'Cliente Referido', 'email' => 'referido@example.com', 'phone' => '+526641234567',
             'password' => 'Secreto!2026x', 'password_confirmation' => 'Secreto!2026x',
             'referred_by' => 'alma69', // case-insensitive, as typed in a link
+            'agree_to_terms' => true,
         ]);
 
         $ref = AffiliateReferral::where('user_id', $user->id)->first();

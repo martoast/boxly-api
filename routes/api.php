@@ -250,6 +250,9 @@ Route::middleware('auth:sanctum')->group(function () {
             'is_affiliate' => $user->isAffiliate(),
             'total_orders' => $user->orders()->count(),
             'form_1583_completed_at' => $user->form_1583_completed_at,
+            'terms_version' => $user->terms_version,
+            'terms_accepted_at' => $user->terms_accepted_at,
+            'current_terms_version' => \App\Models\User::TERMS_VERSION,
         ];
 
         // Include affiliate data if user is an affiliate
