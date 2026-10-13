@@ -35,7 +35,7 @@ class User extends Authenticatable
 
     // The published Terms of Service version (its publication date). A new account records the version it
     // accepted; bump this when /terms-of-service changes materially.
-    const TERMS_VERSION = '2026-10-10';
+    const TERMS_VERSION = '2026-10-13';
 
     /**
      * The attributes that are mass assignable.
