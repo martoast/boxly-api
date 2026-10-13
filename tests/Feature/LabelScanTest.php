@@ -203,6 +203,21 @@ class LabelScanTest extends LiveShoppingTestCase
         $this->assertSame(0, LabelScan::count());
     }
 
+    public function test_correcting_a_flagged_row_clears_revisar_unless_it_is_set_again(): void
+    {
+        $admin = $this->user('admin');
+        $this->upload($admin, 'admin', [
+            ['tracking_number' => '1Z0000000000000001', 'recipient_name' => 'BOXLY ANA PEREZ', 'needs_check' => true],
+            ['tracking_number' => '1Z0000000000000002', 'recipient_name' => 'BOXLY LUIS SOTO', 'needs_check' => true],
+        ]);
+        [$a, $b] = LabelScan::orderBy('id')->get()->all();
+
+        $this->actingAs($admin)->putJson("/admin/label-scans/{$a->id}", ['recipient_name' => 'BOXLY ANA PÉREZ'])
+            ->assertOk()->assertJsonPath('data.needs_check', false);
+        $this->actingAs($admin)->putJson("/admin/label-scans/{$b->id}", ['recipient_name' => 'BOXLY LUIS SOTO', 'needs_check' => true])
+            ->assertOk()->assertJsonPath('data.needs_check', true);
+    }
+
     public function test_employee_route_works_customers_cannot(): void
     {
         $this->getJson('/admin/label-scans')->assertStatus(401); // before any actingAs: it sticks for the rest of the test

@@ -203,6 +203,12 @@ class AdminLabelScanController extends Controller
             'needs_check'     => 'sometimes|boolean',
         ]);
 
+        // A person correcting the name or tracking has checked the label: clear "Revisar" unless they set it.
+        if (! array_key_exists('needs_check', $validated)
+            && (array_key_exists('recipient_name', $validated) || array_key_exists('tracking_number', $validated))) {
+            $validated['needs_check'] = false;
+        }
+
         $labelScan->update($validated);
 
         return response()->json(['success' => true, 'data' => $labelScan->fresh()->load('creator:id,name')]);
