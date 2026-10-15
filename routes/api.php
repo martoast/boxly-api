@@ -109,42 +109,42 @@ Route::get('/campaign/click/{token}', [CampaignTrackingController::class, 'click
 
 // Public product extraction for the AI shopping assistant (rate-limited).
 Route::post('/products/extract', [\App\Http\Controllers\ProductExtractController::class, 'extract'])
-    ->middleware('throttle:30,1');
+    ->middleware('throttle:30,1,products-extract');
 Route::post('/products/search', [\App\Http\Controllers\ProductExtractController::class, 'search'])
-    ->middleware('throttle:30,1');
+    ->middleware('throttle:30,1,products-search');
 
 // Product index — the resolved-product cache behind the Shopper panel.
 // Server-to-server ONLY (shared secret, checked in the controller): this one
 // WRITES what every shopper on a product then sees, unlike the read-only
 // /products/* routes above.
 Route::post('/products/index/get', [\App\Http\Controllers\ProductIndexController::class, 'show'])
-    ->middleware('throttle:300,1');
+    ->middleware('throttle:300,1,products-index-get');
 Route::post('/products/index/put', [\App\Http\Controllers\ProductIndexController::class, 'store'])
-    ->middleware('throttle:300,1');
+    ->middleware('throttle:300,1,products-index-put');
 Route::post('/products/web-search', [\App\Http\Controllers\ProductExtractController::class, 'webSearch'])
-    ->middleware('throttle:30,1');
+    ->middleware('throttle:30,1,products-web-search');
 Route::post('/products/details', [\App\Http\Controllers\ProductExtractController::class, 'details'])
-    ->middleware('throttle:60,1');
+    ->middleware('throttle:60,1,products-details');
 Route::post('/products/page', [\App\Http\Controllers\ProductExtractController::class, 'page'])
-    ->middleware('throttle:60,1');
+    ->middleware('throttle:60,1,products-page');
 // Full product detail WITH variants (options/sizes/colors) for a pasted URL — the
 // assisted-purchase form uses this to pre-fill the item + let the customer pick a
 // variant. Heavier than /extract (may hit ScraperAPI structured endpoints).
 Route::post('/products/scrape', [\App\Http\Controllers\ProductExtractController::class, 'scrape'])
-    ->middleware('throttle:30,1');
+    ->middleware('throttle:30,1,products-scrape');
 
 // AI-search usage analytics — best-effort logging from the search UI.
 Route::post('/search-events', [\App\Http\Controllers\SearchEventController::class, 'store'])
-    ->middleware('throttle:120,1');
+    ->middleware('throttle:120,1,search-events');
 
 // Knowledge wiki for the AI assistant — published articles, read-only. Consumed
 // by the Nuxt assistant server (no DB there) to answer business questions.
 Route::get('/knowledge', [\App\Http\Controllers\KnowledgeController::class, 'index'])
-    ->middleware('throttle:120,1');
+    ->middleware('throttle:120,1,knowledge');
 
 // Starter prompt cards for the shopping assistant empty state (read-only, public).
 Route::get('/starter-prompts', [\App\Http\Controllers\StarterPromptController::class, 'index'])
-    ->middleware('throttle:120,1');
+    ->middleware('throttle:120,1,starter-prompts');
 
 Route::middleware(['web'])->group(function () {
     Route::get('/auth/{provider}/redirect', AuthSocialRedirectController::class)
@@ -155,7 +155,7 @@ Route::middleware(['web'])->group(function () {
     // Public inline account creation from the chat assistant. In the web group
     // so Auth::login sets the SPA session cookie. Rate-limited.
     Route::post('/auth/chat-register', [\App\Http\Controllers\Auth\ChatRegisterController::class, 'store'])
-        ->middleware('throttle:10,1');
+        ->middleware('throttle:10,1,auth-chat-register');
 });
 
 /*
@@ -167,7 +167,7 @@ Route::middleware(['web'])->group(function () {
 // the request, NOT Sanctum — see LiveShoppingWebhookController. 404 when the
 // feature is off, so nothing half-registers.
 Route::post('/live-shopping/webhook', [\App\Http\Controllers\LiveShoppingWebhookController::class, 'handle'])
-    ->middleware('throttle:120,1');
+    ->middleware('throttle:120,1,live-shopping-webhook');
 
 Route::middleware('auth:sanctum')->group(function () {
     // Self-issued Sanctum token for the Chrome extension. Any authenticated
@@ -843,25 +843,28 @@ Route::middleware('auth:sanctum')->group(function () {
         // Throttled explicitly: create is an engine round-trip that claims the
         // customer's one active slot, and ticket mints a short-lived media
         // credential. Neither should be spammable.
+        // EACH LIMIT HAS ITS OWN COUNTER (the third parameter): unnamed, Laravel keys every `throttle:N,1` on the user alone,
+        // so the chat's status polls and video tickets used up "create"'s 10 a minute — prod 2026-10-14, a shopper's search
+        // started 26 s after watching another was refused 429 before it reached the engine.
         Route::post('/sessions', [\App\Http\Controllers\LiveShoppingController::class, 'store'])
-            ->middleware('throttle:10,1');
+            ->middleware('throttle:10,1,live-create');
         // The engine's store catalog: read-only, cached briefly server-side, and
         // the only list the assistant may route a live session to.
         Route::get('/stores', [\App\Http\Controllers\LiveShoppingController::class, 'stores'])
-            ->middleware('throttle:60,1');
+            ->middleware('throttle:60,1,live-stores');
         // The picker opened: pre-open the customer's cart browser for that store (best-effort, always 202).
         Route::post('/preopen', [\App\Http\Controllers\LiveShoppingController::class, 'preopen'])
-            ->middleware('throttle:20,1');
+            ->middleware('throttle:20,1,live-preopen');
         Route::get('/sessions/{session}', [\App\Http\Controllers\LiveShoppingController::class, 'show'])
-            ->middleware('throttle:60,1');
+            ->middleware('throttle:60,1,live-show');
         // POST, not GET: minting a ticket is state-changing and issues a
         // credential, so it must never be cached, prefetched or replayed from a
         // link.
         Route::post('/sessions/{session}/ticket', [\App\Http\Controllers\LiveShoppingController::class, 'ticket'])
-            ->middleware('throttle:30,1');
+            ->middleware('throttle:30,1,live-ticket');
         // C4: pause the agent's store browser and take control / hand it back (cart sessions).
         Route::post('/sessions/{session}/control', [\App\Http\Controllers\LiveShoppingController::class, 'control'])
-            ->middleware('throttle:30,1');
+            ->middleware('throttle:30,1,live-control');
     });
 
 });
@@ -877,7 +880,7 @@ Route::fallback(function () {
 // the service directly; this route is the same read for API-side callers). The catalog SEARCH and SerpAPI gallery
 // routes (/catalog/search, curate, collection, live-grab, google-shop, amazon, web-search, serp-diag,
 // google-product, amazon-product) were removed 2026-09-28: the live store gallery replaced them.
-Route::post('/catalog/product-variants', [\App\Http\Controllers\CatalogController::class, 'productVariants'])->middleware('throttle:60,1');
+Route::post('/catalog/product-variants', [\App\Http\Controllers\CatalogController::class, 'productVariants'])->middleware('throttle:60,1,catalog-product-variants');
 // Variants for a store whose own page we cannot read (New Balance answers every
 // server fetch with 403 and exposes no accessibility tree to the browser).
-Route::post('/catalog/feed-product', [\App\Http\Controllers\CatalogController::class, 'feedProduct'])->middleware('throttle:60,1');
+Route::post('/catalog/feed-product', [\App\Http\Controllers\CatalogController::class, 'feedProduct'])->middleware('throttle:60,1,catalog-feed-product');
