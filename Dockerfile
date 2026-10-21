@@ -35,6 +35,11 @@ RUN apt-get update \
        php8.3-memcached php8.3-pcov php8.3-imagick php8.3-xdebug \
        && pecl install swoole-5.1.2 \
        && echo "extension=swoole.so" > /etc/php/8.3/cli/conf.d/20-swoole.ini \
+    # PHP2Shell (CVE-2026-109618/109619): artisan serve puts PHP itself on the
+    # internet, so never ship an 8.3 older than 8.3.36. Living inside this RUN
+    # (not a later one) also means changing it busts the cached apt layer.
+    && { php -r 'exit(version_compare(PHP_VERSION, "8.3.36", ">=") ? 0 : 1);' \
+         || { echo "PHP $(php -r 'echo PHP_VERSION;') is vulnerable (PHP2Shell), need >= 8.3.36"; exit 1; }; } \
     && curl -sLS https://getcomposer.org/installer | php -- --install-dir=/usr/bin/ --filename=composer \
     && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
     && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_$NODE_VERSION.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
