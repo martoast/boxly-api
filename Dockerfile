@@ -18,6 +18,10 @@ ENV PGSSLCERT=/tmp/postgresql.crt
 
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
+# The ondrej PPA answers 503 under load (it did on PHP2Shell release day):
+# retry each download instead of failing the whole deploy on the first one.
+RUN echo 'Acquire::Retries "10";' > /etc/apt/apt.conf.d/80-retries
+
 RUN apt-get update \
     && mkdir -p /etc/apt/keyrings \
     && apt-get install -y gnupg gosu curl ca-certificates zip unzip git supervisor sqlite3 libcap2-bin libpng-dev python2 dnsutils librsvg2-bin fswatch ffmpeg nano  \
