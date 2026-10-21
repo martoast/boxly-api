@@ -37,7 +37,7 @@ RUN apt-get update \
        php8.3-intl php8.3-readline \
        php8.3-ldap \
        php8.3-msgpack php8.3-igbinary php8.3-redis \
-       php8.3-memcached php8.3-pcov php8.3-imagick php8.3-xdebug" \
+       php8.3-memcached php8.3-pcov php8.3-imagick" \
     # Download in rounds: apt keeps every .deb it already got, so each round
     # only fetches what the busy PPA refused last time. update is inside the
     # loop because a 503 on the index is only a warning to apt-get update.
