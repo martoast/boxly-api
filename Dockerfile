@@ -19,16 +19,17 @@ ENV PGSSLCERT=/tmp/postgresql.crt
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
 # The ondrej PPA answers 503 under load (it did on PHP2Shell release day):
-# retry each download instead of failing the whole deploy on the first one.
-RUN echo 'Acquire::Retries "10";' > /etc/apt/apt.conf.d/80-retries
+# retry each download instead of failing the whole deploy on the first one,
+# and don't let a hung connection sit for apt's default two minutes.
+RUN printf 'Acquire::Retries "10";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' \
+    > /etc/apt/apt.conf.d/80-retries
 
 RUN apt-get update \
     && mkdir -p /etc/apt/keyrings \
     && apt-get install -y gnupg gosu curl ca-certificates zip unzip git supervisor sqlite3 libcap2-bin libpng-dev python2 dnsutils librsvg2-bin fswatch ffmpeg nano  \
     && curl -sS 'https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x14aa40ec0831756756d7f66c4f4ea0aae5267a6c' | gpg --dearmor | tee /etc/apt/keyrings/ppa_ondrej_php.gpg > /dev/null \
     && echo "deb [signed-by=/etc/apt/keyrings/ppa_ondrej_php.gpg] https://ppa.launchpadcontent.net/ondrej/php/ubuntu jammy main" > /etc/apt/sources.list.d/ppa_ondrej_php.list \
-    && apt-get update \
-    && apt-get install -y php8.3-cli php8.3-dev \
+    && PHP_PKGS="php8.3-cli php8.3-dev \
        php8.3-pgsql php8.3-sqlite3 php8.3-gd \
        php8.3-curl \
        php8.3-imap php8.3-mysql php8.3-mbstring \
@@ -36,7 +37,15 @@ RUN apt-get update \
        php8.3-intl php8.3-readline \
        php8.3-ldap \
        php8.3-msgpack php8.3-igbinary php8.3-redis \
-       php8.3-memcached php8.3-pcov php8.3-imagick php8.3-xdebug \
+       php8.3-memcached php8.3-pcov php8.3-imagick php8.3-xdebug" \
+    # Download in rounds: apt keeps every .deb it already got, so each round
+    # only fetches what the busy PPA refused last time. update is inside the
+    # loop because a 503 on the index is only a warning to apt-get update.
+    && for round in 1 2 3 4 5 6 7 8 9 10 11 12; do \
+         apt-get update && apt-get install -y --download-only $PHP_PKGS && break; \
+         echo "PHP PPA busy (round $round), retrying in 30s"; sleep 30; \
+       done \
+    && apt-get install -y $PHP_PKGS \
        && pecl install swoole-5.1.2 \
        && echo "extension=swoole.so" > /etc/php/8.3/cli/conf.d/20-swoole.ini \
     # PHP2Shell (CVE-2026-109618/109619): artisan serve puts PHP itself on the
