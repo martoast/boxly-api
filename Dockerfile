@@ -46,8 +46,6 @@ RUN apt-get update \
          echo "PHP PPA busy (round $round), retrying in 30s"; sleep 30; \
        done \
     && apt-get install -y $PHP_PKGS \
-       && pecl install swoole-5.1.2 \
-       && echo "extension=swoole.so" > /etc/php/8.3/cli/conf.d/20-swoole.ini \
     # PHP2Shell (CVE-2026-109618/109619): artisan serve puts PHP itself on the
     # internet, so never ship an 8.3 older than 8.3.36. Living inside this RUN
     # (not a later one) also means changing it busts the cached apt layer.
