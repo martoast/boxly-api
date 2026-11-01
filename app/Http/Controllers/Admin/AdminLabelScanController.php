@@ -170,10 +170,11 @@ class AdminLabelScanController extends Controller
         }
 
         $rows = [];
-        // Where it was scanned: an employee's own warehouse; an admin may say which (default San Diego).
+        // Where it was scanned: an employee's own warehouse; an admin says which, default Tijuana — that is where the
+        // admins scan (Alex, 2026-10-31: San Diego default mislabelled a whole Tijuana session).
         $location = $request->user()->isWarehouseEmployee()
             ? $request->user()->warehouseLocation()
-            : (in_array($request->input('location'), User::LOCATIONS, true) ? $request->input('location') : User::LOCATION_SAN_DIEGO);
+            : (in_array($request->input('location'), User::LOCATIONS, true) ? $request->input('location') : User::LOCATION_TIJUANA);
 
         foreach ($validated['packages'] as $package) {
             $rows[] = LabelScan::create([
@@ -190,7 +191,12 @@ class AdminLabelScanController extends Controller
         return response()->json(['success' => true, 'data' => $rows], 201);
     }
 
-    /** Correct one package: recipient_name, tracking_number, carrier, needs_check (false = checked by a person). */
+    /**
+     * Correct one package: recipient_name, tracking_number, carrier, needs_check (false = checked by a person).
+     * Admins may also move it to the other warehouse: location (san_diego | tijuana), and with whole_batch=1
+     * every row of the same scanning session moves too, so a session saved under the wrong warehouse is fixed
+     * in one go. Response `moved` = how many rows changed warehouse.
+     */
     public function update(Request $request, LabelScan $labelScan)
     {
         $this->ensureSameWarehouse($request, $labelScan);
@@ -201,7 +207,24 @@ class AdminLabelScanController extends Controller
             'suite'           => 'sometimes|nullable|string|max:40',
             'ship_from'       => 'sometimes|nullable|string|max:255',
             'needs_check'     => 'sometimes|boolean',
+            'location'        => 'sometimes|in:' . implode(',', User::LOCATIONS),
+            'whole_batch'     => 'sometimes|boolean',
         ]);
+
+        // Only an admin moves scans between warehouses: an employee's scans are always their own warehouse.
+        $location = $validated['location'] ?? null;
+        $wholeBatch = (bool) ($validated['whole_batch'] ?? false);
+        unset($validated['location'], $validated['whole_batch']);
+        if ($location && $request->user()->isWarehouseEmployee()) {
+            abort(403, 'Only an admin can move a scan to another warehouse.');
+        }
+        $moved = 0;
+        if ($location) {
+            $rows = $wholeBatch && $labelScan->batch
+                ? LabelScan::where('batch', $labelScan->batch)
+                : LabelScan::whereKey($labelScan->id);
+            $moved = $rows->where('location', '!=', $location)->update(['location' => $location]);
+        }
 
         // A person correcting the name or tracking has checked the label: clear "Revisar" unless they set it.
         if (! array_key_exists('needs_check', $validated)
@@ -209,9 +232,11 @@ class AdminLabelScanController extends Controller
             $validated['needs_check'] = false;
         }
 
-        $labelScan->update($validated);
+        if ($validated) {
+            $labelScan->update($validated);
+        }
 
-        return response()->json(['success' => true, 'data' => $labelScan->fresh()->load('creator:id,name')]);
+        return response()->json(['success' => true, 'data' => $labelScan->fresh()->load('creator:id,name'), 'moved' => $moved]);
     }
 
     /** Delete one package row (its photo stays in storage: another row from the same photo may use it). */

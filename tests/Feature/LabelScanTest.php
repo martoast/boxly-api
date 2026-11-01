@@ -33,13 +33,43 @@ class LabelScanTest extends LiveShoppingTestCase
     /** A real 8x8 JPEG: the test PHP has no GD, so UploadedFile::fake()->image() cannot draw one. */
     private const JPEG = '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/wAALCAAIAAgBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AVN//2Q==';
 
-    private function upload(User $u, string $prefix, array $packages)
+    private function upload(User $u, string $prefix, array $packages, array $extra = [])
     {
         return $this->actingAs($u)->post("/{$prefix}/label-scans", [
             'image'    => UploadedFile::fake()->createWithContent('label.jpg', base64_decode(self::JPEG)),
             'batch'    => 'b1',
             'packages' => json_encode($packages),
+            ...$extra,
         ], ['Accept' => 'application/json']);
+    }
+
+    public function test_admin_scans_default_to_tijuana_and_a_whole_session_can_be_moved(): void
+    {
+        $admin = $this->user('admin');
+        // no location sent: an admin scans in Tijuana
+        $this->upload($admin, 'admin', [['tracking_number' => 'T', 'recipient_name' => 'Tere']], ['batch' => 'tj'])
+            ->assertStatus(201)->assertJsonPath('data.0.location', 'tijuana');
+
+        // a session saved as San Diego by mistake (two photos, three packages), plus an unrelated SD scan
+        $this->upload($admin, 'admin', [['tracking_number' => 'A', 'recipient_name' => 'Ana'], ['tracking_number' => 'B', 'recipient_name' => 'Beto']], ['location' => 'san_diego']);
+        $this->upload($admin, 'admin', [['tracking_number' => 'C', 'recipient_name' => 'Caro']], ['location' => 'san_diego']);
+        $this->upload($admin, 'admin', [['tracking_number' => 'Z', 'recipient_name' => 'Otro']], ['location' => 'san_diego', 'batch' => 'b2']);
+        $a = LabelScan::where('tracking_number', 'A')->first();
+        $other = LabelScan::where('tracking_number', 'Z')->first();
+
+        // one row
+        $this->actingAs($admin)->putJson("/admin/label-scans/{$a->id}", ['location' => 'tijuana'])
+            ->assertOk()->assertJsonPath('moved', 1)->assertJsonPath('data.location', 'tijuana');
+        // the rest of its session (A is already there, so 2 move); the other session stays put
+        $this->actingAs($admin)->putJson("/admin/label-scans/{$a->id}", ['location' => 'tijuana', 'whole_batch' => true])
+            ->assertOk()->assertJsonPath('moved', 2);
+        $this->assertSame(['tijuana'], LabelScan::where('batch', 'b1')->pluck('location')->unique()->values()->all());
+        $this->assertSame('san_diego', $other->fresh()->location);
+
+        // a warehouse employee can't move scans
+        $sd = $this->warehouseEmployee(null);
+        $this->actingAs($sd)->putJson("/employee/label-scans/{$other->id}", ['location' => 'tijuana'])->assertForbidden();
+        $this->assertSame('san_diego', $other->fresh()->location);
     }
 
     public function test_admin_uploads_one_photo_and_gets_a_row_per_package(): void
