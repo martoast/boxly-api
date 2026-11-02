@@ -81,8 +81,9 @@ class UnifiedAdminDashboardController extends Controller
      * All-time monthly trajectory for the dashboard charts.
      *
      * Returns one bucket per month from the first month of real activity to
-     * now, each holding revenue / expenses / profit / new + cumulative
-     * customers / sales count / orders count. Mirrors the same computation as
+     * now, each holding revenue / expenses / profit / founders_draw (personal
+     * expenses) / retained (profit − founders_draw: what the business kept) /
+     * new + cumulative customers / sales count / orders count. Mirrors the same computation as
      * getFinancialData() and respects per-month MonthlyManualMetric overrides
      * (financial + orders) so the charts never contradict the headline cards.
      *
@@ -120,6 +121,10 @@ class UnifiedAdminDashboardController extends Controller
 
         // Expenses by expense_date month (business only — profit excludes personal).
         $expenses = BusinessExpense::business()->selectRaw("DATE_FORMAT(expense_date, '%Y-%m') as ym, SUM(amount) as total")
+            ->groupBy('ym')->get()->keyBy('ym');
+
+        // Founders' draw = personal expenses by month (never in profit; subtracted for retained capital).
+        $personal = BusinessExpense::personal()->selectRaw("DATE_FORMAT(expense_date, '%Y-%m') as ym, SUM(amount) as total")
             ->groupBy('ym')->get()->keyBy('ym');
 
         // New customers by created_at month.
@@ -167,6 +172,7 @@ class UnifiedAdminDashboardController extends Controller
             $monthExpenses = $isFinancialManual ? (float) $m->total_expenses : $calcExpenses;
             $orders = $isOrdersManual ? (int) $m->total_orders : $calcOrders;
 
+            $draw = (float) ($personal[$key]->total ?? 0);
             $newCust = (int) ($newCustomers[$key]->cnt ?? 0);
             $cumulativeCustomers += $newCust;
 
@@ -176,6 +182,8 @@ class UnifiedAdminDashboardController extends Controller
                 'revenue' => round($revenue, 2),
                 'expenses' => round($monthExpenses, 2),
                 'profit' => round($revenue - $monthExpenses, 2),
+                'founders_draw' => round($draw, 2),
+                'retained' => round($revenue - $monthExpenses - $draw, 2),
                 'new_customers' => $newCust,
                 'cumulative_customers' => $cumulativeCustomers,
                 'sales_count' => (int) ($salesCount[$key]->cnt ?? 0),
