@@ -186,6 +186,27 @@ class CartQuotesTest extends LiveShoppingTestCase
         return [$u, PurchaseRequest::first()];
     }
 
+    /** Every line sold out → "Sin existencias" (the chat offers another option), not "could not verify the total" (live 2026-10-31, VS). */
+    public function test_a_failed_quote_whose_lines_are_all_sold_out_says_so(): void
+    {
+        [, $pr] = $this->finalizedTwoStores();
+        $nike = StoreQuote::where('purchase_request_id', $pr->id)->where('store_id', 'nike')->first();
+        $states = CartItem::where('cart_id', $nike->cart_id)->where('store_id', 'nike')->pluck('id')->mapWithKeys(fn ($id) => [$id => 'unavailable'])->all();
+        $this->deliverQuote($nike, $this->quoteBlock('failed', null), 91, $states);
+        $nike = $nike->fresh();
+        $this->assertSame('out_of_stock', $nike->error_code);
+        $this->assertSame('Sin existencias en la tienda', $nike->dropReason());
+    }
+
+    public function test_a_failed_quote_with_a_line_still_in_stock_stays_unverified(): void
+    {
+        [, $pr] = $this->finalizedTwoStores();
+        $nike = StoreQuote::where('purchase_request_id', $pr->id)->where('store_id', 'nike')->first();
+        $first = CartItem::where('cart_id', $nike->cart_id)->where('store_id', 'nike')->orderBy('id')->value('id');
+        $this->deliverQuote($nike, $this->quoteBlock('failed', null), 92, [$first => 'unavailable']);
+        $this->assertSame('quote_unverified', $nike->fresh()->error_code);
+    }
+
     public function test_finalize_starts_one_quote_per_store(): void
     {
         Queue::fake();

@@ -112,6 +112,7 @@ class StoreQuote extends Model
 
         return match (true) {
             $this->error_code === 'no_quotable_items'              => 'No había productos que se pudieran cotizar',
+            $this->error_code === 'out_of_stock'                   => 'Sin existencias en la tienda',
             $this->error_code === 'quote_unverified'               => 'No se pudo verificar el total en la tienda',
             str_starts_with((string) $this->error_code, 'gave_up_') => 'La tienda no respondió a tiempo',
             default                                                => 'No se pudo cotizar esta tienda',

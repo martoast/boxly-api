@@ -120,6 +120,14 @@ class CartQuotes
      * caller's terminal transaction): the row takes the engine's verdict and
      * money, the cart items take their line states.
      */
+    /** Every line of the engine's cart came back sold out (state unavailable). */
+    private static function allLinesSoldOut(?array $cart): bool
+    {
+        $lines = is_array($cart) ? ($cart['lines'] ?? []) : [];
+
+        return count($lines) > 0 && collect($lines)->every(fn ($l) => ($l['state'] ?? null) === 'unavailable');
+    }
+
     public static function applyTerminal(LiveShoppingSession $session, StoreQuote $quote, string $outcome, ?array $cart): void
     {
         $quote = StoreQuote::where('id', $quote->id)->lockForUpdate()->first();
@@ -138,7 +146,9 @@ class CartQuotes
                 'checkout_stage'       => $q['checkout_stage'],
                 'evidence'             => $q['evidence'],
                 'observed_at'          => $q['observed_at'],
-                'error_code'           => $q['verdict'] === 'failed' ? 'quote_unverified' : null,
+                // every line sold out (live 2026-10-31: a Victoria's Secret mist "Item unavailable … Out Of Stock" was told "no se pudo
+                // verificar el total… nuestro equipo te escribe" instead of being offered another option)
+                'error_code'           => $q['verdict'] === 'failed' ? (self::allLinesSoldOut($cart) ? 'out_of_stock' : 'quote_unverified') : null,
             ];
             foreach (StoreQuote::MONEY as $part) {
                 $fill["{$part}_cents"] = $q[$part];
