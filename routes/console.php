@@ -45,3 +45,9 @@ Artisan::command('inspire', function () {
  */
 Schedule::command('boxly:live-shopping-reconcile')->everyMinute()->withoutOverlapping();
 Schedule::command('boxly:live-shopping-drain')->everyMinute()->withoutOverlapping();
+
+/*
+ * AI search health (Alex 2026-11-09): every 6 hours one message to the live assistant; an email to services.assistant_health.email
+ * when it does not answer, and once when it answers again.
+ */
+Schedule::command('boxly:assistant-health')->everySixHours()->withoutOverlapping();

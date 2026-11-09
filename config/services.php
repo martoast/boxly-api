@@ -208,6 +208,13 @@ return [
         'url' => env('CATALOG_API_URL', 'https://catalog.fullstacklabs.org'),
     ],
 
+    // The AI search health check (boxly:assistant-health, every 6 hours): one message to the live assistant, an email when it fails
+    // (Alex 2026-11-09, after a 3-day silent outage: the model provider's credits ran out).
+    'assistant_health' => [
+        'url' => env('ASSISTANT_HEALTH_URL', 'https://boxly.mx/api/assistant'),
+        'email' => env('ASSISTANT_HEALTH_EMAIL', 'alexmartos96@gmail.com'),
+    ],
+
     // Claude's own production test account: its test orders never alert the shopping team (Alex, 2026-09-24).
     // (The Boxly Lab gate that lived beside it — BOXLY_LAB_CODE / BOXLY_BETA_EMAILS — is gone since 2026-09-28.)
     'test_accounts' => [
