@@ -55,7 +55,9 @@ class AssistantHealth extends Command
     private function probe(string $url): array
     {
         try {
+            // health: true — the app answers it like any message but never logs it as a guest's question in the admin
             $res = Http::timeout(60)->acceptJson()->post($url, [
+                'health' => true,
                 'messages' => [['id' => 'health-' . now()->timestamp, 'role' => 'user', 'parts' => [['type' => 'text', 'text' => 'hola']]]],
             ]);
         } catch (\Throwable $e) {

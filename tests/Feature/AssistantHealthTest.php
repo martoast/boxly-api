@@ -25,6 +25,8 @@ class AssistantHealthTest extends TestCase
         Http::fake(['boxly.test/*' => Http::response(self::OK_STREAM, 200)]);
         Mail::shouldReceive('raw')->never();
         $this->artisan('boxly:assistant-health')->assertExitCode(0);
+        // marked as the health check: the app never logs it as a guest's question
+        Http::assertSent(fn ($req) => $req['health'] === true && $req['messages'][0]['parts'][0]['text'] === 'hola');
     }
 
     public function test_a_streamed_provider_error_emails_the_alert_address(): void
