@@ -66,6 +66,12 @@ class LiveShoppingController extends Controller
             // L2 (multi-store): an optional ordered list whose first entry is
             // store_id; distinct slugs; bounded by the engine's advertised cap.
             'store_ids.*'     => ['string', 'regex:/^[a-z0-9][a-z0-9_-]{0,39}$/'],
+            // The shopper's brand, price limit and "promociones" (2026-11-11: "T shirt lacoste de 40 usd o menos" showed 15
+            // shirts and no Lacoste): the engine keeps only the cards that answer them (engine contracts: filters).
+            'filters'          => $manual ? 'prohibited' : 'sometimes|array:brand,max_price,on_sale',
+            'filters.brand'    => ['nullable', 'string', 'max:60', 'regex:/^[\pL\pN &.\'-]+$/u'],
+            'filters.max_price' => 'nullable|numeric|min:1|max:100000',
+            'filters.on_sale'  => 'nullable|boolean',
         ]);
         $storeIds = array_values($validated['store_ids'] ?? [$validated['store_id']]);
         if ($storeIds[0] !== $validated['store_id'] || count(array_unique($storeIds)) !== count($storeIds)) {
@@ -92,6 +98,7 @@ class LiveShoppingController extends Controller
             }
         }
         $objective = $manual ? LiveShoppingSession::KIND_MANUAL : $validated['objective'];
+        $filters = LiveShoppingSession::cleanFilters($validated['filters'] ?? null);
 
         // Claim the one active slot at INSERT. No precheck: two concurrent
         // creates would both read "none" and both insert. The unique index on
@@ -143,6 +150,9 @@ class LiveShoppingController extends Controller
             }
         }
 
+        if ($filters) {
+            LiveShoppingSession::rememberFilters($session->id, $filters); // a search that waits in line (LiveQueue) starts with them too
+        }
         try {
             $engineSession = $this->engine->createSession(
                 $session->id,
@@ -150,6 +160,8 @@ class LiveShoppingController extends Controller
                 $storeIds,
                 $objective,
                 $kind,
+                null,
+                $filters,
             );
         } catch (LiveShoppingEngineException $e) {
             // THE ENGINE IS FULL, NOT DOWN (2026-09-28, simultaneous shoppers): a live search waits in line

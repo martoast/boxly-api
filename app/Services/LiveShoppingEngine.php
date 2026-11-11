@@ -70,7 +70,7 @@ class LiveShoppingEngine
      * C3: a `cart` session carries the `cart` object (and query "cart"); it is
      * sent only for that kind, so every other create is byte-identical.
      */
-    public function createSession(int $localRowId, ?int $conversationId, string|array $storeId, string $objective, string $kind = 'agent', ?array $cart = null): array
+    public function createSession(int $localRowId, ?int $conversationId, string|array $storeId, string $objective, string $kind = 'agent', ?array $cart = null, ?array $filters = null): array
     {
         $storeIds = is_array($storeId) ? array_values($storeId) : [$storeId];
         $storeId = (string) ($storeIds[0] ?? '');
@@ -83,7 +83,7 @@ class LiveShoppingEngine
             'store_id'        => $storeId,
             'query'           => $objective,
             'callback_id'     => self::CALLBACK_ID,
-        ], count($storeIds) > 1 ? ['store_ids' => $storeIds] : [], $kind === 'manual' ? ['kind' => 'manual'] : [], $kind === 'cart' ? ['kind' => 'cart', 'cart' => $cart] : []), ['Idempotency-Key' => 'live-shopping-session-' . $localRowId]);
+        ], count($storeIds) > 1 ? ['store_ids' => $storeIds] : [], $kind === 'manual' ? ['kind' => 'manual'] : [], $kind === 'cart' ? ['kind' => 'cart', 'cart' => $cart] : [], $kind === 'agent' && $filters ? ['filters' => $filters] : []), ['Idempotency-Key' => 'live-shopping-session-' . $localRowId]);
 
         // The envelope is closed too, not just the session inside it. An extra
         // key out here means the same thing it means in there: we are not

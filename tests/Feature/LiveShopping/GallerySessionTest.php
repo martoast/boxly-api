@@ -80,6 +80,31 @@ class GallerySessionTest extends LiveShoppingTestCase
             && $r['query'] === 'running shoes' && $r['store_ids'] === ['on', 'new-balance', 'nike'] && ! isset($r['kind']));
     }
 
+    public function test_the_shoppers_brand_price_limit_and_promos_reach_the_engine_as_filters(): void
+    {
+        [$user, $conversation] = $this->member();
+        $this->engine(3, (string) $conversation->id);
+
+        $this->actingAs($user)->postJson('/live-shopping/sessions', [
+            'conversation_id' => $conversation->id, 'objective' => 'men t-shirts', 'store_id' => 'on',
+            'filters' => ['brand' => ' Lacoste ', 'max_price' => '40', 'on_sale' => false],
+        ])->assertStatus(201);
+        Http::assertSent(fn ($r) => str_contains($r->url(), '/v1/sessions') && $r['filters']['brand'] === 'Lacoste' && (float) $r['filters']['max_price'] === 40.0 && count($r['filters']) === 2);
+        $this->assertSame(['brand' => 'Lacoste', 'max_price' => 40.0], LiveShoppingSession::rememberedFilters(LiveShoppingSession::first()->id), 'kept for a queued start');
+
+        // a bad brand or an unknown filter is refused
+        $this->actingAs($user)->postJson('/live-shopping/sessions', ['conversation_id' => $conversation->id, 'objective' => 'x', 'store_id' => 'on', 'filters' => ['brand' => '<b>']])->assertStatus(422);
+        $this->actingAs($user)->postJson('/live-shopping/sessions', ['conversation_id' => $conversation->id, 'objective' => 'x', 'store_id' => 'on', 'filters' => ['color' => 'red']])->assertStatus(422);
+    }
+
+    public function test_a_search_without_filters_sends_none(): void
+    {
+        [$user, $conversation] = $this->member();
+        $this->engine(3, (string) $conversation->id);
+        $this->actingAs($user)->postJson('/live-shopping/sessions', ['conversation_id' => $conversation->id, 'objective' => 'shoes', 'store_id' => 'on', 'filters' => ['brand' => null, 'on_sale' => false]])->assertStatus(201);
+        Http::assertSent(fn ($r) => str_contains($r->url(), '/v1/sessions') && $r['query'] === 'shoes' && ! isset($r['filters']));
+    }
+
     public function test_past_the_advertised_cap_the_request_is_refused_before_the_engine_is_asked(): void
     {
         [$user, $conversation] = $this->member();

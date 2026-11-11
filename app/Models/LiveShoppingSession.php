@@ -27,6 +27,42 @@ class LiveShoppingSession extends Model
         'terminal_seq' => 'integer',
     ];
 
+    /**
+     * The shopper's search filters (brand, max_price, on_sale) as the engine takes them: nulls and false dropped, the brand trimmed,
+     * the price a number. Null when nothing is left.
+     */
+    public static function cleanFilters(?array $f): ?array
+    {
+        if (! $f) {
+            return null;
+        }
+        $out = [];
+        if (isset($f['brand']) && trim((string) $f['brand']) !== '') {
+            $out['brand'] = trim((string) $f['brand']);
+        }
+        if (isset($f['max_price']) && is_numeric($f['max_price'])) {
+            $out['max_price'] = round((float) $f['max_price'], 2);
+        }
+        if (! empty($f['on_sale'])) {
+            $out['on_sale'] = true;
+        }
+
+        return $out ?: null;
+    }
+
+    /** Kept for an hour (no column): a search queued behind a busy engine starts with the same filters. */
+    public static function rememberFilters(int $id, array $filters): void
+    {
+        \Illuminate\Support\Facades\Cache::put("live_filters:{$id}", $filters, 3600);
+    }
+
+    public static function rememberedFilters(int $id): ?array
+    {
+        $f = \Illuminate\Support\Facades\Cache::get("live_filters:{$id}");
+
+        return is_array($f) && $f ? $f : null;
+    }
+
     /** Who drives the session: the agent (today's flow) or the customer (remote store browser). */
     public const KIND_AGENT  = 'agent';
     public const KIND_MANUAL = 'manual';

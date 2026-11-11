@@ -87,7 +87,7 @@ class LiveQueue
     {
         $storeIds = array_values(array_filter(array_map(fn ($s) => is_array($s) ? ($s['id'] ?? null) : null, (array) $session->stores))) ?: [$session->store_id];
         try {
-            $engineSession = $engine->createSession($session->id, $session->conversation_id, $storeIds, $session->objective, $session->kind ?? LiveShoppingSession::KIND_AGENT);
+            $engineSession = $engine->createSession($session->id, $session->conversation_id, $storeIds, $session->objective, $session->kind ?? LiveShoppingSession::KIND_AGENT, null, LiveShoppingSession::rememberedFilters($session->id));
         } catch (LiveShoppingEngineException $e) {
             if (self::isBusy($e)) {
                 return false;
