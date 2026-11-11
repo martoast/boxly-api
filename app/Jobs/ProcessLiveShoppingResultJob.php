@@ -150,6 +150,9 @@ class ProcessLiveShoppingResultJob implements ShouldQueue
             // records no search event.
             if ($session->kind === LiveShoppingSession::KIND_CART) {
                 $outcome = $payload['result']['outcome'] ?? LiveShoppingSession::STATUS_FAILED;
+                // the engine's reason is the session's BEFORE the cart settles: a failed quote takes it (store_signed_out alerts the
+                // team; 2026-11-11 every engine code was read as null here and the quote said only "quote_failed")
+                $session->error_code = $payload['result']['error_code'] ?? null;
                 CartSync::applyTerminal($session, $outcome, $payload['result']['cart'] ?? null);
                 $session->forceFill([
                     'status'               => $outcome,

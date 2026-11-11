@@ -186,6 +186,21 @@ class CartQuotesTest extends LiveShoppingTestCase
         return [$u, PurchaseRequest::first()];
     }
 
+    /** The store's own checkout account signed out (engine store_signed_out, 2026-11-11): the quote fails and the team is emailed once a day. */
+    public function test_a_signed_out_store_account_emails_the_team_once(): void
+    {
+        [, $pr] = $this->finalizedTwoStores();
+        Mail::shouldReceive('raw')->once()->withArgs(fn ($text) => str_contains($text, 'checkout account is signed out'));
+        $nike = StoreQuote::where('purchase_request_id', $pr->id)->where('store_id', 'nike')->first();
+        $this->runJob($nike);
+        $session = LiveShoppingSession::find($nike->fresh()->live_shopping_session_id);
+        $r = $this->deliver($this->body(['delivery_id' => 'dlv_so1', 'session_id' => $session->engine_session_id, 'conversation_id' => '0', 'products' => [],
+            'result' => ['outcome' => 'failed', 'products' => [], 'error_code' => 'store_signed_out']]), [], null, 'nonce-so1');
+        $this->assertSame(202, $r->status(), $r->getContent());
+        (new ProcessLiveShoppingResultJob(LiveShoppingWebhookReceipt::latest('id')->value('id')))->handle();
+        $this->assertSame('store_signed_out', $nike->fresh()->error_code);
+    }
+
     /** Every line sold out → "Sin existencias" (the chat offers another option), not "could not verify the total" (live 2026-10-31, VS). */
     public function test_a_failed_quote_whose_lines_are_all_sold_out_says_so(): void
     {

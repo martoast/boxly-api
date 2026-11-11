@@ -156,6 +156,9 @@ class CartQuotes
             $quote->forceFill($fill)->save();
         } else {
             $quote->forceFill(['status' => StoreQuote::STATUS_FAILED, 'error_code' => $session->error_code ?: 'quote_' . $outcome])->save();
+            if ($session->error_code === 'store_signed_out') {
+                self::alertSignedOut($quote);
+            }
         }
 
         // Item states from the lines, as for a sync (the quote also puts missing items in the store cart).
@@ -168,6 +171,28 @@ class CartQuotes
         }
 
         DB::afterCommit(fn () => self::afterQuoteSettled($quote->fresh()));
+    }
+
+    /**
+     * The store's checkout account (Boxly's own, signed in by a person: Amazon, Walmart) was found signed out at the start of a quote
+     * (engine store_signed_out, 2026-11-11): the team is emailed, at most once a day per store — only a person can sign it back in.
+     */
+    private static function alertSignedOut(StoreQuote $quote): void
+    {
+        $store = $quote->store_name ?: $quote->store_id;
+        if (! \Illuminate\Support\Facades\Cache::add("store_signed_out_alert:{$quote->store_id}", now()->toIso8601String(), 86400)) {
+            return;
+        }
+        $to = config('services.assistant_health.email');
+        try {
+            \Illuminate\Support\Facades\Mail::raw(
+                "The {$store} checkout account is signed out, so {$store} quotes are failing (quote #{$quote->id}).\n\n"
+                . "Sign it back in on the Boxly machine (visible browser on the boxly-{$quote->store_id} profile). This alert repeats at most once a day.",
+                fn ($m) => $m->to($to)->subject("Boxly: {$store} checkout account signed out")
+            );
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('signed-out alert email failed', ['store' => $quote->store_id, 'error' => $e->getMessage()]);
+        }
     }
 
     /** After any store settles: start the cart's next pending store, and invoice when all are settled. */
