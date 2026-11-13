@@ -282,6 +282,14 @@ class CartQuotes
             return 'sin total verificado en ' . $quotes->map(fn ($q) => $q->store_name ?: $q->store_id)->join(', ');
         }
         $quotes = $billable;
+        // A line the engine billed with "Revisar variante" (in the store cart, named differently from the pick — Nicolas's Gymshark order,
+        // 2026-11-13): the team confirms the variant before the invoice; the shopper reads "Nuestro equipo te confirmará el total"
+        $toConfirm = CartItem::whereIn('cart_id', $quotes->pluck('cart_id')->unique())
+            ->whereIn('store_id', $quotes->pluck('store_id')->unique())
+            ->where('sync_note', 'like', 'Revisar variante%')->value('sync_note');
+        if ($toConfirm) {
+            return 'variante por confirmar (' . mb_substr($toConfirm, 0, 140) . ')';
+        }
         if ($quotes->contains(fn (StoreQuote $q) => $q->currency !== 'USD' || $q->total_cents === null || $q->total_cents <= 0)) {
             return 'moneda o total inesperado';
         }

@@ -201,6 +201,20 @@ class CartQuotesTest extends LiveShoppingTestCase
         $this->assertSame('store_signed_out', $nike->fresh()->error_code);
     }
 
+    /** A line billed with "Revisar variante" (in the cart, named differently) sends the order to the team's review, never an automatic invoice. */
+    public function test_a_variant_to_confirm_goes_to_manual_review(): void
+    {
+        [, $pr] = $this->finalizedTwoStores();
+        $nike = StoreQuote::where('purchase_request_id', $pr->id)->where('store_id', 'nike')->first();
+        $nike->forceFill(['status' => StoreQuote::STATUS_PARTIAL, 'currency' => 'USD', 'total_cents' => 17456])->save();
+        CartItem::where('cart_id', $nike->cart_id)->where('store_id', 'nike')->limit(1)->update(['sync_status' => 'in_store_cart', 'sync_note' => 'Revisar variante: pedido L grey · en la tienda Large Black/Charcoal Grey']);
+        $why = \App\Services\CartQuotes::manualReason(collect([$nike->fresh()]));
+        $this->assertNotNull($why);
+        $this->assertStringContainsString('variante por confirmar', $why);
+        CartItem::where('cart_id', $nike->cart_id)->update(['sync_note' => null]);
+        $this->assertNull(\App\Services\CartQuotes::manualReason(collect([$nike->fresh()])), 'no note: invoiced automatically');
+    }
+
     /** Every line sold out → "Sin existencias" (the chat offers another option), not "could not verify the total" (live 2026-10-31, VS). */
     public function test_a_failed_quote_whose_lines_are_all_sold_out_says_so(): void
     {
