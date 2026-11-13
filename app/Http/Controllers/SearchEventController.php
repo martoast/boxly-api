@@ -480,7 +480,9 @@ class SearchEventController extends Controller
         $this->applyEventFilters($q, $v); // user_id / search / date filters (no type/query)
 
         $convos = $q->orderByDesc('last_message_at')->paginate($v['per_page'] ?? 50);
+        $funnel = \App\Services\AiSearchFunnel::forConversations($convos->getCollection()->pluck('id'));
         $convos->getCollection()->transform(fn ($c) => [
+            'funnel'          => $funnel[$c->id] ?? null,
             'id'              => $c->id,
             'title'           => $c->title,
             'message_count'   => $c->messages_count,
@@ -490,6 +492,27 @@ class SearchEventController extends Controller
         ]);
 
         return response()->json(['success' => true, 'data' => $convos]);
+    }
+
+    /**
+     * The AI-search funnel (2026-11-13): over the chats in range, how many reached each stage — results → opened → added → finalized →
+     * paid. Internal test accounts (emails with "boxlylab") are left out unless include_internal=1.
+     */
+    public function funnel(Request $request)
+    {
+        $v = $request->validate([
+            'from' => 'nullable|date', 'to' => 'nullable|date', 'days' => 'nullable|integer|min:1|max:3650',
+            'search' => 'nullable|string|max:120', 'user_id' => 'nullable|integer', 'include_internal' => 'nullable|boolean',
+        ]);
+        $q = Conversation::query();
+        $this->applyEventFilters($q, $v);
+        if (empty($v['include_internal'])) {
+            $q->whereDoesntHave('user', fn ($u) => $u->where('email', 'like', '%boxlylab%'));
+        }
+        $ids = $q->limit(5000)->pluck('id');
+        $by = \App\Services\AiSearchFunnel::forConversations($ids);
+
+        return response()->json(['success' => true, 'data' => \App\Services\AiSearchFunnel::totals($by)]);
     }
 
     /** Apply the shared customer + date-range filters to a SearchEvent OR Conversation query. */
