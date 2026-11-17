@@ -24,7 +24,6 @@ class TeamEmailTest extends LiveShoppingTestCase
 
     public function test_an_admin_emails_a_staff_member_and_lists_the_staff(): void
     {
-        Mail::fake();
         $admin = $this->staff('admin');
         $vel = $this->staff('employee', 'shopping');
         $this->staff('customer');
@@ -35,6 +34,12 @@ class TeamEmailTest extends LiveShoppingTestCase
         $this->actingAs($admin)->postJson('/admin/team-email', ['to' => [$vel->email], 'subject' => 'Karla #655', 'body' => 'Total $74.36'])
             ->assertOk()->assertJsonPath('data.to', [$vel->email]);
         $this->actingAs($admin)->postJson('/admin/team-email', ['to' => [$vel->id], 'subject' => 's', 'body' => 'b'])->assertOk();
+
+        // the real outgoing message (array mailer): to Vel, replies to Boxly's inbox — not the sender's account
+        $msg = app('mailer')->getSymfonyTransport()->messages()->first()->getOriginalMessage();
+        $this->assertSame([$vel->email], array_map(fn ($a) => $a->getAddress(), $msg->getTo()));
+        $this->assertSame(['contact@boxly.mx'], array_map(fn ($a) => $a->getAddress(), $msg->getReplyTo()));
+        $this->assertSame('Karla #655', $msg->getSubject());
     }
 
     public function test_a_customer_address_is_refused_and_nothing_is_sent(): void

@@ -15,6 +15,8 @@ use Illuminate\Support\Facades\Mail;
  */
 class AdminTeamEmailController extends Controller
 {
+    private const TEAM_INBOX = 'contact@boxly.mx';
+
     /** Boxly staff who can receive a team email: id, name, email, role, team. */
     public function index()
     {
@@ -28,7 +30,7 @@ class AdminTeamEmailController extends Controller
 
     /**
      * Send a plain-text email to one or more staff members. Body: to (array of staff emails or user ids), subject, body,
-     * optional cc_me (true = a copy to the sender). 422 if any recipient is not a staff account.
+     * optional cc_me (true = a copy to contact@boxly.mx). Replies go to contact@boxly.mx. 422 if any recipient is not a staff account.
      */
     public function send(Request $request)
     {
@@ -62,10 +64,12 @@ class AdminTeamEmailController extends Controller
 
         $sender = $request->user();
         $to = array_values(array_map(fn ($u) => $u->email, $recipients));
-        Mail::raw($validated['body'], function ($m) use ($to, $validated, $sender) {
-            $m->to($to)->subject($validated['subject'])->replyTo($sender->email, $sender->name);
+        // replies go to Boxly's own inbox (the Mailgun sender), not the sender's account — the admin CLI token's account is not a
+        // real inbox (Alex 2026-11-17); cc_me copies that inbox too
+        Mail::raw($validated['body'], function ($m) use ($to, $validated) {
+            $m->to($to)->subject($validated['subject'])->replyTo(self::TEAM_INBOX, 'Boxly');
             if (! empty($validated['cc_me'])) {
-                $m->cc($sender->email);
+                $m->cc(self::TEAM_INBOX);
             }
         });
         Log::info('team email sent', ['by' => $sender->id, 'to' => $to, 'subject' => $validated['subject']]);
