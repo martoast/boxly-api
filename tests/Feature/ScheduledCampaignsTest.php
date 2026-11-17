@@ -52,6 +52,10 @@ class ScheduledCampaignsTest extends LiveShoppingTestCase
         $at = now()->addDays(2)->startOfMinute();
         $this->actingAs($admin)->putJson("/admin/campaigns/{$c->id}", ['scheduled_at' => $at->toIso8601String()])->assertOk();
         $this->assertTrue($c->fresh()->scheduled_at->equalTo($at));
+        // a time with Mexico's offset is that instant, not its wall clock in UTC
+        $mx = now()->addDays(3)->toDateString();
+        $this->actingAs($admin)->putJson("/admin/campaigns/{$c->id}", ['scheduled_at' => "{$mx}T09:00:00-06:00"])->assertOk();
+        $this->assertSame("{$mx} 15:00", $c->fresh()->scheduled_at->utc()->format('Y-m-d H:i'));
         $this->actingAs($admin)->putJson("/admin/campaigns/{$c->id}", ['scheduled_at' => now()->subHour()->toIso8601String()])->assertStatus(422);
         $this->actingAs($admin)->putJson("/admin/campaigns/{$c->id}", ['scheduled_at' => null])->assertOk();
         $this->assertNull($c->fresh()->scheduled_at);

@@ -144,6 +144,11 @@ class AdminCampaignController extends Controller
             'scheduled_at' => ['nullable', 'date', 'after:now'],
         ]);
 
+        // a scheduled time is stored in UTC: "2026-11-23T09:00:00-06:00" (9:00 central Mexico) was saved as its wall clock 09:00 and read
+        // back as 09:00 UTC — 3 a.m. in Mexico (caught by the MCP tool test, 2026-11-17)
+        if ($request->filled('scheduled_at')) {
+            $request->merge(['scheduled_at' => \Illuminate\Support\Carbon::parse($request->input('scheduled_at'))->utc()]);
+        }
         $campaign->update($request->only([
             'name', 'subject', 'body', 'link_url', 'link_text',
             'audience', 'batch_size', 'batch_delay_seconds', 'scheduled_at',
