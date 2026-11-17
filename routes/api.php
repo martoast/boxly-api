@@ -565,6 +565,10 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::put('/{box}', [AdminOrderBoxController::class, 'update']);
         });
 
+        // Team emails: plain text to Boxly staff only (AdminTeamEmailController)
+        Route::get('/team-email/staff', [\App\Http\Controllers\Admin\AdminTeamEmailController::class, 'index']);
+        Route::post('/team-email', [\App\Http\Controllers\Admin\AdminTeamEmailController::class, 'send'])->middleware('throttle:30,60,team-email');
+
         // Sanctum personal access tokens — for CLI / service auth
         Route::get('/users/{user}/cli-tokens',           [AdminTokenController::class, 'index']);
         Route::post('/users/{user}/cli-tokens',          [AdminTokenController::class, 'store']);
