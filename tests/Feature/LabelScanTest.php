@@ -219,6 +219,34 @@ class LabelScanTest extends LiveShoppingTestCase
         $this->actingAs($sd)->putJson("/employee/label-scans/{$sdRow->id}", ['needs_check' => true])->assertOk();
     }
 
+    public function test_the_same_box_shot_twice_is_saved_once_per_warehouse(): void
+    {
+        $admin = $this->user('admin');
+        $box = [['tracking_number' => '1Z11A97T0300384081', 'carrier' => 'ups', 'recipient_name' => 'BOXLY Laura']];
+
+        $first = $this->upload($admin, 'admin', $box, ['location' => 'san_diego'])->assertCreated();
+        $again = $this->upload($admin, 'admin', $box, ['location' => 'san_diego'])->assertOk();
+        $this->assertTrue($again->json('duplicate'));
+        $this->assertSame($first->json('data.0.id'), $again->json('data.0.id'), 'the existing row comes back');
+        $this->assertSame(1, LabelScan::where('tracking_number', '1Z11A97T0300384081')->count());
+        $this->assertCount(1, Storage::disk('spaces')->allFiles(), 'a duplicate photo is not uploaded');
+
+        // the same box arriving in Tijuana is a real scan
+        $this->upload($admin, 'admin', $box, ['location' => 'tijuana'])->assertCreated();
+        $this->assertSame(2, LabelScan::where('tracking_number', '1Z11A97T0300384081')->count());
+
+        // a photo with a known box and a new one: only the new one is saved
+        $mixed = $this->upload($admin, 'admin', [...$box, ['tracking_number' => '9400111111111111111111', 'recipient_name' => 'BOXLY Ana']], ['location' => 'tijuana'])->assertCreated();
+        $this->assertTrue($mixed->json('data.0.duplicate'));
+        $this->assertNull($mixed->json('data.1.duplicate'));
+        $this->assertSame(3, LabelScan::count());
+
+        // no tracking number (unreadable barcode): never treated as a duplicate
+        $this->upload($admin, 'admin', [['recipient_name' => 'x', 'needs_check' => true]], ['location' => 'tijuana'])->assertCreated();
+        $this->upload($admin, 'admin', [['recipient_name' => 'x', 'needs_check' => true]], ['location' => 'tijuana'])->assertCreated();
+        $this->assertSame(5, LabelScan::count());
+    }
+
     public function test_update_fixes_a_row_and_destroy_removes_it(): void
     {
         $admin = $this->user('admin');

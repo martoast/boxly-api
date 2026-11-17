@@ -130,6 +130,8 @@ class AdminLabelScanController extends Controller
      * Save one label photo and the package(s) read from it (multipart: image file, packages = JSON array of
      * {tracking_number, carrier, recipient_name, needs_check, …}, optional batch). Normally called by the
      * label-scans page, which does the reading; a photo showing two labels yields two rows sharing the image.
+     * A tracking number the warehouse already has is not saved twice: that row is returned with duplicate=true
+     * (and when every package is one, nothing is uploaded: response duplicate=true, status 200).
      */
     public function store(Request $request)
     {
@@ -155,6 +157,26 @@ class AdminLabelScanController extends Controller
             'packages.*.needs_check'           => 'nullable|boolean',
         ]);
 
+        // Where it was scanned: an employee's own warehouse; an admin says which, default Tijuana — that is where the
+        // admins scan (Alex, 2026-10-31: San Diego default mislabelled a whole Tijuana session).
+        $location = $request->user()->isWarehouseEmployee()
+            ? $request->user()->warehouseLocation()
+            : (in_array($request->input('location'), User::LOCATIONS, true) ? $request->input('location') : User::LOCATION_TIJUANA);
+
+        // A package this warehouse already has (the same box shot twice, two phones, a page reload) is not saved
+        // again: its existing row comes back marked `duplicate`. Per warehouse — the San Diego and the Tijuana scan
+        // of one box are both real (2026-11-17: 119 doubles in a month, mostly two shots of one label).
+        $existing = [];
+        foreach ($validated['packages'] as $i => $package) {
+            $tracking = trim((string) ($package['tracking_number'] ?? ''));
+            if ($tracking !== '' && ($row = LabelScan::with('creator:id,name')->where('location', $location)->where('tracking_number', $tracking)->orderBy('id')->first())) {
+                $existing[$i] = $row->setAttribute('duplicate', true);
+            }
+        }
+        if (count($existing) === count($validated['packages'])) {
+            return response()->json(['success' => true, 'data' => array_values($existing), 'duplicate' => true]);
+        }
+
         try {
             $file = $request->file('image');
             $path = Storage::disk('spaces')->putFileAs(
@@ -170,13 +192,11 @@ class AdminLabelScanController extends Controller
         }
 
         $rows = [];
-        // Where it was scanned: an employee's own warehouse; an admin says which, default Tijuana — that is where the
-        // admins scan (Alex, 2026-10-31: San Diego default mislabelled a whole Tijuana session).
-        $location = $request->user()->isWarehouseEmployee()
-            ? $request->user()->warehouseLocation()
-            : (in_array($request->input('location'), User::LOCATIONS, true) ? $request->input('location') : User::LOCATION_TIJUANA);
-
-        foreach ($validated['packages'] as $package) {
+        foreach ($validated['packages'] as $i => $package) {
+            if (isset($existing[$i])) {
+                $rows[] = $existing[$i];
+                continue;
+            }
             $rows[] = LabelScan::create([
                 ...$package,
                 'needs_check' => (bool) ($package['needs_check'] ?? false),
