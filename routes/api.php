@@ -646,6 +646,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/', [AdminCampaignController::class, 'index']);
             Route::post('/', [AdminCampaignController::class, 'store']);
             Route::get('/preview-audience', [AdminCampaignController::class, 'previewAudience']);
+            Route::get('/calendar', [AdminCampaignController::class, 'calendar']);
             Route::get('/{campaign}', [AdminCampaignController::class, 'show']);
             Route::put('/{campaign}', [AdminCampaignController::class, 'update']);
             Route::delete('/{campaign}', [AdminCampaignController::class, 'destroy']);
@@ -825,6 +826,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/', [AdminCampaignController::class, 'index']);
             Route::post('/', [AdminCampaignController::class, 'store']);
             Route::get('/preview-audience', [AdminCampaignController::class, 'previewAudience']);
+            Route::get('/calendar', [AdminCampaignController::class, 'calendar']);
             Route::get('/{campaign}', [AdminCampaignController::class, 'show']);
             Route::put('/{campaign}', [AdminCampaignController::class, 'update']);
             Route::delete('/{campaign}', [AdminCampaignController::class, 'destroy']);

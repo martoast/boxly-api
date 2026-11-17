@@ -56,4 +56,17 @@ class ScheduledCampaignsTest extends LiveShoppingTestCase
         $this->actingAs($admin)->putJson("/admin/campaigns/{$c->id}", ['scheduled_at' => null])->assertOk();
         $this->assertNull($c->fresh()->scheduled_at);
     }
+
+    public function test_the_calendar_lists_the_month_and_the_unscheduled_drafts(): void
+    {
+        $admin = User::factory()->createQuietly(['role' => 'admin']);
+        $in = $this->campaign($admin, now()->addDays(3)->toDateTimeString());
+        $out = $this->campaign($admin, now()->addMonths(3)->toDateTimeString());
+        $draft = $this->campaign($admin, null);
+        $r = $this->actingAs($admin)->getJson('/admin/campaigns/calendar?from=' . now()->toDateString() . '&to=' . now()->addDays(30)->toDateString())->assertOk();
+        $ids = collect($r->json('data.campaigns'))->pluck('id')->all();
+        $this->assertContains($in->id, $ids);
+        $this->assertNotContains($out->id, $ids);
+        $this->assertSame([$draft->id], collect($r->json('data.unscheduled_drafts'))->pluck('id')->all());
+    }
 }

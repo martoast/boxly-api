@@ -42,6 +42,24 @@ class AdminCampaignController extends Controller
         ]);
     }
 
+    /**
+     * The campaign calendar (2026-11-17): campaigns scheduled, started or finished between `from` and `to` (dates), plus the drafts that
+     * are not scheduled yet — the ones the calendar can schedule on a day.
+     */
+    public function calendar(Request $request)
+    {
+        $v = $request->validate(['from' => ['required', 'date'], 'to' => ['required', 'date', 'after_or_equal:from']]);
+        $from = \Illuminate\Support\Carbon::parse($v['from'])->startOfDay();
+        $to = \Illuminate\Support\Carbon::parse($v['to'])->endOfDay();
+        $cols = ['id', 'name', 'subject', 'status', 'audience', 'scheduled_at', 'started_at', 'completed_at', 'sent_count', 'total_recipients', 'opened_count', 'clicked_count'];
+        $inRange = EmailCampaign::query()
+            ->where(fn ($q) => $q->whereBetween('scheduled_at', [$from, $to])->orWhereBetween('started_at', [$from, $to]))
+            ->orderByRaw('COALESCE(scheduled_at, started_at)')->limit(500)->get($cols);
+        $unscheduled = EmailCampaign::where('status', EmailCampaign::STATUS_DRAFT)->whereNull('scheduled_at')->latest()->limit(100)->get($cols);
+
+        return response()->json(['success' => true, 'data' => ['campaigns' => $inRange, 'unscheduled_drafts' => $unscheduled]]);
+    }
+
     public function store(Request $request)
     {
         $request->validate([
