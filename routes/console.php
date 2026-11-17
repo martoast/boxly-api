@@ -51,3 +51,6 @@ Schedule::command('boxly:live-shopping-drain')->everyMinute()->withoutOverlappin
  * when it does not answer, and once when it answers again.
  */
 Schedule::command('boxly:assistant-health')->everySixHours()->withoutOverlapping();
+
+// Draft email campaigns with a scheduled time start sending then (2026-11-17)
+Schedule::command('boxly:campaigns-scheduled')->everyMinute()->withoutOverlapping();

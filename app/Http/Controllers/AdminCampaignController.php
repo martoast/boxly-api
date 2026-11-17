@@ -122,11 +122,13 @@ class AdminCampaignController extends Controller
             ])],
             'batch_size' => ['nullable', 'integer', 'min:1', 'max:500'],
             'batch_delay_seconds' => ['nullable', 'integer', 'min:10', 'max:3600'],
+            // when the draft starts sending by itself (boxly:campaigns-scheduled); null unschedules it
+            'scheduled_at' => ['nullable', 'date', 'after:now'],
         ]);
 
         $campaign->update($request->only([
             'name', 'subject', 'body', 'link_url', 'link_text',
-            'audience', 'batch_size', 'batch_delay_seconds',
+            'audience', 'batch_size', 'batch_delay_seconds', 'scheduled_at',
         ]));
 
         return response()->json([

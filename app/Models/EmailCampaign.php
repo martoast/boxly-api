@@ -32,6 +32,7 @@ class EmailCampaign extends Model
         'link_text',
         'audience',
         'status',
+        'scheduled_at',
         'batch_size',
         'batch_delay_seconds',
         'total_recipients',
@@ -45,6 +46,7 @@ class EmailCampaign extends Model
     protected function casts(): array
     {
         return [
+            'scheduled_at' => 'datetime',
             'started_at' => 'datetime',
             'completed_at' => 'datetime',
             'batch_size' => 'integer',
