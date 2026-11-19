@@ -29,7 +29,7 @@ class AdminTeamEmailController extends Controller
     }
 
     /**
-     * Send a plain-text email to one or more staff members. Body: to (array of staff emails or user ids), subject, body,
+     * Send a plain-text email to one or more staff members (or Boxly's own inbox, contact@boxly.mx). Body: to (array of staff emails or user ids), subject, body,
      * optional cc_me (true = a copy to contact@boxly.mx). Replies go to contact@boxly.mx. 422 if any recipient is not a staff account.
      */
     public function send(Request $request)
@@ -45,6 +45,11 @@ class AdminTeamEmailController extends Controller
         $recipients = [];
         $notStaff = [];
         foreach ($validated['to'] as $who) {
+            // Boxly's own inbox is a team address too (Alex 2026-11-19)
+            if (strtolower(trim((string) $who)) === self::TEAM_INBOX) {
+                $recipients[self::TEAM_INBOX] = (object) ['email' => self::TEAM_INBOX];
+                continue;
+            }
             $user = is_numeric($who)
                 ? User::find((int) $who)
                 : User::where('email', strtolower(trim((string) $who)))->first();

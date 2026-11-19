@@ -42,6 +42,13 @@ class TeamEmailTest extends LiveShoppingTestCase
         $this->assertSame('Karla #655', $msg->getSubject());
     }
 
+    public function test_boxlys_own_inbox_is_a_team_address(): void
+    {
+        $admin = $this->staff('admin');
+        $this->actingAs($admin)->postJson('/admin/team-email', ['to' => ['contact@boxly.mx'], 'subject' => 's', 'body' => 'b'])
+            ->assertOk()->assertJsonPath('data.to', ['contact@boxly.mx']);
+    }
+
     public function test_a_customer_address_is_refused_and_nothing_is_sent(): void
     {
         $admin = $this->staff('admin');
