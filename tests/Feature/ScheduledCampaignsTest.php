@@ -45,6 +45,25 @@ class ScheduledCampaignsTest extends LiveShoppingTestCase
         $this->assertSame($n, CampaignRecipient::where('campaign_id', $due->id)->count(), 'started once');
     }
 
+    public function test_a_start_that_throws_is_taken_off_the_schedule_and_the_others_still_start(): void
+    {
+        $admin = User::factory()->createQuietly(['role' => 'admin']);
+        User::factory()->count(2)->createQuietly();
+        $bad = $this->campaign($admin, now()->subMinutes(2)->toDateTimeString());
+        $good = $this->campaign($admin, now()->subMinute()->toDateTimeString());
+        $real = app(\App\Http\Controllers\AdminCampaignController::class);
+        $this->mock(\App\Http\Controllers\AdminCampaignController::class, function ($m) use ($bad, $real) {
+            $m->shouldReceive('start')->andReturnUsing(function ($c) use ($bad, $real) {
+                if ($c->id === $bad->id) throw new \RuntimeException('boom');
+                return $real->start($c);
+            });
+        });
+        $this->artisan('boxly:campaigns-scheduled')->expectsOutputToContain('NOT started ' . $bad->id)->assertSuccessful();
+        $this->assertNull($bad->fresh()->scheduled_at, 'off the schedule, not retried every minute');
+        $this->assertSame(EmailCampaign::STATUS_DRAFT, $bad->fresh()->status);
+        $this->assertSame(EmailCampaign::STATUS_SENDING, $good->fresh()->status, 'the next due campaign still starts');
+    }
+
     public function test_the_admin_schedules_a_draft_and_unschedules_it(): void
     {
         $admin = User::factory()->createQuietly(['role' => 'admin']);

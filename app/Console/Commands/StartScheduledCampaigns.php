@@ -21,10 +21,19 @@ class StartScheduledCampaigns extends Command
     {
         $due = EmailCampaign::where('status', EmailCampaign::STATUS_DRAFT)->whereNotNull('scheduled_at')->where('scheduled_at', '<=', now())->orderBy('scheduled_at')->get();
         foreach ($due as $campaign) {
-            $r = $controller->start($campaign);
-            $ok = $r->getStatusCode() < 300;
-            Log::info('scheduled campaign start', ['campaign' => $campaign->id, 'ok' => $ok, 'status' => $r->getStatusCode()]);
-            $this->line(($ok ? 'started ' : 'not started ') . $campaign->id . ' — ' . $campaign->name);
+            // A start that THROWS used to kill the whole run before scheduled_at was cleared: the draft stayed due and failed
+            // silently every minute. Now each campaign's failure is logged and it is taken off the schedule (it stays a draft).
+            try {
+                $r = $controller->start($campaign);
+                $ok = $r->getStatusCode() < 300;
+                $status = $r->getStatusCode();
+            } catch (\Throwable $e) {
+                $ok = false;
+                $status = 'exception: ' . substr($e->getMessage(), 0, 200);
+                report($e);
+            }
+            Log::info('scheduled campaign start', ['campaign' => $campaign->id, 'ok' => $ok, 'status' => $status]);
+            $this->line('[campaigns-scheduled] ' . ($ok ? 'started ' : 'NOT started ') . $campaign->id . ' — ' . $campaign->name . ($ok ? '' : " ({$status})"));
             if (! $ok) {
                 $campaign->update(['scheduled_at' => null]); // never retried every minute; it stays a draft for the team
             }

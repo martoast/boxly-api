@@ -53,4 +53,4 @@ Schedule::command('boxly:live-shopping-drain')->everyMinute()->withoutOverlappin
 Schedule::command('boxly:assistant-health')->everySixHours()->withoutOverlapping();
 
 // Draft email campaigns with a scheduled time start sending then (2026-11-17)
-Schedule::command('boxly:campaigns-scheduled')->everyMinute()->withoutOverlapping();
+// boxly:campaigns-scheduled runs from the supervisor loop (supervisord.conf), not here: two runners could start one draft twice.
