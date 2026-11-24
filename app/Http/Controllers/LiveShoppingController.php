@@ -69,7 +69,7 @@ class LiveShoppingController extends Controller
             // The shopper's brand, price limit and "promociones" (2026-11-11: "T shirt lacoste de 40 usd o menos" showed 15
             // shirts and no Lacoste): the engine keeps only the cards that answer them (engine contracts: filters).
             'filters'          => $manual ? 'prohibited' : 'sometimes|array:brand,max_price,on_sale',
-            'filters.brand'    => ['nullable', 'string', 'max:60', 'regex:/^[\pL\pN &.\'-]+$/u'],
+            'filters.brand'    => ['nullable', 'string', 'max:60', 'regex:/^[\pL\pN &.\'\/-]+$/u'], // several brands: "Versace / Armani"
             'filters.max_price' => 'nullable|numeric|min:1|max:100000',
             'filters.on_sale'  => 'nullable|boolean',
         ]);

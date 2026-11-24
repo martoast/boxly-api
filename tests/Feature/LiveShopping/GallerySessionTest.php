@@ -97,6 +97,15 @@ class GallerySessionTest extends LiveShoppingTestCase
         $this->actingAs($user)->postJson('/live-shopping/sessions', ['conversation_id' => $conversation->id, 'objective' => 'x', 'store_id' => 'on', 'filters' => ['color' => 'red']])->assertStatus(422);
     }
 
+    public function test_several_brands_separated_by_a_slash_reach_the_engine(): void
+    {
+        // Miguel 2026-11-23 "Lociones versace o armani": one brand string "Versace Armani" kept no cologne; the engine takes "A / B" (any one)
+        [$user, $conversation] = $this->member();
+        $this->engine(3, (string) $conversation->id);
+        $this->actingAs($user)->postJson('/live-shopping/sessions', ['conversation_id' => $conversation->id, 'objective' => 'men cologne', 'store_id' => 'on', 'filters' => ['brand' => 'Versace / Armani']])->assertStatus(201);
+        Http::assertSent(fn ($r) => str_contains($r->url(), '/v1/sessions') && $r['filters']['brand'] === 'Versace / Armani');
+    }
+
     public function test_a_search_without_filters_sends_none(): void
     {
         [$user, $conversation] = $this->member();
