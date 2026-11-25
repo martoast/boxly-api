@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\LabelScan;
 use App\Models\User;
+use App\Services\LabelScanMatcher;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -192,13 +193,17 @@ class AdminLabelScanController extends Controller
         }
 
         $rows = [];
+        $matcher = new LabelScanMatcher(); // the customer each label names (confident matches only)
         foreach ($validated['packages'] as $i => $package) {
             if (isset($existing[$i])) {
                 $rows[] = $existing[$i];
                 continue;
             }
+            $match = $matcher->match($package['recipient_name'] ?? null);
             $rows[] = LabelScan::create([
                 ...$package,
+                'user_id'      => $match['user_id'],
+                'match_status' => $match['status'],
                 'needs_check' => (bool) ($package['needs_check'] ?? false),
                 'batch'       => $validated['batch'] ?? null,
                 'image_path'  => $path,
@@ -229,6 +234,7 @@ class AdminLabelScanController extends Controller
             'needs_check'     => 'sometimes|boolean',
             'location'        => 'sometimes|in:' . implode(',', User::LOCATIONS),
             'whole_batch'     => 'sometimes|boolean',
+            'user_id'         => 'sometimes|nullable|integer|exists:users,id',
         ]);
 
         // Only an admin moves scans between warehouses: an employee's scans are always their own warehouse.
@@ -252,6 +258,15 @@ class AdminLabelScanController extends Controller
             $validated['needs_check'] = false;
         }
 
+        // THE CUSTOMER: a person's choice (user_id, or null = "nobody") is kept as 'manual' and never re-matched; a corrected
+        // name is matched again unless a person already chose.
+        if (array_key_exists('user_id', $validated)) {
+            $validated['match_status'] = 'manual';
+        } elseif (array_key_exists('recipient_name', $validated) && $labelScan->match_status !== 'manual') {
+            $match = (new LabelScanMatcher())->match($validated['recipient_name']);
+            $validated['user_id'] = $match['user_id'];
+            $validated['match_status'] = $match['status'];
+        }
         if ($validated) {
             $labelScan->update($validated);
         }
@@ -266,6 +281,94 @@ class AdminLabelScanController extends Controller
         $labelScan->delete();
 
         return response()->json(['success' => true, 'message' => 'Label scan deleted']);
+    }
+
+    /**
+     * THE DAY'S ARRIVALS BY CUSTOMER — for the 5 PM WhatsApp (Suite, 2026-11-25). Query: since (ISO date-time, required: rows
+     * uploaded after it), until (ISO, default now: up to and including it), location (san_diego | tijuana, default san_diego).
+     * Returns data.customers [{user_id, name, phone (E.164, only numbers that look like WhatsApp numbers), scans [...]}],
+     * data.unmatched [scan + recipient_name + match_status (ambiguous | none | staff | manual | no_phone)], data.needs_check
+     * [scan + recipient_name + user_id: held until a person clears the flag], data.window. A scan: {id (stable), tracking_number,
+     * carrier, image_url (public, permanent), image_shared (the photo also shows another package's label: send no photo),
+     * scanned_at (upload time, ISO)}. Read by a token with the 'label-scans:arrivals' ability, or an admin.
+     */
+    public function arrivals(Request $request)
+    {
+        $validated = $request->validate([
+            'since'    => 'required|date',
+            'until'    => 'nullable|date',
+            'location' => 'nullable|in:san_diego,tijuana',
+        ]);
+        $since = \Illuminate\Support\Carbon::parse($validated['since'])->utc();
+        $until = isset($validated['until']) ? \Illuminate\Support\Carbon::parse($validated['until'])->utc() : now()->utc();
+        $location = $validated['location'] ?? User::LOCATION_SAN_DIEGO;
+        $rows = LabelScan::with('user:id,name,phone,role')
+            ->where('location', $location)
+            ->where('created_at', '>', $since)
+            ->where('created_at', '<=', $until)
+            ->orderBy('id')
+            ->get();
+        // a photo that holds several labels shows other people's names: counted over every row that uses it
+        $photoUses = $rows->isEmpty() ? collect() : LabelScan::whereIn('image_url', $rows->pluck('image_url')->filter()->unique()->values())
+            ->selectRaw('image_url, COUNT(*) as uses')->groupBy('image_url')->pluck('uses', 'image_url');
+        $scan = fn (LabelScan $r) => [
+            'id'              => $r->id,
+            'tracking_number' => $r->tracking_number,
+            'carrier'         => $r->carrier,
+            'image_url'       => $r->image_url,
+            'image_shared'    => (int) ($photoUses[$r->image_url] ?? 1) > 1,
+            'scanned_at'      => $r->created_at?->toIso8601String(),
+        ];
+        $customers = [];
+        $unmatched = [];
+        $held = [];
+        foreach ($rows as $r) {
+            if ($r->needs_check) {
+                $held[] = $scan($r) + ['recipient_name' => $r->recipient_name, 'user_id' => $r->user_id];
+                continue;
+            }
+            $u = $r->user;
+            if (! $u || $u->role !== User::ROLE_CUSTOMER) {
+                $unmatched[] = $scan($r) + ['recipient_name' => $r->recipient_name, 'match_status' => $r->match_status ?? 'none'];
+                continue;
+            }
+            if (! preg_match('/^\+[1-9]\d{10,14}$/', (string) $u->phone)) {
+                $unmatched[] = $scan($r) + ['recipient_name' => $r->recipient_name, 'match_status' => 'no_phone', 'user_id' => $u->id];
+                continue;
+            }
+            $customers[$u->id] ??= ['user_id' => $u->id, 'name' => $u->name, 'phone' => $u->phone, 'scans' => []];
+            $customers[$u->id]['scans'][] = $scan($r);
+        }
+        return response()->json(['success' => true, 'data' => [
+            'customers'   => array_values($customers),
+            'unmatched'   => $unmatched,
+            'needs_check' => $held,
+            'window'      => ['since' => $since->toIso8601String(), 'until' => $until->toIso8601String(), 'location' => $location],
+        ]]);
+    }
+
+    /**
+     * Match existing scans to customers again (admin): every row uploaded after `since` (default: all) whose customer was not
+     * chosen by a person. Optional location. Returns how many rows got each status.
+     */
+    public function rematch(Request $request)
+    {
+        $validated = $request->validate(['since' => 'nullable|date', 'location' => 'nullable|in:san_diego,tijuana']);
+        $matcher = new LabelScanMatcher();
+        $counts = [];
+        LabelScan::query()
+            ->where(fn ($q) => $q->whereNull('match_status')->orWhere('match_status', '!=', 'manual'))
+            ->when($validated['since'] ?? null, fn ($q, $s) => $q->where('created_at', '>', \Illuminate\Support\Carbon::parse($s)->utc()))
+            ->when($validated['location'] ?? null, fn ($q, $l) => $q->where('location', $l))
+            ->orderBy('id')
+            ->chunkById(500, function ($chunk) use ($matcher, &$counts) {
+                foreach ($chunk as $row) {
+                    $m = $matcher->match($row->recipient_name);
+                    $row->forceFill(['user_id' => $m['user_id'], 'match_status' => $m['status']])->saveQuietly();
+                    $counts[$m['status']] = ($counts[$m['status']] ?? 0) + 1;
+                }
+            });
+        return response()->json(['success' => true, 'data' => $counts]);
     }
 
     /** The warehouse a request is about: the employee's own, or the admin's location filter (null = both). */

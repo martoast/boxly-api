@@ -16,6 +16,8 @@ class LabelScan extends Model
         'other_tracking',
         'recipient_name',
         'suite',
+        'user_id',
+        'match_status',
         'ship_from',
         'store_order_numbers',
         'barcodes',
@@ -37,5 +39,11 @@ class LabelScan extends Model
     public function creator(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by');
+    }
+
+    /** The customer the label names (see App\Services\LabelScanMatcher), when one was matched or assigned. */
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class);
     }
 }

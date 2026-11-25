@@ -169,7 +169,12 @@ Route::middleware(['web'])->group(function () {
 Route::post('/live-shopping/webhook', [\App\Http\Controllers\LiveShoppingWebhookController::class, 'handle'])
     ->middleware('throttle:120,1,live-shopping-webhook');
 
-Route::middleware('auth:sanctum')->group(function () {
+// THE 5 PM ARRIVAL WHATSAPP (Suite, 2026-11-25): the day's San Diego arrivals grouped by customer. Its own token ability
+// ('label-scans:arrivals') or an admin; outside the group below so a limited token reaches this and nothing else.
+Route::middleware(['auth:sanctum', 'arrivals.reader'])->get('/label-scans/arrivals', [AdminLabelScanController::class, 'arrivals']);
+
+// Every route below takes a full token or a session only (a limited token is refused: FullAccessToken).
+Route::middleware(['auth:sanctum', 'full.token'])->group(function () {
     // Self-issued Sanctum token for the Chrome extension. Any authenticated
     // user (admin, shopping, or customer) can mint one for themselves —
     // no admin intervention needed. Used by the extension's web-based
@@ -600,6 +605,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::prefix('label-scans')->group(function () {
             Route::get('/', [AdminLabelScanController::class, 'index']);
             Route::get('/stats', [AdminLabelScanController::class, 'stats']);
+            Route::post('/rematch', [AdminLabelScanController::class, 'rematch']);
             Route::post('/', [AdminLabelScanController::class, 'store']);
             Route::put('/{labelScan}', [AdminLabelScanController::class, 'update']);
             Route::delete('/{labelScan}', [AdminLabelScanController::class, 'destroy']);

@@ -14,4 +14,4 @@ use Laravel\Mcp\Server\Facades\Mcp;
 */
 
 Mcp::web('boxly', BoxlyServer::class)
-    ->middleware('auth:sanctum');
+    ->middleware(['auth:sanctum', 'full.token']);
