@@ -23,6 +23,7 @@ class LabelScanTest extends LiveShoppingTestCase
         $this->artisan('migrate', ['--path' => 'database/migrations/2026_04_30_000000_create_personal_access_tokens_table.php', '--force' => true]);
         $this->artisan('migrate', ['--path' => 'database/migrations/2026_10_09_000000_add_warehouse_locations.php', '--force' => true]);
         $this->artisan('migrate', ['--path' => 'database/migrations/2026_11_25_000000_add_customer_match_to_label_scans.php', '--force' => true]);
+        $this->artisan('migrate', ['--path' => 'database/migrations/2026_11_25_010000_add_cleared_at_to_label_scans.php', '--force' => true]);
         Storage::fake('spaces');
     }
 

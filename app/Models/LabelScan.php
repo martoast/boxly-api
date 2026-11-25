@@ -24,6 +24,7 @@ class LabelScan extends Model
         'model_tracking_read',
         'confidence',
         'needs_check',
+        'cleared_at',
         'image_path',
         'image_url',
         'created_by',
@@ -34,6 +35,7 @@ class LabelScan extends Model
         'store_order_numbers' => 'array',
         'barcodes'            => 'array',
         'needs_check'         => 'boolean',
+        'cleared_at'          => 'datetime',
     ];
 
     public function creator(): BelongsTo

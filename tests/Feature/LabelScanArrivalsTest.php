@@ -19,7 +19,7 @@ class LabelScanArrivalsTest extends LiveShoppingTestCase
     protected function setUp(): void
     {
         parent::setUp();
-        foreach (['2026_04_29_000007_add_team_to_users.php', '2026_10_07_000000_create_label_scans_table.php', '2026_04_30_000000_create_personal_access_tokens_table.php', '2026_10_09_000000_add_warehouse_locations.php', '2026_11_25_000000_add_customer_match_to_label_scans.php'] as $m) {
+        foreach (['2026_04_29_000007_add_team_to_users.php', '2026_10_07_000000_create_label_scans_table.php', '2026_04_30_000000_create_personal_access_tokens_table.php', '2026_10_09_000000_add_warehouse_locations.php', '2026_11_25_000000_add_customer_match_to_label_scans.php', '2026_11_25_010000_add_cleared_at_to_label_scans.php'] as $m) {
             $this->artisan('migrate', ['--path' => "database/migrations/{$m}", '--force' => true]);
         }
         Storage::fake('spaces');
@@ -111,6 +111,27 @@ class LabelScanArrivalsTest extends LiveShoppingTestCase
         $this->actingAs($mau)->putJson("/admin/label-scans/{$row->id}", ['recipient_name' => 'Ana Perez Soto'])->assertOk()
             ->assertJsonPath('data.match_status', 'manual');
         $this->assertSame($row->id, LabelScan::where('tracking_number', 'A1')->value('id'), 'the scan id never changes');
+    }
+
+    public function test_a_held_scan_cleared_later_arrives_in_the_window_of_its_clearing(): void
+    {
+        $ana = $this->customer('Ana Lucia Perez Soto');
+        $this->customer('Carla Ruiz Soto');
+        $mau = $this->mau();
+        \Illuminate\Support\Carbon::setTestNow('2026-11-20 18:00:00');
+        $this->upload($mau, [['tracking_number' => 'H1', 'recipient_name' => 'Boxly Ana Perez', 'needs_check' => true]])->assertStatus(201);
+        $id = LabelScan::where('tracking_number', 'H1')->value('id');
+        $admin = User::factory()->createQuietly(['role' => 'admin']);
+        $window = fn () => $this->actingAs($admin)->getJson('/label-scans/arrivals?since=2026-11-24T00:00:00Z')->json('data');
+        \Illuminate\Support\Carbon::setTestNow('2026-11-25 17:00:00');
+        $this->assertSame([], $window()['customers'], 'still held, uploaded before the window');
+        $this->actingAs($mau)->putJson("/admin/label-scans/{$id}", ['needs_check' => false])->assertOk()->assertJsonPath('data.cleared_at', fn ($v) => str_starts_with((string) $v, '2026-11-25'));
+        $after = $window();
+        $this->assertSame($ana->id, $after['customers'][0]['user_id'], 'cleared today: in today\'s window, under its customer');
+        $this->assertSame($id, $after['customers'][0]['scans'][0]['id'], 'same scan id');
+        $this->assertSame('2026-11-20T18:00:00+00:00', $after['customers'][0]['scans'][0]['scanned_at']);
+        $this->actingAs($mau)->putJson("/admin/label-scans/{$id}", ['carrier' => 'UPS'])->assertOk()->assertJsonPath('data.cleared_at', fn ($v) => str_starts_with((string) $v, '2026-11-25'));
+        \Illuminate\Support\Carbon::setTestNow();
     }
 
     public function test_the_arrivals_token_reads_arrivals_and_nothing_else(): void

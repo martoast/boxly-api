@@ -267,6 +267,10 @@ class AdminLabelScanController extends Controller
             $validated['user_id'] = $match['user_id'];
             $validated['match_status'] = $match['status'];
         }
+        // A HELD ROW CLEARED BY A PERSON (needs_check true -> false) records when: /label-scans/arrivals returns it in that window too
+        if ($labelScan->needs_check && array_key_exists('needs_check', $validated) && $validated['needs_check'] === false) {
+            $validated['cleared_at'] = now();
+        }
         if ($validated) {
             $labelScan->update($validated);
         }
@@ -290,7 +294,8 @@ class AdminLabelScanController extends Controller
      * data.unmatched [scan + recipient_name + match_status (ambiguous | none | staff | manual | no_phone)], data.needs_check
      * [scan + recipient_name + user_id: held until a person clears the flag], data.window. A scan: {id (stable), tracking_number,
      * carrier, image_url (public, permanent), image_shared (the photo also shows another package's label: send no photo),
-     * scanned_at (upload time, ISO)}. Read by a token with the 'label-scans:arrivals' ability, or an admin.
+     * scanned_at (upload time, ISO), cleared_at (when a person cleared its needs_check, or null)}. A held row a person cleared
+     * comes back in the window its cleared_at falls in too. Read by a token with the 'label-scans:arrivals' ability, or an admin.
      */
     public function arrivals(Request $request)
     {
@@ -304,8 +309,9 @@ class AdminLabelScanController extends Controller
         $location = $validated['location'] ?? User::LOCATION_SAN_DIEGO;
         $rows = LabelScan::with('user:id,name,phone,role')
             ->where('location', $location)
-            ->where('created_at', '>', $since)
-            ->where('created_at', '<=', $until)
+            // uploaded in the window, or held and cleared by a person in it (same row, same id: callers dedupe by id)
+            ->where(fn ($q) => $q->where(fn ($w) => $w->where('created_at', '>', $since)->where('created_at', '<=', $until))
+                ->orWhere(fn ($w) => $w->where('cleared_at', '>', $since)->where('cleared_at', '<=', $until)))
             ->orderBy('id')
             ->get();
         // a photo that holds several labels shows other people's names: counted over every row that uses it
@@ -318,6 +324,7 @@ class AdminLabelScanController extends Controller
             'image_url'       => $r->image_url,
             'image_shared'    => (int) ($photoUses[$r->image_url] ?? 1) > 1,
             'scanned_at'      => $r->created_at?->toIso8601String(),
+            'cleared_at'      => $r->cleared_at?->toIso8601String(),
         ];
         $customers = [];
         $unmatched = [];
