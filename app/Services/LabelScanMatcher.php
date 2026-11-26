@@ -76,6 +76,83 @@ class LabelScanMatcher
     /** ['status' => matched|ambiguous|none|staff, 'user_id' => int|null] for one label name. */
     public function match(?string $recipientName): array
     {
+        $strict = $this->strictMatch($recipientName);
+        if (in_array($strict['status'], ['matched', 'staff'], true)) {
+            return $strict;
+        }
+        return $this->typoMatch($recipientName) ?? $strict;
+    }
+
+    /**
+     * LABELS WITH TYPOS (Suite 2026-11-25, half of a day unmatched: "MARIADNY PEA CASTRO" is Mariady Fernanda Peña Castro,
+     * "Kenia Joel Rosales Macedo" is Kenia Joselin, "juan raul" is the account "Juan raul"). Still one customer or nothing. A
+     * customer is a candidate when (a) the label is exactly their name, or, with at least one surname matching exactly, (b) the
+     * label has 3+ words and every other word is a near-typo of one of theirs (edit distance <= 25%), or (c) 3+ words match
+     * exactly and ONE stray word is left, the first name among the exact ones ("LUZ ANGEL SOLANO" is not Luis Angel Solano).
+     * Measured on 859 San Diego labels: +33 matches, every one the same person. Null when no candidate.
+     */
+    private function typoMatch(?string $recipientName): ?array
+    {
+        $words = self::words((string) $recipientName);
+        if ($words && ! in_array($words[0], self::PREFIXES, true) && strlen($words[0]) >= 4 && self::similarity($words[0], 'BOXLY') >= 0.8) {
+            array_shift($words); // "EOXLY", a misread prefix
+        }
+        $words = array_values(array_diff($words, self::PREFIXES));
+        $label = array_fill_keys($words, true);
+        if (count($label) < 2 || array_intersect_key($label, array_fill_keys(self::STAFF_WORDS, true))) {
+            return null;
+        }
+        $hits = [];
+        foreach ($this->customers as $c) {
+            $exact = array_intersect_key($label, $c['words']);
+            if (count($exact) === count($label) && count($label) === count($c['words'])) {
+                $hits[] = $c;
+                continue;
+            }
+            if (! array_intersect_key($exact, $this->surnames)) {
+                continue;
+            }
+            $miss = array_keys(array_diff_key($label, $c['words']));
+            $typos = count($label) >= 3 && ! array_filter($miss, fn ($w) => ! self::nearWord($w, array_keys($c['words'])));
+            $oneStray = count($exact) >= 3 && count($miss) === 1 && isset($c['words'][$words[0]]);
+            if ($typos || $oneStray) {
+                $hits[] = $c;
+            }
+        }
+        if (count($hits) === 1) {
+            return ['status' => 'matched', 'user_id' => $hits[0]['id']];
+        }
+        if (! $hits) {
+            return null;
+        }
+        $phones = array_unique(array_column($hits, 'digits'));
+        if (count($phones) === 1 && strlen($phones[0]) === 10) {
+            return ['status' => 'matched', 'user_id' => max(array_column($hits, 'id'))];
+        }
+        return ['status' => 'ambiguous', 'user_id' => null];
+    }
+
+    private static function similarity(string $a, string $b): float
+    {
+        return 1 - levenshtein($a, $b) / max(strlen($a), strlen($b), 1);
+    }
+
+    private static function nearWord(string $w, array $customerWords): bool
+    {
+        if (strlen($w) < 3) {
+            return false;
+        }
+        foreach ($customerWords as $c) {
+            if (self::similarity($w, $c) >= 0.75) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The strict pass: every label word in the customer's name, a surname among them (see the class comment). */
+    private function strictMatch(?string $recipientName): array
+    {
         $label = array_fill_keys(array_diff(self::words((string) $recipientName), self::PREFIXES), true);
         if (array_intersect_key($label, array_fill_keys(self::STAFF_WORDS, true))) {
             return ['status' => 'staff', 'user_id' => null];

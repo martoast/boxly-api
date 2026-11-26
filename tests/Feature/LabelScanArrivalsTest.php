@@ -59,12 +59,31 @@ class LabelScanArrivalsTest extends LiveShoppingTestCase
         ], []);
         $this->assertSame(['status' => 'matched', 'user_id' => 1], $m->match('BOXLY ADELINA OROPEZA'), 'every label word in one customer');
         $this->assertSame(['status' => 'matched', 'user_id' => 2], $m->match('FMG Gustavo Millán González'), 'the one with exactly that name');
-        $this->assertSame('none', $m->match('FMG GUSTAVO MILLA N GONZALEZ')['status'], 'a misread name names nobody — never the other Gustavo');
+        $this->assertSame(['status' => 'matched', 'user_id' => 2], $m->match('FMG GUSTAVO MILLA N GONZALEZ'), 'a misread name is its near-typo (Millan) — never the other Gustavo');
         $this->assertSame('none', $m->match('BOXLY VICTOR HUGO')['status'], 'first names alone are not confident');
         $this->assertSame('ambiguous', $m->match('Boxly Fernando Garcia')['status'], 'two different people');
         $this->assertSame(['status' => 'matched', 'user_id' => 8], $m->match('BOXLY JESUS VIRGEN VELAZQUEZ'), 'one person (one phone), two accounts');
         $this->assertSame('staff', $m->match('VELONIE VILLALOBOS')['status']);
         $this->assertSame('none', $m->match(null)['status']);
+    }
+
+    public function test_labels_with_typos_still_match_one_confident_customer(): void
+    {
+        $c = fn ($id, $name, $phone = null) => (object) ['id' => $id, 'name' => $name, 'phone' => $phone ?? '+5255000000' . str_pad((string) $id, 2, '0', STR_PAD_LEFT)];
+        $m = new LabelScanMatcher([
+            $c(1, 'Mariady Fernanda Peña castro'), $c(2, 'Sarai zabdieli Laureano reyes'), $c(3, 'Juan raul'), $c(4, 'Kenia Joselin Rosales Macedo'),
+            $c(5, 'Luis Angel Solano Contreras'), $c(6, 'Fernando Antonio Guevara Garcia'), $c(7, 'José Fernando García Menéndez'),
+            $c(8, 'Estefania castro'), $c(9, 'Pedro Peña'), $c(10, 'Ana Reyes'), $c(11, 'Juan Perez Lopez'), $c(12, 'Raul Gomez'), $c(13, 'Maria Macedo'),
+            $c(14, 'Antonio Fernando Bautista Solis'), $c(15, 'Rosa Bautista'), $c(16, 'Carla Solis'), $c(17, 'Luz Contreras'),
+        ], []);
+        $this->assertSame(['status' => 'matched', 'user_id' => 1], $m->match('BOXLY MARIADNY PEA CASTRO'), 'typos, one exact surname');
+        $this->assertSame(['status' => 'matched', 'user_id' => 2], $m->match('Saral Zabdiell Laureano Reyes'));
+        $this->assertSame(['status' => 'matched', 'user_id' => 3], $m->match('juan raul'), 'exactly the only customer with that name');
+        $this->assertSame(['status' => 'matched', 'user_id' => 4], $m->match('BOXLY Kenia Joel Rosales Macedo'), 'one stray word, first name exact');
+        $this->assertSame(['status' => 'matched', 'user_id' => 14], $m->match('EOXLY ANTONIO BAUTISTA SOLIS'), 'a misread BOXLY prefix');
+        $this->assertSame('none', $m->match('BOXLY LUZ ANGEL SOLANO CONTRERAS')['status'], 'another first name is not a typo');
+        $this->assertSame('none', $m->match('Emily Mandy Pena castro')['status'], 'only the surnames: not confident');
+        $this->assertSame('ambiguous', $m->match('BOXLY FERNANDO GARCIA')['status']);
     }
 
     public function test_an_upload_is_matched_and_arrivals_group_by_customer(): void
