@@ -61,7 +61,7 @@ class LabelScanArrivalsTest extends LiveShoppingTestCase
         $this->assertSame(['status' => 'matched', 'user_id' => 2], $m->match('FMG Gustavo Millán González'), 'the one with exactly that name');
         $this->assertSame(['status' => 'matched', 'user_id' => 2], $m->match('FMG GUSTAVO MILLA N GONZALEZ'), 'a misread name is its near-typo (Millan) — never the other Gustavo');
         $this->assertSame('none', $m->match('BOXLY VICTOR HUGO')['status'], 'first names alone are not confident');
-        $this->assertSame('ambiguous', $m->match('Boxly Fernando Garcia')['status'], 'two different people');
+        $this->assertSame(['status' => 'matched', 'user_id' => 6], $m->match('Boxly Fernando Garcia'), 'the one whose FIRST surname is García (Alex 2026-11-25)');
         $this->assertSame(['status' => 'matched', 'user_id' => 8], $m->match('BOXLY JESUS VIRGEN VELAZQUEZ'), 'one person (one phone), two accounts');
         $this->assertSame('staff', $m->match('VELONIE VILLALOBOS')['status']);
         $this->assertSame('none', $m->match(null)['status']);
@@ -75,6 +75,7 @@ class LabelScanArrivalsTest extends LiveShoppingTestCase
             $c(5, 'Luis Angel Solano Contreras'), $c(6, 'Fernando Antonio Guevara Garcia'), $c(7, 'José Fernando García Menéndez'),
             $c(8, 'Estefania castro'), $c(9, 'Pedro Peña'), $c(10, 'Ana Reyes'), $c(11, 'Juan Perez Lopez'), $c(12, 'Raul Gomez'), $c(13, 'Maria Macedo'),
             $c(14, 'Antonio Fernando Bautista Solis'), $c(15, 'Rosa Bautista'), $c(16, 'Carla Solis'), $c(17, 'Luz Contreras'),
+            $c(18, 'Erick Gomez', '+525511112222'), $c(19, 'Erick Gómez', '+525533334444'),
         ], []);
         $this->assertSame(['status' => 'matched', 'user_id' => 1], $m->match('BOXLY MARIADNY PEA CASTRO'), 'typos, one exact surname');
         $this->assertSame(['status' => 'matched', 'user_id' => 2], $m->match('Saral Zabdiell Laureano Reyes'));
@@ -83,7 +84,8 @@ class LabelScanArrivalsTest extends LiveShoppingTestCase
         $this->assertSame(['status' => 'matched', 'user_id' => 14], $m->match('EOXLY ANTONIO BAUTISTA SOLIS'), 'a misread BOXLY prefix');
         $this->assertSame('none', $m->match('BOXLY LUZ ANGEL SOLANO CONTRERAS')['status'], 'another first name is not a typo');
         $this->assertSame('none', $m->match('Emily Mandy Pena castro')['status'], 'only the surnames: not confident');
-        $this->assertSame('ambiguous', $m->match('BOXLY FERNANDO GARCIA')['status']);
+        $this->assertSame(['status' => 'matched', 'user_id' => 7], $m->match('BOXLY FERNANDO GARCIA'), 'first surname García, not second');
+        $this->assertSame('ambiguous', $m->match('BOXLY ERICK GOMEZ')['status'], 'two accounts, same first surname, two phones: nobody for sure');
     }
 
     public function test_an_upload_is_matched_and_arrivals_group_by_customer(): void

@@ -45,7 +45,9 @@ class LabelScanMatcher
             foreach (array_slice($words, 1) as $w) {
                 $later[$w] = ($later[$w] ?? 0) + 1;
             }
-            $this->customers[] = ['id' => (int) $c->id, 'words' => array_fill_keys($words, true), 'digits' => substr(preg_replace('/\D/', '', (string) $c->phone), -10)];
+            $this->customers[] = ['id' => (int) $c->id, 'words' => array_fill_keys($words, true), 'digits' => substr(preg_replace('/\D/', '', (string) $c->phone), -10),
+                // the first (paternal) surname: second-to-last of 3+ words ("José Fernando GARCÍA Menéndez"), the last of two
+                'paternal' => count($words) >= 3 ? $words[count($words) - 2] : (count($words) === 2 ? $words[1] : null)];
         }
         foreach (array_keys($first + $later) as $w) {
             if (($later[$w] ?? 0) > ($first[$w] ?? 0)) {
@@ -129,7 +131,19 @@ class LabelScanMatcher
         if (count($phones) === 1 && strlen($phones[0]) === 10) {
             return ['status' => 'matched', 'user_id' => max(array_column($hits, 'id'))];
         }
-        return ['status' => 'ambiguous', 'user_id' => null];
+        return $this->firstSurnameTie($hits, $words ?? array_keys($label));
+    }
+
+    /**
+     * THE LAST TIE (Alex 2026-11-25, "BOXLY FERNANDO GARCIA" is José Fernando García Menéndez, not Fernando Antonio Guevara
+     * García): a label is "first name + FIRST surname", so when exactly one candidate's first (paternal) surname is the label's
+     * last word, it is that one. Otherwise ambiguous.
+     */
+    private function firstSurnameTie(array $hits, array $labelWords): array
+    {
+        $last = $labelWords ? end($labelWords) : null;
+        $pick = array_values(array_filter($hits, fn ($c) => $last !== null && $c['paternal'] === $last));
+        return count($pick) === 1 ? ['status' => 'matched', 'user_id' => $pick[0]['id']] : ['status' => 'ambiguous', 'user_id' => null];
     }
 
     private static function similarity(string $a, string $b): float
@@ -180,6 +194,6 @@ class LabelScanMatcher
         if (count($phones) === 1 && strlen($phones[0]) === 10) {
             return ['status' => 'matched', 'user_id' => max(array_column($hits, 'id'))];
         }
-        return ['status' => 'ambiguous', 'user_id' => null];
+        return $this->firstSurnameTie($hits, $words ?? array_keys($label));
     }
 }
